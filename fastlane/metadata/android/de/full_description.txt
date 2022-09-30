@@ -1,0 +1,20 @@
+<i>HopToDesk</i> ist eine freie Remotedesktop-Software. Einfache Bildschirmfreigabe, Übertragung von Dateien und sichere Verwaltung von Remote-Geräten mit End-to-End-Verschlüsselung.
+
+Damit ein Remote-Gerät Ihr Android-Gerät per Maus oder Berührung steuern kann, müssen Sie <i>HopToDesk</i> erlauben, den „Accessibility“-Dienst zu verwenden. <i>HopToDesk</i> verwendet die AccessibilityService-API, um die Android-Fernsteuerung zu implementieren.
+
+Ein perfektes Tool für die Arbeit von zu Hause aus, den IT-Support und die Verwaltung von Remote-Geräten für jeden Zweck.
+
+Zu den <i>HopToDesk</i>-Highlights gehören:
+
+- Bildschirmfreigabe
+- Fernbedienung
+- Live-Chat
+- Dateiübertragung
+- Wake-On-LAN
+- 2FA
+
+<b>Erste Schritte</b>
+
+- Installieren und öffnen Sie HopToDesk auf beiden Geräten.
+- Geben Sie die ID des Remote-Geräts ein, mit dem Sie sich verbinden möchten.
+- Lassen Sie die Verbindung zu oder geben Sie das Passwort ein, um die Remote-Sitzung zu starten.
