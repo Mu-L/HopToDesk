@@ -8,7 +8,6 @@ extractor
 __pycache__
 src/version.rs
 *dmg
-*exe
 *zip
 *bak
 *deb
