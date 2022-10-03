@@ -1,0 +1,20 @@
+<i>HopToDesk</i> is a free Remote Desktop Software. Easily screen share, transfer files, and manage remote devices securely with end-to-end encryption.
+
+In order for a remote device to control your Android device via mouse or touch, you need to allow <i>HopToDesk</i> to use the "Accessibility" service, <i>HopToDesk</i> uses AccessibilityService API to implement Android remote control.
+
+A perfect tool for working from home, IT support, and managing remote devices for any purpose.
+
+<i>HopToDesk</i> highlights include:
+
+- Screen Share
+- Remote Control
+- Live Chat
+- File Transfer
+- Wake-On-LAN
+- 2FA
+
+<b>Getting Started</b>
+
+- Install and open <i>HopToDesk</i> on both devices.
+- Enter the ID of the remote device you wish to connect to.
+- Allow the connection or enter the password to start the remote session.
