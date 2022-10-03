@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     ops::{Deref, Not},
     sync::{mpsc, Arc, Mutex, RwLock},
     time::UNIX_EPOCH,
@@ -206,8 +206,17 @@ impl Client {
             }
         }
         if peer_addr.port() == 0 {
-            log::info!("cant connect");
-            bail!("Unable to connect to the remote partner.");
+            if let Ok(pa) = peer.parse() {
+                peer_addr = pa;
+            } else {
+                let peer_sock_addr = format!("{}:21118", peer);
+                if let Ok(pa) = peer_sock_addr.parse() {
+                    peer_addr = pa
+                } else {
+                    log::info!("cant connect to {} with addr {}", peer, peer_addr);
+                    bail!("Unable to connect to the remote partner.");
+                }
+            }
         }
         let time_used = start.elapsed().as_millis() as u64;
         log::info!(
@@ -216,6 +225,7 @@ impl Client {
             id_pk.len()
         );
         Self::connect(
+            my_addr,
             peer_addr,
             peer,
             id_pk,
@@ -229,6 +239,7 @@ impl Client {
     }
 
     async fn connect(
+        local_addr: SocketAddr,
         peer: SocketAddr,
         peer_id: &str,
         id_pk: Vec<u8>,
@@ -269,18 +280,24 @@ impl Client {
         log::info!("peer address: {}, timeout: {}", peer, connect_timeout);
         let start = std::time::Instant::now();
         // NOTICE: Socks5 is be used event in intranet. Which may be not a good way.
-        let mut direct = true;
-        let mut conn =
-            match socket_client::connect_tcp(peer, Config::get_any_listen_addr(), connect_timeout)
-                .await
+        let mut conn = socket_client::connect_tcp(peer, local_addr, connect_timeout).await;
+        let mut direct = !conn.is_err();
+        if !direct {
+            conn = match socket_client::connect_tcp(
+                peer,
+                Config::get_any_listen_addr(),
+                connect_timeout,
+            )
+            .await
             {
-                Ok(stream) => stream,
+                Ok(stream) => Ok(stream),
                 Err(_) => {
                     direct = false;
-                    Self::connect_over_turn_servers(peer_id, peer_public_addr, sender).await?
+                    Self::connect_over_turn_servers(peer_id, peer_public_addr, sender).await
                 }
             };
-
+        }
+        let mut conn = conn?;
         let time_used = start.elapsed().as_millis() as u64;
         log::info!("{}ms used to establish connection", time_used);
         Self::secure_connection(peer_id, id_pk, &mut conn).await?;
@@ -1041,12 +1058,20 @@ impl LoginConfigHandler {
     }
 
     pub fn handle_login_error(&mut self, err: &str, interface: &impl Interface) -> bool {
-        if err == "Wrong Password" || err == "2FA Not Authorized" {
+        if err == "Wrong Password" {
             self.password = Default::default();
             interface.msgbox(
                 "re-input-password",
                 err,
                 &format!("{err} - Do you want to enter again?"),
+            );
+            true
+        } else if err == "2FA Not Authorized" {
+            self.password = Default::default();
+            interface.msgbox(
+                "re-input-password-allow-2fa",
+                err,
+                &format!("{err} - Do you want to enter again and accept 2fa?"),
             );
             true
         } else {
