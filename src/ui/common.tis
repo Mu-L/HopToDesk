@@ -37,6 +37,19 @@ function translate(name) {
     }
 }
 
+function generate_security_number_block(security_numbers) {
+    var security_number_block = <div></div>;
+    if (security_numbers) {
+        var numbers = security_numbers.split(" ");
+        var rows = [];
+        for (var i = 0; i < 3; i++) {
+            rows.push(<div>{numbers.slice(4 * i, 4 * (i + 1)).join(" ")}</div>);
+        }
+        security_number_block = <div .security_number_block title={translate('Verify Security Code')}>{rows[0]}{rows[1]}{rows[2]}{rows[3]}</div>;
+    }
+    return security_number_block;
+}
+
 function hashCode(str) {
   var hash = 160 << 16 + 114 << 8 + 91;
   for (var i = 0; i < str.length; i += 1) {

@@ -584,7 +584,7 @@ impl Connection {
         //let token = Config::get_option("access_token");
 
         match Client::start(&session.id, conn_type).await {
-            Ok((mut peer, direct)) => {
+            Ok((mut peer, _relay, direct, security_numbers, security_qr_code)) => {
                 session.push_event(
                     "connection_ready",
                     vec![
@@ -616,8 +616,8 @@ impl Connection {
                                     log::info!("Restart remote device");
                                     session.msgbox("restarting", "Restarting Remote Device", "remote_restarting_tip");
                                 } else {
-                                    log::info!("Reset by the peer");
-                                    session.msgbox("error", "Connection Error", "Reset by the peer");
+                                    log::info!("Connection lost");
+                                    session.msgbox("error", "Connection Error", "Connection lost");
                                 }
                                 break;
                             }

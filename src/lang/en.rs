@@ -13,7 +13,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("not_close_tcp_tip", "Don't close this window while you are using the tunnel"),
         ("Auto Login", "Auto Login (Only valid if you set \"Lock after session end\")"),
         ("whitelist_tip", "Only whitelisted IP can access me"),
-        ("whitelist_sep", "Seperated by comma"),
+        ("whitelist_sep", "Seperated by comma, semicolon, spaces or new line"),
         ("Wrong credentials", "Wrong username or password"),
         ("invalid_http", "must start with http:// or https://"),
         ("install_daemon_tip", "For starting on boot, you need to install system service."),
@@ -27,5 +27,9 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
 		("minimize_to_tray", "Minimize to Tray when closing main window"),
         ("android_open_battery_optimizations_tip", "If you want to disable this feature, please go to the next HopToDesk application settings page, find and enter [Battery], Uncheck [Unrestricted]"),
         ("remote_restarting_tip", "Remote device is restarting, please close this message box and reconnect with permanent password after a while"),
+        ("Are you sure to close the connection?", "Are you sure you want to close the connection?"),
+        ("elevation_prompt", "Running software without privilege elevation may cause problems when remote users operate certain windows."),
+        ("uac_warning", "Temporarily denied access due to elevation request, please wait for the remote user to accept the UAC dialog. To avoid this problem, it is recommended to install the software on the remote device or run it with administrator privileges."),
+        ("elevated_foreground_window_warning", "Temporarily unable to use the mouse and keyboard, because the current window of the remote desktop requires higher privilege to operate, you can request the remote user to minimize the current window. To avoid this problem, it is recommended to install the software on the remote device or run it with administrator privileges."),
     ].iter().cloned().collect();
 }

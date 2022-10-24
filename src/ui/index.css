@@ -474,3 +474,20 @@ li:disabled, li:disabled:hover {
     background: color(menu);
 }
 
+.update_available {    
+    text-align: center;
+    margin-top: 0.3em;
+    margin-left: auto;
+    margin-right: auto;
+    padding: 0.2em;
+    font-family: 'opensans-med';
+    font-weight: 500;
+    font-size: 0.8em;
+    color: #ffb103;
+    border-radius: 5px;
+    border-spacing: 0.5em;
+    border-width: 0.1em;
+    border-style: solid;
+    width: fit-content;
+    display: inline-block
+}

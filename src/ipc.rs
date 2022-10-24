@@ -151,6 +151,10 @@ pub enum Data {
         file: bool,
         file_transfer_enabled: bool,
         restart: bool,
+        /// The security numbers of the connection. Empty if None existing.
+        security_numbers: String,
+        /// The security qr code of the connection. Empty if None existing.
+        security_qr_code: String,
     },
     ChatMessage {
         text: String,
@@ -513,7 +517,7 @@ where
                 return Ok(None);
             }
             _ => {
-                bail!("reset by the peer");
+                bail!("Connection lost");
             }
         }
     }
@@ -527,7 +531,7 @@ where
         match self.inner.next().await {
             Some(Ok(res)) => Ok(res),
             _ => {
-                bail!("reset by the peer");
+                bail!("Connection lost");
             }
         }
     }

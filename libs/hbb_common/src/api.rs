@@ -2,6 +2,8 @@ use lazy_static::lazy_static;
 use std::sync::{Arc};
 use tokio::sync::Mutex;
 
+use crate::config::Config2;
+
 const API_URI: &'static str = "https://api.hoptodesk.com/";
 
 #[derive(Debug, Clone)]
@@ -24,7 +26,16 @@ impl OnceAPI {
         if let Some(r) = &*r {
             return Ok(r.clone());
         }
-        let body = reqwest::get(API_URI).await?.text().await?;
+        let body = reqwest::get(
+            Config2::get()
+                .options
+                .get("custom-api-url")
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| API_URI.to_owned()),
+        )
+        .await?
+        .text()
+        .await?;
         let ret: serde_json::Value = serde_json::from_str(&body)?;
         *r = Some(ret.clone());
         Ok(ret)

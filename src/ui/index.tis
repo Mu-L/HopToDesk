@@ -57,6 +57,7 @@ function createNewConnect(id, type) {
     app.remote_id.value = formatId(id);
     if (!id) return;
     if (id == my_id) {
+        // uncomment if allowed to connect to "yourself" (easier testing)
         msgbox("custom-error", "Error", "You cannot connect to your own computer");
         return;
     }
@@ -186,6 +187,7 @@ class LanguagePicker: Reactor.Component
 				<li id="sk"><span>{svg_checkmark}</span>Slovenski</li>
                 <li id="tr"><span>{svg_checkmark}</span>Türkçe</li>
                 <li id="ru"><span>{svg_checkmark}</span>Русский</li>
+				<li id="ua"><span>{svg_checkmark}</span>Українська</li>
 				<li id="id"><span>{svg_checkmark}</span>Bahasa Indonesia</li>
                 <li id="ko"><span>{svg_checkmark}</span>한국어</li>
                 <li id="ja"><span>{svg_checkmark}</span>日本語</li>
@@ -300,6 +302,7 @@ class MyIdMenu: Reactor.Component {
                 <li #enable-tunnel><span>{svg_checkmark}</span>{translate('Enable TCP Tunneling')}</li>
                 <AudioInputs />
                 <div .separator />
+                <li #custom-api-url>{translate('Custom Api URL')}</li>
                 <li #custom-server style="display:none">{translate('ID/Relay Server')}</li>
                 <li #whitelist title={translate('whitelist_tip')}>{translate('IP Whitelisting')}</li>
                 <li #socks5-server>{translate('SOCKS5 Proxy')}</li>
@@ -374,14 +377,8 @@ class MyIdMenu: Reactor.Component {
                 stdout.println("2FA enabled");
                 var data = me.enable_2fa();
 
-                //msgbox("custom nocancel", translate("2FA QR code"), "<div .form> \
-                //<center>" + translate("Scan the QR code on another device:") + "</center><center><img src={data.img_base64} /></center> \
-                //</div> \
-				//");
-
-                msgbox("custom nocancel", "2FA QR code", <div .form>
-                <center>Scan the QR code on another device:<img src={data.img_base64} /></center>
-                </div>);
+				msgbox("custom nocancel", translate("2FA QR code"), "<center>" + translate("Scan this QR code with a camera on a secondary device such as a phone to set it up as your 2FA authenticator.") + "<br/><img src='" + data.img_base64 + "'/><br/>" + translate("You will need to confirm the 2FA on the secondary device with you when trying to connect to this desktop.") + "</center>");
+				
             } else {
                 stdout.println("2FA disabled");
                 me.disable_2fa();
@@ -415,6 +412,43 @@ class MyIdMenu: Reactor.Component {
                 stdout.println("whitelist updated");
                 handler.set_option("whitelist", value.replace("\n", ","));
             }, 300);
+        } else if (me.id == "custom-api-url") {
+            let old_url = handler.get_custom_api_url();
+            msgbox("custom-server", "Set API", <div .form>
+            <div><span> {translate("Use Custom API")}: </span><input|text .outline-focus name='url' value={old_url}/></div>
+            </div>, function(res=null) {
+                if (!res) return;
+                if (old_url != res.url) {
+                    let valid_url = () => {
+                        handler.set_custom_api_url(res.url);
+                        msgbox("success", "Restart", "Restart HopToDesk to use the other api server.", () => {});
+                    }
+                    if (res.url == "") return valid_url();
+                    view.request({
+                        type: #get,
+                        url: res.url,
+                        success: (s, _) => {
+                            let text_res = s.toString();
+                            let json;
+                            try {
+                                json = JSON.parse(text_res);
+                            } catch (e) {
+                                return msgbox("custom-error", "Custom API Validity Error", "Failed to parse response as json, check if the url is correct.<br/>`" + e + "`", () => {});
+                            }
+                            if (json instanceof Object && json.turnservers && json.rendezvous) {
+                                let host = json.rendezvous.host;
+                                if (host.split('.').length != 4 || host.split('.').map(n => n.toNumber()).filter(n => n > 255 || n < 0).length > 0) {msgbox("custom-error", "Custom API Validity Error", "Host of rendezvous `" + host + "` is an invalid ipv4 address.");return;}
+                                let port = json.rendezvous.port.toInteger();
+                                if (port == undefined || port < 0 || port > 65536) return msgbox("custom-error", "Custom API Validity Error", "Port of rendezvous `" + json.rendezvous.port + "` is invalid ipv4 port.");
+                                valid_url();
+                            } else msgbox("custom-error", "Custom API Validity Error", "Server did not respond with `turnservers` and `rendezvous` (received: `" + text_res + "`).");
+                        },
+                        error: (e, s) => {
+                            msgbox("custom-error", "Custom API Validity Error", "Check if the url is correct.<br/>Status " + s + ": `" + e + "`", () => {});
+                        }
+                    });
+                }
+              }, 240)
         } else if (me.id == "custom-server") {
             var configOptions = handler.get_options();
             var old_relay = configOptions["relay-server"] || "";
@@ -536,6 +570,7 @@ class App: Reactor.Component
 
                     {!is_win || handler.is_installed() ? "": <InstallMe />}
                     {is_win && handler.is_installed() ? <EmptyMe />: ""}
+					{handler.requires_update() ? <div #launch-update .update_available .link url='https://www.hoptodesk.com/'>{translate('NEW UPDATE AVAILABLE')}</div> : ""}
                     {is_can_screen_recording ? "": <CanScreenRecording />}
                     {is_can_screen_recording && !handler.is_process_trusted(false) ? <TrustMe /> : ""}
                     {!service_stopped && is_can_screen_recording && handler.is_process_trusted(false) && handler.is_installed() && !handler.is_installed_daemon(false) ? <InstallDaemon /> : ""}
@@ -560,7 +595,7 @@ class App: Reactor.Component
                     </div>
                     <ConnectStatus @{this.connect_status} />
                 </div>
-                <div #msgbox />
+                <div #overlay style="position: absolute;size:*;background:black;opacity:0.5;display:none" />
             </div>;
     }
 
@@ -575,6 +610,10 @@ class App: Reactor.Component
     function newRemote(type) {
         createNewConnect(this.remote_id.value, type);
     }
+	
+    event click $(#launch-update) {
+        handler.open_url("https://www.hoptodesk.com");
+    }	
 }
 
 class InstallMe: Reactor.Component {
@@ -1070,6 +1109,18 @@ function checkConnectStatus() {
             service_stopped = tmp;
             app.update();
         }
+/*
+        tmp = !!handler.get_option("stop-rendezvous-service");
+        if (tmp != rendezvous_service_stopped) {
+            rendezvous_service_stopped = tmp;
+            myIdMenu.update();
+        }
+        tmp = handler.using_public_server();
+        if (tmp != using_public_server) {
+            using_public_server = tmp;
+            app.connect_status.update();
+        }
+*/
         tmp = handler.get_connect_status();
         if (tmp[0] != connect_status) {
             connect_status = tmp[0];
@@ -1111,7 +1162,7 @@ function self.onMouse(evt) {
         check_if_overlay();
         break;
     case Event.MOUSE_LEAVE:
-		//$(#overlay).style#display = 'none';
+		$(#overlay).style#display = 'none';
         enter = false;
         break;
     }

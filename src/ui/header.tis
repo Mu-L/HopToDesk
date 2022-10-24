@@ -14,6 +14,25 @@ var svg_secure = <svg viewBox="0 0 347.97 347.97">
 var svg_insecure = <svg viewBox="0 0 347.97 347.97"><path d="M317.469 61.615c-59.442 0-104.976-16.082-143.489-51.539-38.504 35.457-84.04 51.539-143.479 51.539 0 92.337-20.177 224.612 143.479 278.324 163.661-53.717 143.489-185.992 143.489-278.324z" fill="none" stroke="red" stroke-width="14.827"/><g fill="red"><path d="M238.802 115.023l-111.573 114.68-8.6-8.367L230.2 106.656z"/><path d="M125.559 108.093l114.68 111.572-8.368 8.601-114.68-111.572z"/></g></svg>;
 var svg_insecure_relay = <svg viewBox="0 0 347.97 347.97"><path d="M317.469 61.615c-59.442 0-104.976-16.082-143.489-51.539-38.504 35.457-84.04 51.539-143.479 51.539 0 92.337-20.177 224.612 143.479 278.324 163.661-53.717 143.489-185.992 143.489-278.324z" fill="none" stroke="red" stroke-width="14.827"/><g fill="red"><path d="M231.442 247.498l-7.754-10.205c-17.268 12.441-38.391 17.705-59.478 14.822-21.087-2.883-39.613-13.569-52.166-30.088-25.916-34.101-17.997-82.738 17.65-108.42 32.871-23.685 78.02-19.704 105.172 7.802l-32.052 7.987 3.082 12.369 48.722-12.142-11.712-46.998-12.822 3.196 4.496 18.039c-31.933-24.008-78.103-25.342-112.642-.458-31.361 22.596-44.3 60.436-35.754 94.723 2.77 11.115 7.801 21.862 15.192 31.588 30.19 39.727 88.538 47.705 130.066 17.785z"/></g></svg>;
 var svg_secure_relay = <svg viewBox="0 0 347.97 347.97"><path d="M317.469 61.615c-59.442 0-104.976-16.082-143.489-51.539-38.504 35.457-84.04 51.539-143.479 51.539 0 92.337-20.177 224.612 143.479 278.324 163.661-53.717 143.489-185.992 143.489-278.324z" fill="#3f7d46" stroke="#3f7d46" stroke-width="14.827"/><g fill="red"><path d="M231.442 247.498l-7.754-10.205c-17.268 12.441-38.391 17.705-59.478 14.822-21.087-2.883-39.613-13.569-52.166-30.088-25.916-34.101-17.997-82.738 17.65-108.42 32.871-23.685 78.02-19.704 105.172 7.802l-32.052 7.987 3.082 12.369 48.722-12.142-11.712-46.998-12.822 3.196 4.496 18.039c-31.933-24.008-78.103-25.342-112.642-.458-31.361 22.596-44.3 60.436-35.754 94.723 2.77 11.115 7.801 21.862 15.192 31.588 30.19 39.727 88.538 47.705 130.066 17.785z" fill="#fff"/></g></svg>;
+var svg_security_code = <svg viewBox="0 0 240.000000 240.000000"
+ preserveAspectRatio="xMidYMid meet">
+<g transform="translate(0.000000,240.000000) scale(0.100000,-0.100000)"
+fill="#000000" stroke="none">
+<path d="M1083 2186 c-181 -44 -334 -202 -372 -384 -6 -29 -11 -131 -11 -225
+l0 -173 -58 -12 c-111 -23 -197 -101 -228 -208 -12 -44 -14 -113 -12 -406 l3
+-353 28 -57 c32 -64 80 -111 146 -142 45 -21 57 -21 621 -21 564 0 576 0 621
+21 66 31 114 78 146 142 l28 57 3 353 c2 293 0 362 -12 406 -31 107 -117 185
+-228 208 l-58 12 0 173 c0 94 -5 196 -11 225 -19 92 -67 177 -138 249 -126
+126 -299 176 -468 135z m251 -220 c62 -31 109 -80 140 -145 19 -41 21 -68 24
+-233 l4 -188 -301 0 -301 0 0 168 c0 188 10 242 59 309 84 116 243 154 375 89z
+m411 -778 c53 -24 55 -40 55 -388 0 -348 -2 -364 -55 -388 -37 -17 -1053 -17
+-1090 0 -53 24 -55 39 -55 390 1 345 2 357 51 384 33 18 1054 20 1094 2z"/>
+<path d="M1146 993 c-38 -10 -96 -56 -119 -92 -33 -54 -31 -152 5 -204 45 -66
+93 -92 168 -92 78 0 123 23 166 87 24 36 29 53 29 108 0 55 -5 72 -29 108 -16
+23 -44 51 -62 63 -34 20 -121 33 -158 22z"/>
+</g>
+</svg>;
+
 
 var cur_window_state = view.windowState;
 function check_state_change() {
@@ -136,6 +155,7 @@ class Header: Reactor.Component {
             <span #chat>{svg_chat}</span>
             <span #action>{svg_action}</span>
             <span #display>{svg_display}</span>
+            <span #securitycode>{svg_security_code}</span>
             {this.renderDisplayPop()}
             {this.renderActionPop()}
         </div>;
@@ -238,6 +258,11 @@ class Header: Reactor.Component {
         startChat();
     }
     
+    event click $(#securitycode) {
+        var code = this.security_numbers;
+        msgbox("nocancel", translate("Your Security Code"), generate_security_number_block(code), function() { });
+    }
+
     event click $(#action) (_, me) {
         var menu = $(menu#action-options);
         me.popup(menu);
@@ -525,9 +550,11 @@ function startChat() {
     chatbox = view.window(params);
 }
 
-handler.setConnectionType = function(secured, direct) {
+handler.setConnectionType = function(secured, direct, security_numbers, security_qr_code) {
     header.update({
        secure_connection: secured,
-       direct_connection: direct, 
+       direct_connection: direct,
+       security_numbers: security_numbers,
+       security_qr_code: security_qr_code,
     });
 }

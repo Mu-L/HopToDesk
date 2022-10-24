@@ -1,6 +1,6 @@
 [package]
 name = "hoptodesk"
-version = "1.2.8"
+version = "1.32.0"
 authors = ["hoptodesk <info@hoptodesk.com>"]
 edition = "2021"
 build= "build.rs"
@@ -21,14 +21,12 @@ use_samplerate = ["samplerate"]
 use_rubato = ["rubato"]
 use_dasp = ["dasp"]
 default = ["use_dasp"]
+hwcodec = ["scrap/hwcodec"]
+mediacodec = ["scrap/mediacodec"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-reqwest = { version = "0.11", features = ["blocking", "json"] }
-soketto = "0.7"
-turn = { path = "libs/turn" }
-webrtc-util = "0.5"
 whoami = "1.2"
 scrap = { path = "libs/scrap", features = ["wayland"] }
 hbb_common = { path = "libs/hbb_common" }
@@ -43,7 +41,7 @@ libc = "0.2"
 parity-tokio-ipc = { git = "https://github.com/open-trade/parity-tokio-ipc" }
 flexi_logger = { version = "0.22", features = ["async", "use_chrono_for_offset"] }
 runas = "0.2"
-magnum-opus = { git = "https://github.com/open-trade/magnum-opus" }
+magnum-opus = { git = "https://github.com/SoLongAndThanksForAllThePizza/magnum-opus" }
 dasp = { version = "0.11", features = ["signal", "interpolate-linear", "interpolate"], optional = true }
 rubato = { version = "0.12", optional = true }
 samplerate = { version = "0.2", optional = true }
@@ -57,6 +55,11 @@ num_cpus = "1.13"
 bytes = { version = "1.2", features = ["serde"] }
 default-net = "0.11.0"
 wol-rs = "0.9.1"
+flutter_rust_bridge = { git = "https://github.com/SoLongAndThanksForAllThePizza/flutter_rust_bridge", optional = true }
+reqwest = { version = "0.11", features = ["blocking", "json"] }
+soketto = "0.7"
+turn = { path = "libs/turn" }
+webrtc-util = "0.5"
 wake-on-lan = "0.2.0"
 futures = "0.3"
 qrcode = "0.12.0"
@@ -64,6 +67,10 @@ image = "^0.23"
 image-base64 = "^0.1"
 tempfile = "3.3.0"
 md5 = "0.7.0"
+errno = "0.2.8"
+rdev = { git = "https://github.com/asur4s/rdev" }
+x25519-dalek = { version = "1.2.0", features = ["reusable_secrets"] }
+chrono = "0.4.22"
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-features=false }
@@ -80,9 +87,9 @@ sciter-rs = { git = "https://github.com/open-trade/rust-sciter", branch = "dyn" 
 sys-locale = "0.2"
 enigo = { path = "libs/enigo", features = [ "with_serde" ] }
 clipboard = { path = "libs/clipboard" }
-rdev = { git = "https://github.com/open-trade/rdev" }
 ctrlc = "3.2"
 arboard = "2.0"
+#minreq = { version = "2.4", features = ["punycode", "https-native"] }
 system_shutdown = "3.0.0"
 
 [target.'cfg(target_os = "windows")'.dependencies]
@@ -93,7 +100,7 @@ winapi = { version = "0.3", features = ["winuser"] }
 winreg = "0.10"
 windows-service = "0.4"
 virtual_display = { path = "libs/virtual_display" }
-
+impersonate_system = { git = "https://github.com/21pages/impersonate-system" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc = "0.2"
@@ -120,7 +127,7 @@ android_logger = "0.11"
 jni = "0.19"
 
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
-flutter_rust_bridge = "1.30.0"
+flutter_rust_bridge = { git = "https://github.com/SoLongAndThanksForAllThePizza/flutter_rust_bridge" }
 
 [workspace]
 members = ["libs/scrap", "libs/hbb_common", "libs/enigo", "libs/clipboard", "libs/virtual_display", "libs/turn", "libs/simple_rc"]
@@ -138,17 +145,17 @@ winapi = { version = "0.3", features = [ "winnt" ] }
 cc = "1.0"
 hbb_common = { path = "libs/hbb_common" }
 simple_rc = { path = "libs/simple_rc", optional = true }
-flutter_rust_bridge_codegen = "1.30.0"
+flutter_rust_bridge_codegen = { git = "https://github.com/SoLongAndThanksForAllThePizza/flutter_rust_bridge" }
 static_vcruntime = "2.0"
 
 [dev-dependencies]
-hound = "3.4"
+hound = "3.5"
 
 [package.metadata.bundle]
 name = "HopToDesk"
 identifier = "com.hoptodesk.hoptodesk"
 icon = ["32x32.png", "128x128.png", "128x128@2x.png"]
-deb_depends = ["libgtk-3-0", "libxcb-randr0", "libxdo3", "libxfixes3", "libxcb-shape0", "libxcb-xfixes0", "libasound2", "libsystemd0", "pulseaudio", "python3-pip", "curl"]
+deb_depends = ["libgtk-3-0", "libxcb-randr0", "libxdo3", "libxfixes3", "libxcb-shape0", "libxcb-xfixes0", "libasound2", "libsystemd0", "pipewire", "curl"]
 osx_frameworks = ["libsciter"]
 osx_minimum_system_version = "10.14"
 resources = ["mac-tray.png"]

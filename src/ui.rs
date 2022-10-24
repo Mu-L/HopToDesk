@@ -8,6 +8,7 @@ pub mod remote;
 pub mod win_privacy;
 use crate::common::SOFTWARE_UPDATE_URL;
 use crate::{ipc, two_factor_auth};
+use hbb_common::get_version_number;
 use hbb_common::rand::random;
 use hbb_common::{
     allow_err,
@@ -108,6 +109,8 @@ pub fn start(args: &mut [String]) {
         let childs: Childs = Default::default();
         let cloned = childs.clone();
         std::thread::spawn(move || check_zombie(cloned));
+        // execute this BEFORE the UI gets opened
+        set_version();		
         //crate::common::check_software_update();
         frame.event_handler(UI::new(childs));
         frame.sciter_handler(UIHostHandler {});
@@ -186,14 +189,16 @@ pub fn start(args: &mut [String]) {
             page
         ));
     }
-    #[cfg(target_os = "macos")]
-    frame.load_file(&format!(
-        "file://{}/../Resources/src/ui/{}",
-        std::env::current_dir()
-            .map(|c| c.display().to_string())
-            .unwrap_or("".to_owned()),
-        page
-    ));
+    #[cfg(all(target_os = "macos", not(feature = "packui")))]
+    {
+		frame.load_file(&format!(
+			"file://{}/../Resources/src/ui/{}",
+			std::env::current_dir()
+				.map(|c| c.display().to_string())
+				.unwrap_or("".to_owned()),
+			page
+		));
+	}
     frame.run_app();
 }
 
@@ -407,6 +412,10 @@ impl UI {
 
     fn set_config_option(&self, key: String, value: String) {
         Config::set_option(key, value);
+    }
+
+    fn requires_update(&self) -> bool {
+        get_version_number(crate::VERSION) < get_version_number(&Config::get_option("api_version"))
     }
 
     fn install_path(&mut self) -> String {
@@ -797,14 +806,16 @@ impl UI {
         crate::platform::is_xfce()
     }
 
-/*
-    fn get_api_server(&self) -> String {
-        crate::get_api_server(
-            self.get_option_("api-server"),
-            self.get_option_("custom-rendezvous-server"),
-        )
+
+    fn get_custom_api_url(&self) -> String {
+        self.get_option_("custom-api-url")
     }
 
+    fn set_custom_api_url(&self, url: String) {
+        self.set_option("custom-api-url".to_owned(), url);
+    }
+
+/*
     fn has_hwcodec(&self) -> bool {
         #[cfg(not(feature = "hwcodec"))]
         return false;
@@ -892,7 +903,10 @@ impl sciter::EventHandler for UI {
         fn get_uuid();
         fn get_config_option(String);
         fn set_config_option(String, String);
-        fn is_2fa_enabled();
+		fn requires_update();
+		fn is_2fa_enabled();
+        fn get_custom_api_url();
+        fn set_custom_api_url(String);
     }
 }
 
@@ -923,6 +937,36 @@ pub fn check_zombie(childs: Childs) {
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
 }
+
+
+use serde::Deserialize;
+#[derive(Deserialize)]
+struct Version {
+    winversion: String,
+    linuxversion: String,
+    macversion: String,
+    none: String
+}
+
+async fn get_version_() -> String {
+    let body =
+        serde_json::from_value::<Version>(hbb_common::api::call_api().await.unwrap()).expect("Could not get api_version.");
+
+    if cfg!(windows) {
+        body.winversion
+    } else if cfg!(macos) {
+        body.macversion
+    } else if cfg!(linux) {
+        body.linuxversion
+    } else {
+        body.none
+    }
+}
+#[tokio::main]
+async fn set_version() {
+    Config::set_option("api_version".to_owned(), get_version_().await)
+}
+
 
 // notice: avoiding create ipc connection repeatedly,
 // because windows named pipe has serious memory leak issue.

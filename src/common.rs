@@ -102,6 +102,19 @@ pub fn update_clipboard(clipboard: Clipboard, old: Option<&Arc<Mutex<String>>>) 
     }
 }
 
+pub async fn send_opts_after_login(
+    config: &crate::client::LoginConfigHandler,
+    peer: &mut hbb_common::tcp::FramedStream,
+) {
+    if let Some(opts) = config.get_option_message_after_login() {
+        let mut misc = Misc::new();
+        misc.set_option(opts);
+        let mut msg_out = Message::new();
+        msg_out.set_misc(misc);
+        allow_err!(peer.send(&msg_out).await);
+    }
+}
+
 #[cfg(feature = "use_rubato")]
 pub fn resample_channels(
     data: &[f32],
@@ -564,12 +577,12 @@ pub fn get_api_server(api: String, custom: String) -> String {
             return format!("http://{}:{}", s, config::RENDEZVOUS_PORT - 2);
         }
     }
-    "https://admin.rustdesk.com".to_owned()
+    "https://admin.none.com".to_owned()
 }
 
 pub fn get_audit_server(api: String, custom: String) -> String {
     let url = get_api_server(api, custom);
-    if url.is_empty() || url.contains("rustdesk.com") {
+    if url.is_empty() || url.contains("none.com") {
         return "".to_owned();
     }
     format!("{}/api/audit", url)
@@ -655,4 +668,15 @@ pub fn make_fd_to_json(fd: FileDirectory) -> String {
     }
     fd_json.insert("entries".into(), json!(entries));
     serde_json::to_string(&fd_json).unwrap_or("".into())
+}
+
+#[cfg(not(target_os = "linux"))]
+lazy_static::lazy_static! {
+    pub static ref IS_X11: Mutex<bool> = Mutex::new(false);
+
+}
+
+#[cfg(target_os = "linux")]
+lazy_static::lazy_static! {
+    pub static ref IS_X11: Mutex<bool> = Mutex::new("x11" == hbb_common::platform::linux::get_display_server());
 }

@@ -104,6 +104,7 @@ impl ConnectionManager {
         file: bool,
         restart: bool,
         tx: mpsc::UnboundedSender<Data>,
+        security_numbers: String, security_qr_code: String
     ) {
         self.call(
             "addConnection",
@@ -118,7 +119,9 @@ impl ConnectionManager {
                 clipboard,
                 audio,
                 file,
-                restart
+                restart,
+                security_numbers,
+                security_qr_code
             ),
         );
         self.write().unwrap().senders.insert(id, tx);
@@ -568,12 +571,12 @@ async fn start_ipc(cm: ConnectionManager) {
                                                     Data::TFA { id, answer } => {
                                                         log::info!("bad TFA: conn_id_set: {conn_id_set}, conn_id: {conn_id}, id: {id}, answer: {answer}");
                                                     }
-                                                    Data::Login{id, is_file_transfer, port_forward, peer_id, name, authorized, keyboard, clipboard, audio, file, file_transfer_enabled, restart} => {
+                                                    Data::Login{id, is_file_transfer, port_forward, peer_id, name, authorized, keyboard, clipboard, audio, file, file_transfer_enabled, restart, security_numbers, security_qr_code} => {
                                                         log::debug!("conn_id: {}", id);
                                                         conn_id = id;
                                                         conn_id_set = true;
                                                         tx_file.send(ClipboardFileData::Enable((id, file_transfer_enabled))).ok();
-                                                        cm.add_connection(id, is_file_transfer, port_forward, peer_id, name, authorized, keyboard, clipboard, audio, file, restart, tx.clone());
+                                                        cm.add_connection(id, is_file_transfer, port_forward, peer_id, name, authorized, keyboard, clipboard, audio, file, restart, tx.clone(), security_numbers, security_qr_code);
                                                         if let Some(answer) = tfas.get(&conn_id) {
                                                             log::info!("found tfa: {conn_id} - {answer}");
                                                             cm.update_2fa_answer(*answer);

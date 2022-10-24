@@ -33,10 +33,15 @@ html.darktheme {
     var(placeholder): #555;
 }
 
+div.security_number_block {
+  text-align: center;
+  font-family: 'Courier New';
+}
 body {
     margin: 0;
     color: color(text);
 }
+
 
 button.button {
     height: 2em;

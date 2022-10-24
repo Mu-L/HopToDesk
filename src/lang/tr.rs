@@ -58,7 +58,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Do you want to enter again?", "Tekrar giriş yapmak ister misiniz?"),
         ("Connection Error", "Bağlantı Hatası"),
         ("Error", "Hata"),
-        ("Reset by the peer", "Eş tarafında sıfırla"),
+        ("Connection lost", "Eş tarafında sıfırla"),
         ("Connecting...", "Bağlanılıyor..."),
         ("Connection in progress. Please wait.", "Bağlantı sağlanıyor. Lütfen bekleyiniz."),
         ("Please try 1 minute later", "Lütfen 1 dakika sonra tekrar deneyiniz"),
@@ -186,7 +186,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Settings", "Ayarlar"),
         ("Username", "Kullanıcı Adı"),
         ("Invalid port", "Geçersiz bağlantı noktası"),
-        ("Closed manually by the peer", "Eş tarafından manuel olarak kapatıldı"),
+        ("The remote partner has closed the session.", "Eş tarafından manuel olarak kapatıldı."),
         ("Enable remote configuration modification", "Uzaktan yapılandırma değişikliğini etkinleştir"),
         ("Run without install", "Yüklemeden çalıştır"),
         ("Always connected via relay", "Her zaman röle ile bağlı"),
@@ -281,6 +281,9 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("In privacy mode", "Gizlilik modunda"),
         ("Out privacy mode", "Gizlilik modu dışında"),
 		("Enable Wake On LAN", "Wake On LAN etkinleştir"),
-		("Enable 2FA", "2FA'yı etkinleştir"),		
+		("Enable 2FA", "2FA'yı etkinleştir"),
+		("2FA QR code", "2FA QR kodu"),		
+        ("Scan this QR code with a camera on a secondary device such as a phone to set it up as your 2FA authenticator.", "2FA kimlik doğrulayıcınız olarak ayarlamak için bu QR kodunu telefon gibi ikincil bir cihazdaki kamerayla tarayın."),
+        ("You will need to confirm the 2FA on the secondary device with you when trying to connect to this desktop.", "Bu masaüstüne bağlanmaya çalışırken, ikincil cihazdaki 2FA'yı yanınızda onaylamanız gerekecektir."),		
     ].iter().cloned().collect();
 }

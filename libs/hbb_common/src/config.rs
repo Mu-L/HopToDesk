@@ -54,6 +54,7 @@ lazy_static::lazy_static! {
     pub static ref ONLINE: Arc<Mutex<HashMap<String, i64>>> = Default::default();
     pub static ref APP_NAME: Arc<RwLock<String>> = Arc::new(RwLock::new("HopToDesk".to_owned()));
     static ref KEY_PAIR: Arc<Mutex<Option<(Vec<u8>, Vec<u8>)>>> = Default::default();
+    static ref HW_CODEC_CONFIG: Arc<RwLock<HwCodecConfig>> = Arc::new(RwLock::new(HwCodecConfig::load()));
 }
 #[cfg(target_os = "android")]
 lazy_static::lazy_static! {
@@ -1074,6 +1075,15 @@ impl HwCodecConfig {
 
     pub fn remove() {
         std::fs::remove_file(Config::file_("_hwcodec")).ok();
+    }
+    /// refresh current global HW_CODEC_CONFIG, usually uesd after HwCodecConfig::remove()
+    pub fn refresh() {
+        *HW_CODEC_CONFIG.write().unwrap() = HwCodecConfig::load();
+        log::debug!("HW_CODEC_CONFIG refreshed successfully");
+    }
+
+    pub fn get() -> HwCodecConfig {
+        return HW_CODEC_CONFIG.read().unwrap().clone();
     }
 }
 

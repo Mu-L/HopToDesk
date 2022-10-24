@@ -62,7 +62,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Do you want to enter again?", "Bạn có muốn nhập lại không"),
         ("Connection Error", "Kết nối bị lỗi"),
         ("Error", "Lỗi"),
-        ("Reset by the peer", "Đựoc cài đặt lại với peer"),
+        ("Connection lost", "Đựoc cài đặt lại với peer"),
         ("Connecting...", "Đang kết nối..."),
         ("Connection in progress. Please wait.", "Đang kết nối. Xin chờ."),
         ("Please try 1 minute later", "Hãy thử lại sau 1 phút"),
@@ -191,7 +191,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Settings", "Cài đặt"),
         ("Username", "Tên người dùng"),
         ("Invalid port", "Cổng không hợp lệ"),
-        ("Closed manually by the peer", "Đóng thủ công bởi peer"),
+        ("The remote partner has closed the session.", "Đóng thủ công bởi peer."),
         ("Enable remote configuration modification", "Cho phép thay đổi cấu hình bên từ xa"),
         ("Run without install", "Chạy mà không cần cài"),
         ("Always connected via relay", "Luôn đuợc kết nối qua relay"),
@@ -303,5 +303,8 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("remote_restarting_tip", "Thiết bị từ xa đang khởi động lại, hãy đóng cửa sổ tin nhắn này và kết nối lại với mật khẩu vĩnh viễn sau một khoảng thời gian"),
 		("Enable 2FA", "Cho phép 2FA"),
 		("Enable Wake On LAN", "Cho phép Wake On LAN"),
+		("2FA QR code", "Mã QR 2FA"),		
+        ("Scan this QR code with a camera on a secondary device such as a phone to set it up as your 2FA authenticator.", "Quét mã QR này bằng máy ảnh trên thiết bị phụ như điện thoại để thiết lập mã này làm trình xác thực 2FA của bạn."),
+        ("You will need to confirm the 2FA on the secondary device with you when trying to connect to this desktop.", "Bạn sẽ cần xác nhận 2FA trên thiết bị phụ khi cố gắng kết nối với máy tính để bàn này."),		
     ].iter().cloned().collect();
 }

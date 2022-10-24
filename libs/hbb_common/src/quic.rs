@@ -80,7 +80,7 @@ impl Connection {
                             allow_err!(handle_request(stream.1, cloned).await);
                         });
                     } else {
-                        tx.send(Err(anyhow!("Reset by the peer"))).ok();
+                        tx.send(Err(anyhow!("Connection lost"))).ok();
                         break;
                     }
                 }

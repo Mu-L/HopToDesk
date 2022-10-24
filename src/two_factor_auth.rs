@@ -108,7 +108,8 @@ mod api_access {
     }
 
     pub async fn get_ws_uri() -> String {
-        let body = serde_json::from_value::<APIWebsockets>(hbb_common::api::call_api().await.unwrap());
+        let body =
+            serde_json::from_value::<APIWebsockets>(hbb_common::api::call_api().await.unwrap());
 
         body.expect("Could not get Websockets URI from API.")
             .websockets
@@ -128,15 +129,17 @@ mod api_access {
     }
 
     pub async fn get_hash_algorithm() -> String {
-        let body = serde_json::from_value::<API2FAWrapper>(hbb_common::api::call_api().await.unwrap());
-		
+        let body =
+            serde_json::from_value::<API2FAWrapper>(hbb_common::api::call_api().await.unwrap());
+
         body.map(|x| x.tfa.and_then(|x| x.hash_algorithm))
             .unwrap_or(Some("md5".to_owned()))
             .unwrap_or("md5".to_owned())
     }
 
     pub async fn get_ping_time() -> f64 {
-        let body = serde_json::from_value::<API2FAWrapper>(hbb_common::api::call_api().await.unwrap());
+        let body =
+            serde_json::from_value::<API2FAWrapper>(hbb_common::api::call_api().await.unwrap());
 
         body.map(|x| x.tfa.and_then(|x| x.ping_time))
             .unwrap_or(Some(10.0))
@@ -159,6 +162,7 @@ pub mod sockets {
     use std::sync::Arc;
     use std::time::{Duration, Instant};
     use tokio_tungstenite::tungstenite::{Error, Message};
+    use tokio_tungstenite::Connector::NativeTls;
     use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
     pub async fn create_socket() -> WebSocketStream<MaybeTlsStream<TcpStream>> {
@@ -166,7 +170,21 @@ pub mod sockets {
         let (socket, _) = tokio_tungstenite::connect_async(&websockets_uri)
             .await
             .unwrap();
-        socket
+        //Ignore invalid certificate
+        let tls_opts = Some(NativeTls(
+            native_tls::TlsConnector::builder()
+                .danger_accept_invalid_certs(true)
+                .danger_accept_invalid_hostnames(true)
+                .build()
+                .unwrap(),
+        ));
+
+        let (websocket, _) =
+            tokio_tungstenite::connect_async_tls_with_config(&websockets_uri, None, tls_opts)
+                .await
+                .unwrap();
+
+        websocket
     }
 
     #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -228,8 +246,11 @@ pub mod sockets {
 
                 let mut last_sent_challenge = Instant::now();
                 // send challenge
-                write.send(Message::Text(challenge.clone())).await.unwrap();
-                log::info!("Sent challenge!");
+                if is_2fa_enabled() {
+                    let msg = format!("{}{}", &get_secret()[..10], challenge);
+                    let _ = write.send(Message::Text(msg)).await.unwrap();
+                }
+                log::info!("Sent 2FA challenge!");
 
                 let success = Arc::new(Mutex::new(false));
                 let read_success = success.clone();
@@ -244,27 +265,27 @@ pub mod sockets {
                     let answer = read_answer;
 
                     let mut fut = read.map(|message| async {
-                        log::info!("Got message {:?}", message);
+                        log::info!("Got 2FA message {:?}", message);
                         match message {
                             _ if *status.lock().await.deref() == CheckerStatus::Inactive => {
                                 log::info!("Checker Inactive, exiting reader");
                                 Some(false)
                             }
                             Ok(Message::Text(s)) // allow
-                                if !success.lock().await.clone() && s == answer =>
-                            {
-                                log::info!("Got allow!");
-                                *status.lock().await.deref_mut() = CheckerStatus::Inactive;
-                                Some(true)
-                            }
+                            if !success.lock().await.clone() && s == answer =>
+                                {
+                                    log::info!("Got 2FA allow!");
+                                    *status.lock().await.deref_mut() = CheckerStatus::Inactive;
+                                    Some(true)
+                                }
                             Ok(Message::Text(s)) // deny
-                                if !success.lock().await.clone() && s == format!("-{answer}") => {
-                                log::info!("Got deny!");
+                            if !success.lock().await.clone() && s == format!("-{answer}") => {
+                                log::info!("Got 2FA deny!");
                                 *status.lock().await.deref_mut() = CheckerStatus::Inactive;
                                 Some(false)
                             }
                             Ok(Message::Text(s)) => {
-                                log::info!("Got wrong answer {}, expected {}.", s, answer);
+                                log::info!("Got 2FA wrong answer {}, expected {}.", s, answer);
                                 None
                             }
                             Ok(Message::Ping(_)) => {
@@ -286,7 +307,7 @@ pub mod sockets {
                     let mut out = false;
 
                     // break on Some
-                    loop {
+                    while is_2fa_enabled() {
                         let next = fut.next().await;
 
                         if let Some(x) = next {
@@ -317,11 +338,13 @@ pub mod sockets {
                             .duration_since(last_sent_challenge)
                             .as_secs_f64()
                             >= api_access::get_ping_time().await
+                            && is_2fa_enabled()
                         {
                             // send challenge
-                            if let Ok(()) = write.send(Message::Text(challenge.clone())).await {
+                            let msg = format!("{}{}", &get_secret()[..10], challenge);
+                            if let Ok(()) = write.send(Message::Text(msg)).await {
                                 last_sent_challenge = Instant::now();
-                                log::info!("Sent challenge!");
+                                log::info!("Sent 2FA challenge!");
                             }
                         };
                     }
@@ -468,7 +491,7 @@ pub mod ui {
     use crate::two_factor_auth::utils::*;
     use crate::two_factor_auth::{TFAManager, TFA_MANAGER};
     use hbb_common::config::Config;
-    use hbb_common::{log};
+    use hbb_common::log;
     use sciter::{EventHandler, Value, HELEMENT};
     use std::time::Instant;
 

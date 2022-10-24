@@ -226,6 +226,7 @@ impl sciter::EventHandler for Handler {
         fn save_image_quality(String);
         fn save_custom_image_quality(i32);
         fn refresh_video();
+        //fn record_screen(bool, i32, i32);
         fn get_toggle_option(String);
         fn is_privacy_mode_supported();
         fn toggle_option(String);
@@ -1317,14 +1318,7 @@ async fn io_loop(handler: Handler) {
             }
             let remote_host = handler.args[1].clone();
             let remote_port = handler.args[2].parse::<i32>().unwrap_or(0);
-            start_one_port_forward(
-                handler,
-                port,
-                remote_host,
-                remote_port,
-                receiver,
-            )
-            .await;
+            start_one_port_forward(handler, port, remote_host, remote_port, receiver).await;
         }
         return;
     }
@@ -1422,12 +1416,12 @@ impl Remote {
             ConnType::default()
         };
         match Client::start(&self.handler.id, conn_type).await {
-			Ok((mut peer, direct)) => {
+            Ok((mut peer, relay, direct, security_numbers, security_qr_code)) => {
                 SERVER_KEYBOARD_ENABLED.store(true, Ordering::SeqCst);
                 SERVER_CLIPBOARD_ENABLED.store(true, Ordering::SeqCst);
                 SERVER_FILE_TRANSFER_ENABLED.store(true, Ordering::SeqCst);
                 self.handler
-                    .call("setConnectionType", &make_args!(peer.is_secured(), direct));
+                    .call("setConnectionType", &make_args!(peer.is_secured(), direct, security_numbers, security_qr_code));
 
                 // just build for now
                 #[cfg(not(windows))]
@@ -1460,8 +1454,8 @@ impl Remote {
                                     log::info!("Restart remote device");
                                     self.handler.msgbox("restarting", "Restarting Remote Device", "remote_restarting_tip");
                                 } else {
-                                    log::info!("Reset by the peer");
-                                    self.handler.msgbox("error", "Connection Error", "Reset by the peer");
+                                    log::info!("Connection lost");
+                                    self.handler.msgbox("error", "Connection Error", "Connection lost");
                                 }
                                 break;
                             }
@@ -2031,23 +2025,23 @@ impl Remote {
         self.handler.save_config(config);
         true
     }
-/*
-    async fn send_opts_after_login(&self, peer: &mut Stream) {
-        if let Some(opts) = self
-        .handler
-        .lc
-        .read()
-        .unwrap()
-        .get_option_message_after_login()
-    {
-        let mut misc = Misc::new();
-        misc.set_option(opts);
-        let mut msg_out = Message::new();
-        msg_out.set_misc(misc);
-        allow_err!(peer.send(&msg_out).await);
-    }
-    }
-*/
+    /*
+        async fn send_opts_after_login(&self, peer: &mut Stream) {
+            if let Some(opts) = self
+            .handler
+            .lc
+            .read()
+            .unwrap()
+            .get_option_message_after_login()
+        {
+            let mut misc = Misc::new();
+            misc.set_option(opts);
+            let mut msg_out = Message::new();
+            msg_out.set_misc(misc);
+            allow_err!(peer.send(&msg_out).await);
+        }
+        }
+    */
     async fn handle_msg_from_peer(&mut self, data: &[u8], peer: &mut Stream) -> bool {
         if let Ok(msg_in) = Message::parse_from_bytes(&data) {
             match msg_in.union {
@@ -2304,6 +2298,10 @@ impl Remote {
                                     .call2("setPermission", &make_args!("file", p.enabled));
                             }
                             Permission::Restart => {
+                                self.handler
+                                    .call2("setPermission", &make_args!("restart", p.enabled));
+                            }
+                            Permission::Recording => {
                                 self.handler
                                     .call2("setPermission", &make_args!("restart", p.enabled));
                             }

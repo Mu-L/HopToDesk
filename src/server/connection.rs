@@ -4,19 +4,19 @@ use crate::clipboard_file::*;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::common::update_clipboard;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
+use crate::two_factor_auth;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::two_factor_auth::TFAManager;
 use crate::video_service;
 #[cfg(any(target_os = "android", target_os = "ios"))]
 use crate::{common::MOBILE_INFO2, mobile::connection_manager::start_channel};
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-use crate::{two_factor_auth};
 use crate::{ipc, VERSION};
 use hbb_common::{
     config::Config,
     fs,
     fs::can_enable_overwrite_detection,
     futures::{SinkExt, StreamExt},
-    get_version_number,
+    get_time, get_version_number,
     message_proto::{option_message::BoolOption, permission_info::Permission},
     password_security as password, sleep, timeout,
     tokio::{
@@ -97,6 +97,8 @@ pub struct Connection {
     peer_info: (String, String),
     lr: LoginRequest,
     last_recv_time: Arc<Mutex<Instant>>,
+    security_numbers: String,
+    security_qr_code: String,
 }
 
 impl Subscriber for ConnInner {
@@ -128,7 +130,7 @@ const H1: Duration = Duration::from_secs(3600);
 const MILLI1: Duration = Duration::from_millis(1);
 const SEND_TIMEOUT_VIDEO: u64 = 12_000;
 const SEND_TIMEOUT_OTHER: u64 = SEND_TIMEOUT_VIDEO * 10;
-const SESSION_TIMEOUT: Duration = Duration::from_secs(30);
+//const SESSION_TIMEOUT: Duration = Duration::from_secs(30);
 
 impl Connection {
     pub async fn start(
@@ -136,6 +138,8 @@ impl Connection {
         stream: super::Stream,
         id: i32,
         server: super::ServerPtrWeak,
+        security_numbers: String,
+        security_qr_code: String,
     ) {
         let hash = Hash {
             salt: Config::get_salt(),
@@ -150,7 +154,7 @@ impl Connection {
         let (tx_video, mut rx_video) = mpsc::unbounded_channel::<(Instant, Arc<Message>)>();
         let (tx_input, rx_input) = std_mpsc::channel();
 
-		let tx_to_cm_2fa = tx_to_cm.clone();
+        let tx_to_cm_2fa = tx_to_cm.clone();
         let tx_cloned = tx.clone();
         let mut conn = Self {
             inner: ConnInner {
@@ -185,6 +189,8 @@ impl Connection {
             peer_info: Default::default(),
             lr: Default::default(),
             last_recv_time: Arc::new(Mutex::new(Instant::now())),
+            security_numbers,
+            security_qr_code
         };
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         tokio::spawn(async move {
@@ -226,8 +232,8 @@ impl Connection {
         );
 
         let id_str = id.to_string();
-		
-		#[cfg(not(any(target_os = "android", target_os = "ios")))]
+
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         if TFAManager::is_2fa_enabled() {
             let tx = tx_to_cm_2fa;
             let id_s = id_str.clone();
@@ -243,6 +249,9 @@ impl Connection {
 
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         std::thread::spawn(move || Self::handle_input(rx_input, tx_cloned));
+        let mut second_timer = time::interval(Duration::from_secs(1));
+        let mut last_uac = false;
+        let mut last_foreground_window_elevated = false;
 
         loop {
             tokio::select! {
@@ -258,14 +267,14 @@ impl Connection {
                         }
                         ipc::Data::Close => {
                             let mut misc = Misc::new();
-                            misc.set_close_reason("Closed manually by the peer".into());
+                            misc.set_close_reason("The remote partner has closed the session.".into());
                             let mut msg_out = Message::new();
                             msg_out.set_misc(misc);
                             conn.send(msg_out).await;
                             conn.on_close("Close requested from connection manager", false).await;
                             SESSIONS.lock().unwrap().remove(&conn.lr.my_id);
-							#[cfg(not(any(target_os = "android", target_os = "ios")))]
-							TFAManager::remove_checker(&id_str).await;
+                            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                            TFAManager::remove_checker(&id_str).await;
 
                             break;
                         }
@@ -372,7 +381,7 @@ impl Connection {
                             }
                         }
                     } else {
-                        conn.on_close("Reset by the peer", true).await;
+                        conn.on_close("Connection lost", true).await;
                         break;
                     }
                 },
@@ -414,12 +423,32 @@ impl Connection {
                         break;
                     }
                 },
+                _ = second_timer.tick() => {
+                    let uac = crate::video_service::IS_UAC_RUNNING.lock().unwrap().clone();
+                    if last_uac != uac {
+                        last_uac = uac;
+                        let mut misc = Misc::new();
+                        misc.set_uac(uac);
+                        let mut msg = Message::new();
+                        msg.set_misc(misc);
+                        conn.inner.send(msg.into());
+                    }
+                    let foreground_window_elevated = crate::video_service::IS_FOREGROUND_WINDOW_ELEVATED.lock().unwrap().clone();
+                    if last_foreground_window_elevated != foreground_window_elevated {
+                        last_foreground_window_elevated = foreground_window_elevated;
+                        let mut misc = Misc::new();
+                        misc.set_foreground_window_elevated(foreground_window_elevated);
+                        let mut msg = Message::new();
+                        msg.set_misc(misc);
+                        conn.inner.send(msg.into());
+                    }
+                }
                 _ = test_delay_timer.tick() => {
                     if last_recv_time.elapsed() >= SEC30 {
                         conn.on_close("Timeout", true).await;
                         break;
                     }
-                    let time = crate::get_time();
+                    let time = get_time();
                     if time > 0 && conn.last_test_delay == 0 {
                         conn.last_test_delay = time;
                         let mut msg_out = Message::new();
@@ -472,11 +501,12 @@ impl Connection {
                         handle_mouse(&msg, id);
                     }
                     MessageInput::Key((mut msg, press)) => {
-                        if press {
+                        // todo: press and down have similar meanings.
+                        if press && msg.mode.unwrap() == KeyboardMode::Legacy {
                             msg.down = true;
                         }
                         handle_key(&msg);
-                        if press {
+                        if press && msg.mode.unwrap() == KeyboardMode::Legacy {
                             msg.down = false;
                             handle_key(&msg);
                         }
@@ -605,35 +635,35 @@ impl Connection {
         true
     }
 
-/*
+    /*
 
-    fn get_api_server(&mut self) {
-        self.api_server = crate::get_audit_server(
-            Config::get_option("api-server"),
-            Config::get_option("custom-rendezvous-server"),
-        );
-    }
-
-    fn post_audit(&self, v: Value) {
-        if self.api_server.is_empty() {
-            return;
+        fn get_api_server(&mut self) {
+            self.api_server = crate::get_audit_server(
+                Config::get_option("api-server"),
+                Config::get_option("custom-rendezvous-server"),
+            );
         }
-        let url = self.api_server.clone();
-        let mut v = v;
-        v["id"] = json!(Config::get_id());
-        v["uuid"] = json!(base64::encode(hbb_common::get_uuid()));
-        v["Id"] = json!(self.inner.id);
-        tokio::spawn(async move {
-            allow_err!(Self::post_audit_async(url, v).await);
-        });
-    }
 
-    #[inline]
-    async fn post_audit_async(url: String, v: Value) -> ResultType<()> {
-        crate::post_request(url, v.to_string(), "").await?;
-        Ok(())
-    }
-*/    
+        fn post_audit(&self, v: Value) {
+            if self.api_server.is_empty() {
+                return;
+            }
+            let url = self.api_server.clone();
+            let mut v = v;
+            v["id"] = json!(Config::get_id());
+            v["uuid"] = json!(base64::encode(hbb_common::get_uuid()));
+            v["Id"] = json!(self.inner.id);
+            tokio::spawn(async move {
+                allow_err!(Self::post_audit_async(url, v).await);
+            });
+        }
+
+        #[inline]
+        async fn post_audit_async(url: String, v: Value) -> ResultType<()> {
+            crate::post_request(url, v.to_string(), "").await?;
+            Ok(())
+        }
+    */
     async fn send_logon_response(&mut self) {
         if self.authorized {
             return;
@@ -645,7 +675,7 @@ impl Connection {
         } else {
             0
         };
-		//self.post_audit(json!({"peer": self.peer_info, "Type": conn_type}));
+        //self.post_audit(json!({"peer": self.peer_info, "Type": conn_type}));
         #[allow(unused_mut)]
         let mut username = crate::platform::get_active_username();
         let mut res = LoginResponse::new();
@@ -717,7 +747,7 @@ impl Connection {
 
         pi.username = username;
         pi.sas_enabled = sas_enabled;
-        pi.mac_address = get_mac();       
+        pi.mac_address = get_mac();
         pi.features = Some(Features {
             privacy_mode: video_service::is_privacy_mode_supported(),
             ..Default::default()
@@ -800,6 +830,8 @@ impl Connection {
             file: self.file,
             file_transfer_enabled: self.file_transfer_enabled(),
             restart: self.restart,
+            security_numbers: self.security_numbers.clone(),
+            security_qr_code: self.security_qr_code.clone(),
         });
     }
 
@@ -890,7 +922,7 @@ impl Connection {
                 && session.session_id == self.lr.session_id
                 && !self.lr.password.is_empty()
                 && self.validate_one_password(session.random_password.clone())
-                && session.last_recv_time.lock().unwrap().elapsed() < SESSION_TIMEOUT
+            //&& session.last_recv_time.lock().unwrap().elapsed() < SESSION_TIMEOUT
             {
                 SESSIONS.lock().unwrap().insert(
                     self.lr.my_id.clone(),
@@ -944,16 +976,22 @@ impl Connection {
                     self.file_transfer = Some((ft.dir, ft.show_hidden));
                 }
                 Some(login_request::Union::PortForward(mut pf)) => {
-                    if !Config::get_option("enable-tunnel").is_empty() {
-                        self.send_login_error("No permission of IP tunneling").await;
-                        sleep(1.).await;
-                        return false;
-                    }
                     let mut is_rdp = false;
                     if pf.host == "RDP" && pf.port == 0 {
                         pf.host = "localhost".to_owned();
                         pf.port = 3389;
                         is_rdp = true;
+                    }
+                    if is_rdp && !Config::get_option("enable-rdp").is_empty()
+                        || !is_rdp && !Config::get_option("enable-tunnel").is_empty()
+                    {
+                        if is_rdp {
+                            self.send_login_error("No permission of RDP").await;
+                        } else {
+                            self.send_login_error("No permission of IP tunneling").await;
+                        }
+                        sleep(1.).await;
+                        return false;
                     }
                     if pf.host.is_empty() {
                         pf.host = "localhost".to_owned();
@@ -973,6 +1011,7 @@ impl Connection {
                                 addr
                             ))
                             .await;
+                            return false;
                         }
                     }
                 }
@@ -999,7 +1038,7 @@ impl Connection {
                     .get(&self.ip)
                     .map(|x| x.clone())
                     .unwrap_or((0, 0, 0));
-                let time = (crate::get_time() / 60_000) as i32;
+                let time = (get_time() / 60_000) as i32;
                 if failure.2 > 30 {
                     self.send_login_error("Too many wrong password attempts")
                         .await;
@@ -1024,11 +1063,42 @@ impl Connection {
                     if failure.0 != 0 {
                         LOGIN_FAILURES.lock().unwrap().remove(&self.ip);
                     }
-                    self.try_start_cm(lr.my_id, lr.my_name, true);
-                    self.send_logon_response().await;
-                    if self.port_forward_socket.is_some() {
-                        return false;
+
+                    // always true when 2fa not enabled
+                    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                    let auth_2fa = if TFAManager::is_2fa_enabled() {
+                        Some(AuthAnswer::Allowed)
+                            == TFAManager::get_answer(&self.inner.id.to_string()).await
+                    } else {
+                        true
+                    };
+
+                    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                    if auth_2fa {
+                        self.try_start_cm(lr.my_id, lr.my_name, true);
+                        self.send_logon_response().await;
+                        if self.port_forward_socket.is_some() {
+                            return false;
+                        }
+                    } else {
+                        SESSIONS.lock().unwrap().remove(&lr.my_id);
+                        self.try_start_cm(lr.my_id, lr.my_name, false);
+
+                        let _ = tokio::time::timeout(
+                            Duration::from_secs_f64(60.0),
+                            self.send_login_error("2FA Not Authorized"),
+                        )
+                        .await;
                     }
+					
+					#[cfg(any(target_os = "android", target_os = "ios"))]
+					{
+                        self.try_start_cm(lr.my_id, lr.my_name, true);
+                        self.send_logon_response().await;
+                        if self.port_forward_socket.is_some() {
+                            return false;
+                        }
+					}
                 }
             }
         } else if let Some(message::Union::TestDelay(t)) = msg.union {
@@ -1038,7 +1108,7 @@ impl Connection {
                 self.inner.send(msg_out.into());
             } else {
                 self.last_test_delay = 0;
-                let new_delay = (crate::get_time() - t.time) as u32;
+                let new_delay = (get_time() - t.time) as u32;
                 video_service::VIDEO_QOS
                     .lock()
                     .unwrap()
@@ -1054,9 +1124,9 @@ impl Connection {
                     #[cfg(not(any(target_os = "android", target_os = "ios")))]
                     if self.keyboard {
                         if is_left_up(&me) {
-                            CLICK_TIME.store(crate::get_time(), Ordering::SeqCst);
+                            CLICK_TIME.store(get_time(), Ordering::SeqCst);
                         } else {
-                            MOUSE_MOVE_TIME.store(crate::get_time(), Ordering::SeqCst);
+                            MOUSE_MOVE_TIME.store(get_time(), Ordering::SeqCst);
                         }
                         self.input_mouse(me, self.inner.id());
                     }
@@ -1065,7 +1135,7 @@ impl Connection {
                     #[cfg(not(any(target_os = "android", target_os = "ios")))]
                     if self.keyboard {
                         if is_enter(&me) {
-                            CLICK_TIME.store(crate::get_time(), Ordering::SeqCst);
+                            CLICK_TIME.store(get_time(), Ordering::SeqCst);
                         }
                         // handle all down as press
                         // fix unexpected repeating key on remote linux, seems also fix abnormal alt/shift, which

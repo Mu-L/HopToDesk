@@ -1,9 +1,18 @@
-use crate::{
-    rendezvous_messages::{self, ToJson},
-    server::{check_zombie, new as new_server, ServerPtr},
-    turn_client,
+use std::{
+    net::{SocketAddr, ToSocketAddrs},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    time::{Instant, SystemTime},
 };
+
 use futures::{SinkExt, StreamExt};
+use soketto::{handshake::ServerResponse, Data};
+use tokio::net::TcpStream;
+use tokio_tungstenite::Connector::NativeTls;
+use tokio_tungstenite::{tungstenite::Message as WsMessage, MaybeTlsStream, WebSocketStream};
+
 use hbb_common::{
     allow_err,
     anyhow::{anyhow, bail},
@@ -19,18 +28,12 @@ use hbb_common::{
     },
     ResultType,
 };
-use soketto::{handshake::ServerResponse, Data};
-use std::{
-    net::{SocketAddr, ToSocketAddrs},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
-    },
-    time::{Instant, SystemTime},
+
+use crate::{
+    rendezvous_messages::{self, ToJson},
+    server::{check_zombie, new as new_server, ServerPtr},
+    turn_client,
 };
-use tokio::net::TcpStream;
-use tokio_tungstenite::Connector::NativeTls;
-use tokio_tungstenite::{tungstenite::Message as WsMessage, MaybeTlsStream, WebSocketStream};
 
 type Message = RendezvousMessage;
 
@@ -118,10 +121,10 @@ impl RendezvousMediator {
         let mut last_timer = Instant::now();
         let mut timer = interval(TIMER_OUT);
 
-        const MAX_IDLE_TIME: Duration = Duration::from_secs(90);
-        const MAX_HEALTHCHECK_DELAY: Duration = Duration::from_secs(5);
+        //const MAX_IDLE_TIME: Duration = Duration::from_secs(90);
+        //const MAX_HEALTHCHECK_DELAY: Duration = Duration::from_secs(5);
         let mut last_healthcheck_sent = None;
-        let mut last_data_received = Instant::now();
+        let mut last_data_received = chrono::Utc::now();
 
         let socket_packets = futures::stream::unfold(receiver, move |mut receiver| async {
             match receiver.next().await {
@@ -140,24 +143,26 @@ impl RendezvousMediator {
                         break;
                     }
                     let now = Instant::now();
+                    let now_utc = chrono::Utc::now();
                     if now.duration_since(last_timer) < TIMER_OUT {
                         // a workaround of tokio timer bug
                         continue;
                     }
                     last_timer = now;
-
+                    /*log::info!("noe {:?} chr {:?} last_healthcheck_sent {:?} last_data_received {:?}",now,chrono::Utc::now(),last_healthcheck_sent,last_data_received);
+                    log::info!("sub {:?}",now_utc - last_data_received);*/
                     if let Some(last_healthcheck_sent) = last_healthcheck_sent {
-                        if now - last_healthcheck_sent > MAX_HEALTHCHECK_DELAY {
+                        if now_utc - last_healthcheck_sent > chrono::Duration::seconds(10) {
                             log::info!("Server is unresponding, disconnect.");
                             break;
                         }
-                    } else if now - last_data_received > MAX_IDLE_TIME {
+                    } else if now_utc - last_data_received > chrono::Duration::seconds(90) {
                         log::info!("Sending healthcheck.");
                         if let Err(error) = sender.send(WsMessage::Text(HEALTHCHECK.to_owned())).await {
                             log::info!("Send error: {error}, disconnect.");
                             break;
                         };
-                        last_healthcheck_sent = Some(Instant::now());
+                        last_healthcheck_sent = Some(chrono::Utc::now());
                     }
                 }
                 Some(data) = socket_packets.next() => {
@@ -165,9 +170,8 @@ impl RendezvousMediator {
                     Ok(tokio_tungstenite::tungstenite::Message::Text(msg)) => {
                         log::info!("redenzvous_mediator msg: {msg}");
                         if let Ok(connect_request) =
-                            serde_json::from_str::<rendezvous_messages::ConnectRequest>(&msg)
-                        {
-                            last_data_received = Instant::now();
+                            serde_json::from_str::<rendezvous_messages::ConnectRequest>(&msg){
+                            last_data_received = chrono::Utc::now();
                             let listener =
                                 hbb_common::tcp::new_listener(SocketAddr::new(local_ip, 0), true)
                                 .await?;
@@ -201,22 +205,21 @@ impl RendezvousMediator {
                         } else if let Ok(relay_connection) =
                             serde_json::from_str::<rendezvous_messages::RelayConnection>(&msg)
                         {
-                            last_data_received = Instant::now();
+                            log::error!("start relay");
+                            last_data_received = chrono::Utc::now();
                             if let Ok(stream) = socket_client::connect_tcp(
                                 relay_connection.addr,
                                 Config::get_any_listen_addr(),
                                 CONNECT_TIMEOUT,
-                            )
-                            .await
+                            ).await
                             {
+                                log::error!("start relay if");
                                 let data = socket_packets.next().await;
                                 if let Some(Ok(tokio_tungstenite::tungstenite::Message::Text(msg))) =
-                                    data
-                                {
-                                    if let Ok(_) = serde_json::from_str::<
-                                        rendezvous_messages::RelayReady,
-                                    >(&msg)
-                                    {
+                                    data{
+                                    log::error!("start relay if 1");
+                                    if let Ok(_) = serde_json::from_str::<rendezvous_messages::RelayReady,>(&msg){
+                                    log::error!("start relay if 2");
                                         let server_clone = server.clone();
                                         let addr = relay_connection.addr;
                                         tokio::spawn(async move {
@@ -233,7 +236,7 @@ impl RendezvousMediator {
                             }
                         } else if msg == HEALTHCHECK {
                             last_healthcheck_sent = None;
-                            last_data_received = Instant::now();
+                            last_data_received = chrono::Utc::now();
                         } else if msg == HEALTHCHECK_ERROR {
                             log::info!("Connection removed on server, disconnect.");
                             break;
@@ -375,7 +378,7 @@ async fn direct_server(server: ServerPtr) {
                             server,
                             hbb_common::Stream::from(stream, local_addr),
                             addr,
-                            false,
+                            true,
                         )
                         .await
                     );

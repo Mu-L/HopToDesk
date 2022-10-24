@@ -58,7 +58,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Do you want to enter again?","ต้องการเข้าใหม่อีกครั้ง?"),
         ("Connection Error","การเชื่อมต่อล้มเหลว"),
         ("Error","เกิดข้อผิดพลาด"),
-        ("Reset by the peer","รีเซ็ตโดยเพียร์"),
+        ("Connection lost","รีเซ็ตโดยเพียร์"),
         ("Connecting...","กำลังเชื่อมต่อ..."),
         ("Connection in progress. Please wait.","กำลังเชื่อมต่อ โปรดรอสักครู่"),
         ("Please try 1 minute later","หลัง 1 นาทีผ่านไปโปรดลองใหม่อีกครั้ง"),
@@ -184,7 +184,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Settings","การตั้งค่า"),
         ("Username","ชื่อผู้ใช้"),
         ("Invalid port","พอร์ตไม่ถูกต้อง"),
-        ("Closed manually by the peer","กำหนดการปิดเองโดยเพียร์"),
+        ("The remote partner has closed the session.","กำหนดการปิดเองโดยเพียร์"),
         ("Enable remote configuration modification","เปิดใช้งานการปรับเปลี่ยนกำหนดการตั้งค่า ควบคุมหน้าจอระยะไกล"),
         ("Run without install","ใช้งานโดยไม่ต้องติดตั้ง"),
         ("Always connected via relay","เชื่อมต่อผ่านรีเลย์เสมอ"),
@@ -267,6 +267,9 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Quit","ยกเลิก"),
 		("Language","ภาษา  (Language)"),
 		("Enable Wake On LAN", "เปิดใช้งาน Wake On LAN"),
-		("Enable 2FA", "เปิดใช้งาน 2FA"),		
+		("Enable 2FA", "เปิดใช้งาน 2FA"),
+		("2FA QR code", "2FA QR code"),		
+        ("Scan this QR code with a camera on a secondary device such as a phone to set it up as your 2FA authenticator.", "สแกนรหัส QR นี้ด้วยกล้องบนอุปกรณ์รอง เช่น โทรศัพท์ เพื่อตั้งค่าเป็นเครื่องยืนยันตัวตน 2FA ของคุณ"),
+        ("You will need to confirm the 2FA on the secondary device with you when trying to connect to this desktop.", "คุณจะต้องยืนยัน 2FA บนอุปกรณ์รองกับคุณเมื่อพยายามเชื่อมต่อกับเดสก์ท็อปนี้"),		
     ].iter().cloned().collect();
 }

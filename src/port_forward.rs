@@ -12,6 +12,7 @@ use hbb_common::{
     tokio_util::codec::{BytesCodec, Framed},
     ResultType, Stream,
 };
+use std::sync::Arc;
 
 fn run_rdp(port: u16) {
     std::process::Command::new("cmdkey")
@@ -63,13 +64,14 @@ pub async fn listen(
                 let password = password.clone();
                 let mut forward = Framed::new(forward, BytesCodec::new());
                 match connect_and_login(&id, &password, &mut ui_receiver, interface.clone(), &mut forward, is_rdp).await {
-                    Ok(Some(stream)) => {
+                    Ok((Some(stream), relay)) => {
                         let interface = interface.clone();
                         tokio::spawn(async move {
                             if let Err(err) = run_forward(forward, stream).await {
                                interface.msgbox("error", "Error", &err.to_string());
                             }
                             log::info!("connection from {:?} closed", addr);
+                            _ = relay;
                        });
                     }
                     Err(err) => {
@@ -101,13 +103,13 @@ async fn connect_and_login(
     interface: impl Interface,
     forward: &mut Framed<TcpStream, BytesCodec>,
     is_rdp: bool,
-) -> ResultType<Option<Stream>> {
+) -> ResultType<(Option<Stream>, Option<Arc<impl webrtc_util::Conn>>)> {
     let conn_type = if is_rdp {
         ConnType::RDP
     } else {
         ConnType::PORT_FORWARD
     };
-    let (mut stream, _) = Client::start(id, conn_type).await?;
+    let (mut stream, relay, ..) = Client::start(id, conn_type).await?;
     let mut interface = interface;
     let mut buffer = Vec::new();
     loop {
@@ -125,7 +127,7 @@ async fn connect_and_login(
                         Some(message::Union::LoginResponse(lr)) => match lr.union {
                             Some(login_response::Union::Error(err)) => {
                                 interface.handle_login_error(&err);
-                                return Ok(None);
+                                return Ok((None, None));
                             }
                             Some(login_response::Union::PeerInfo(pi)) => {
                                 interface.handle_peer_info(pi);
@@ -140,7 +142,7 @@ async fn connect_and_login(
                     }
                 }
                 _ => {
-                    bail!("Reset by the peer");
+                    bail!("Connection lost");
                 }
             },
             d = ui_receiver.recv() => {
@@ -155,7 +157,7 @@ async fn connect_and_login(
                 if let Some(Ok(bytes)) = res {
                     buffer.extend(bytes);
                 } else {
-                    return Ok(None);
+                    return Ok((None, None));
                 }
             },
         }
@@ -164,7 +166,7 @@ async fn connect_and_login(
     if !buffer.is_empty() {
         allow_err!(stream.send_bytes(buffer.into()).await);
     }
-    Ok(Some(stream))
+    Ok((Some(stream), relay))
 }
 
 async fn run_forward(forward: Framed<TcpStream, BytesCodec>, stream: Stream) -> ResultType<()> {

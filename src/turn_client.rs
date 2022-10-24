@@ -1,5 +1,8 @@
-use hbb_common::{tcp::FramedStream, tokio::net::TcpStream, ResultType};
-use std::{net::SocketAddr, sync::Arc};
+use hbb_common::{log, tcp::FramedStream, tokio::net::TcpStream, ResultType};
+use std::{
+    net::SocketAddr,
+    sync::{Arc, Mutex},
+};
 use turn::client::{tcp::TcpSplit, ClientConfig};
 use webrtc_util::conn::Conn;
 
@@ -25,13 +28,20 @@ async fn get_turn_servers() -> Option<Vec<TurnConfig>> {
     Some(servers)
 }
 
-pub async fn new_relay_addrs(peer_addr: SocketAddr) -> Vec<(TurnClient, SocketAddr)> {
+pub async fn new_relay_addrs(
+    peer_addr: SocketAddr,
+) -> Vec<(TurnClient, Arc<impl Conn>, SocketAddr)> {
     let mut client_addrs = vec![];
     if let Some(turn_servers) = get_turn_servers().await {
         for config in turn_servers {
             if let Ok(turn_client) = TurnClient::new(config).await {
-                if let Ok(relay_addr) = turn_client.create_relay_connection(peer_addr).await {
-                    client_addrs.push((turn_client, relay_addr));
+                match turn_client.create_relay_connection(peer_addr).await {
+                    Ok(relay) => {
+                        client_addrs.push((turn_client, relay.0, relay.1));
+                    }
+                    Err(err) => {
+                        log::warn!("create relay conn failed {err}");
+                    }
                 }
             }
         }
@@ -78,10 +88,23 @@ impl TurnClient {
         Ok(self.client.send_binding_request().await?)
     }
 
-    pub async fn create_relay_connection(&self, peer_addr: SocketAddr) -> ResultType<SocketAddr> {
+    pub async fn create_relay_connection(
+        &self,
+        peer_addr: SocketAddr,
+    ) -> ResultType<(Arc<impl Conn>, SocketAddr)> {
         let relay_connection = self.client.allocate().await?;
         relay_connection.send_to(b"init", peer_addr).await?;
-        Ok(relay_connection.local_addr().await?)
+        let local_addr = relay_connection.local_addr().await?;
+
+        Ok((
+            // Avoid the conn to be dropped, otherwise the timer in it will be
+            // stopped. That will stop to send refresh transaction periodically.
+            // More detail to check:
+            //
+            //   https://datatracker.ietf.org/doc/html/rfc5766#page-31
+            Arc::new(relay_connection),
+            local_addr,
+        ))
     }
 
     pub async fn wait_new_connection(&self) -> ResultType<FramedStream> {

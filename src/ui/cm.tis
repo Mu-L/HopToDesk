@@ -3,6 +3,7 @@ view.windowFrame = is_osx ? #extended : #solid;
 var body;
 var connections = [];
 var show_chat = false;
+var security_code = false;
 
 class Body: Reactor.Component
 {
@@ -12,6 +13,8 @@ class Body: Reactor.Component
         body = this;
         var thisptr = this;
         this.auth_2fa_answer = null;
+        this.your_code = null;
+        this.security_code = false;
         handler.on_2fa_answer = function(answer) {return thisptr.on_2fa_answer(thisptr, answer);};
     }
 
@@ -30,6 +33,7 @@ class Body: Reactor.Component
             me.sendMsg(msg);
         };
         var right_style = show_chat ? "" : "display: none";
+        var background_image = this.your_code ? "background-image: url(\'" + this.your_code + "\')" : "";
        // below size:* is work around for Linux, it alreayd set in css, but not work, shit sciter
         return <div .content style="size:*">
             <div .left-panel>
@@ -40,7 +44,8 @@ class Body: Reactor.Component
                     <div>
                         <div .id style="font-weight: bold; font-size: 1.2em;">{c.name}</div>
                         <div .id>({c.peer_id})</div>
-                        <div style="margin-top: 1.2em">{translate('Connected')} {" "} <span #time>{getElaspsed(c.time)}</span></div>
+                        <div style="margin-top: 1.2em">{translate('Connected')} {" "}<span #time>{getElaspsed(c.time)}</span></div>
+						{auth ? <div .keylock .link style="margin-top: 1.2em; float:left">{translate('View Security Code')}</div> : ""}
                     </div>
                 </div>
                 <div />
@@ -53,6 +58,9 @@ class Body: Reactor.Component
                 </div>}
                 {c.port_forward ? <div>Port Forwarding: {c.port_forward}</div> : ""}
                 <div style="size:*"/>
+                    <ul style="list-style-type:none; width: 90%; margin-left: -20px;">
+					<div id="seccodee" style="margin-left: -20px; margin-top: -20px; width: 90%; margin-left: 0px;font-size: 12px; font-family: \"Courier New\";"></div>
+                    </ul></div> :
                 <div .buttons>
                      {!auth_2fa ? <span .auth-2fa-msg>{translate('Approve the request on HopToDesk 2FA')}</span> : ""}
                      {auth || !auth_2fa ? "" : <button .button tabindex="-1" #accept>{translate('Accept')}</button>}
@@ -136,6 +144,7 @@ class Body: Reactor.Component
         });
     }
 
+    
     event click $(button#accept) {
         var { cid, connection } = this;
         checkClickTime(function() {
@@ -161,9 +170,25 @@ class Body: Reactor.Component
             handler.close(cid);
         });
     }
+
+    event click $(div.keylock) {
+        var connection = this.connection;
+        var self = this;
+        if (connection.authorized) {
+            checkClickTime(function() {
+                self.security_code = true;
+                var nums = connection.security_numbers;
+				nums = generate_security_number_block(nums);
+				$(#seccodee).content(nums);
+            });
+        }
+    }
 }
 
 $(body).content(<Body />);
+
+
+
 
 var header;
 
@@ -181,8 +206,8 @@ class Header: Reactor.Component
             if (el) el.style.set {
                 display: "inline-block",
             };
+			conn.unreaded = 0;
             self.timer(300ms, function() {
-                conn.unreaded = 0;
                 var el = me.select("#unreaded" + conn.id);
                 if (el) el.style.set {
                     display: "none",
@@ -294,7 +319,7 @@ function bring_to_top(idx=-1) {
     }
 }
 
-handler.addConnection = function(id, is_file_transfer, port_forward, peer_id, name, authorized, keyboard, clipboard, audio, file, restart) {
+handler.addConnection = function(id, is_file_transfer, port_forward, peer_id, name, authorized, keyboard, clipboard, audio, file, restart, security_numbers, security_qr_code) {
 //    stdout.println("new connection #" + id + ": " + peer_id);
     var conn;
     connections.map(function(c) {
@@ -311,14 +336,14 @@ handler.addConnection = function(id, is_file_transfer, port_forward, peer_id, na
         port_forward: port_forward,
         name: name, authorized: authorized, time: new Date(),
         keyboard: keyboard, clipboard: clipboard, msgs: [], unreaded: 0,
-        audio: audio, file: file, restart: restart
+        audio: audio, file: file, restart: restart, security_numbers: security_numbers, security_qr_code: security_qr_code
     });
     body.cur = connections.length - 1;
     bring_to_top();
     update();
     self.timer(1ms, adjustHeader);
     if (authorized) {
-        self.timer(3s, function() {
+		self.timer(3s, function() {
             view.windowState = View.WINDOW_MINIMIZED;
         });
     }

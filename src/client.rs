@@ -13,10 +13,6 @@ use cpal::{
     Device, Host, StreamConfig,
 };
 use magnum_opus::{Channels::*, Decoder as AudioDecoder};
-use scrap::{
-    codec::{Decoder, DecoderCfg},
-    VpxDecoderConfig, VpxVideoCodecId,
-};
 
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -40,11 +36,18 @@ use hbb_common::{
     AddrMangle, ResultType, Stream,
 };
 
+use qrcode::QrCode;
+use image::Rgba;
 pub use super::lang::*;
 pub mod file_trait;
 pub use file_trait::FileManager;
-pub mod helper;
 pub use helper::*;
+use scrap::{
+    codec::{Decoder, DecoderCfg},
+    record::{Recorder, RecorderContext},
+    VpxDecoderConfig, VpxVideoCodecId,
+};
+pub mod helper;
 pub const SEC30: Duration = Duration::from_secs(30);
 
 pub struct Client;
@@ -120,7 +123,10 @@ impl Drop for OboePlayer {
 }
 
 impl Client {
-    pub async fn start(peer: &str, conn_type: ConnType) -> ResultType<(Stream, bool)> {
+    pub async fn start(
+        peer: &str,
+        conn_type: ConnType,
+    ) -> ResultType<(Stream, Option<Arc<impl webrtc_util::Conn>>, bool, String, String)> {
         match Self::_start(peer, conn_type).await {
             Err(err) => {
                 // Refresh the content of api.hoptodest.com
@@ -137,7 +143,10 @@ impl Client {
         }
     }
 
-    async fn _start(peer: &str, conn_type: ConnType) -> ResultType<(Stream, bool)> {
+    async fn _start(
+        peer: &str,
+        conn_type: ConnType,
+    ) -> ResultType<(Stream, Option<Arc<impl webrtc_util::Conn>>, bool, String, String)> {
         let rendezvous_server = match crate::get_rendezvous_server(1_000).await {
             Some(server) => server,
             None => bail!("Failed to retrieve rendez-vous server address"),
@@ -248,7 +257,7 @@ impl Client {
         peer_nat_type: NatType,
         my_nat_type: i32,
         listening_time_used: u64,
-    ) -> ResultType<(Stream, bool)> {
+    ) -> ResultType<(Stream, Option<Arc<impl webrtc_util::Conn>>, bool, String, String)> {
         let direct_failures = PeerConfig::load(peer_id).direct_failures;
         let mut connect_timeout = 0;
         const MIN: u64 = 1000;
@@ -280,6 +289,7 @@ impl Client {
         log::info!("peer address: {}, timeout: {}", peer, connect_timeout);
         let start = std::time::Instant::now();
         // NOTICE: Socks5 is be used event in intranet. Which may be not a good way.
+        let mut relay = None;
         let mut conn = socket_client::connect_tcp(peer, local_addr, connect_timeout).await;
         let mut direct = !conn.is_err();
         if !direct {
@@ -293,27 +303,34 @@ impl Client {
                 Ok(stream) => Ok(stream),
                 Err(_) => {
                     direct = false;
-                    Self::connect_over_turn_servers(peer_id, peer_public_addr, sender).await
+                    match Self::connect_over_turn_servers(peer_id, peer_public_addr, sender).await {
+                        Ok((relay_conn, stream)) => {
+                            relay = Some(relay_conn);
+                            Ok(stream)
+                        }
+                        Err(err) => Err(err),
+                    }
                 }
             };
         }
         let mut conn = conn?;
         let time_used = start.elapsed().as_millis() as u64;
         log::info!("{}ms used to establish connection", time_used);
-        Self::secure_connection(peer_id, id_pk, &mut conn).await?;
-        Ok((conn, direct))
+        let (security_numbers, security_qr_code) = Self::secure_connection(peer_id, id_pk, &mut conn).await?;
+        //Self::secure_connection(peer_id, id_pk, &mut conn).await?;
+        Ok((conn, relay, direct, security_numbers, security_qr_code))
     }
 
     async fn connect_over_turn_servers(
         peer_id: &str,
         peer_public_addr: SocketAddr,
         mut sender: soketto::Sender<Compat<TcpStream>>,
-    ) -> ResultType<FramedStream> {
+    ) -> ResultType<(Arc<impl webrtc_util::Conn>, FramedStream)> {
         let relay_addrs = turn_client::new_relay_addrs(peer_public_addr).await;
         if relay_addrs.is_empty() {
             bail!("Failed to get a new relay address");
         }
-        for (turn_client, relay_addr) in relay_addrs {
+        for (turn_client, conn, relay_addr) in relay_addrs {
             sender
                 .send_text(
                     &rendezvous_messages::RelayConnection::new(peer_id, relay_addr).to_json(),
@@ -324,7 +341,7 @@ impl Client {
                     sender
                         .send_text(&rendezvous_messages::RelayReady::new(peer_id).to_json())
                         .await?;
-                    return Ok(stream);
+                    return Ok((conn, stream));
                 }
                 Err(e) => log::warn!("Failed to connect via relay server: {}", e),
             }
@@ -336,7 +353,9 @@ impl Client {
         peer_id: &str,
         id_pk: Vec<u8>,
         conn: &mut Stream,
-    ) -> ResultType<()> {
+    ) -> ResultType<(String, String)> {
+        let mut security_numbers = String::new();
+        let mut security_qr_code = String::new();
         let mut sign_pk = None;
         if !id_pk.is_empty() {
             let t = get_pk(&id_pk);
@@ -353,12 +372,12 @@ impl Client {
             None => {
                 // send an empty message out in case server is setting up secure and waiting for first message
                 conn.send(&Message::new()).await?;
-                return Ok(());
+                return Ok((security_numbers, security_qr_code));
             }
         };
-
+		log::info!("Start secure connecton");
         match timeout(CONNECT_TIMEOUT, conn.next()).await? {
-            Some(res) => {
+			Some(res) => {
                 let bytes = res?;
                 if let Ok(msg_in) = Message::parse_from_bytes(&bytes) {
                     if let Some(message::Union::SignedId(si)) = msg_in.union {
@@ -377,7 +396,15 @@ impl Client {
                                 });
                                 timeout(CONNECT_TIMEOUT, conn.send(&msg_out)).await??;
                                 conn.set_key(key);
-                                log::info!("Connection is secured: {}", conn.is_secured());
+
+                                security_numbers =
+                                    crate::server::compute_security_code(&out_sk_b, &their_pk_b);
+
+                                log::info!(
+                                    "Connection is secured: {}, and Security Code is: {}",
+                                    conn.is_secured(),
+                                    security_numbers
+                                );
                             } else {
                                 log::error!("Handshake failed: sign failure");
                                 conn.send(&Message::new()).await?;
@@ -399,10 +426,10 @@ impl Client {
                 }
             }
             None => {
-                bail!("Reset by the peer");
+                bail!("Connection lost");
             }
         }
-        Ok(())
+        Ok((security_numbers, security_qr_code))
     }
 }
 
@@ -699,6 +726,8 @@ pub struct VideoHandler {
     decoder: Decoder,
     latency_controller: Arc<Mutex<LatencyController>>,
     pub rgb: Vec<u8>,
+    recorder: Arc<Mutex<Option<Recorder>>>,
+    record: bool,
 }
 
 impl VideoHandler {
@@ -712,6 +741,8 @@ impl VideoHandler {
             }),
             latency_controller,
             rgb: Default::default(),
+            recorder: Default::default(),
+            record: false,
         }
     }
 
@@ -723,7 +754,17 @@ impl VideoHandler {
                 .update_video(vf.timestamp);
         }
         match &vf.union {
-            Some(frame) => self.decoder.handle_video_frame(frame, &mut self.rgb),
+            Some(frame) => {
+                let res = self.decoder.handle_video_frame(frame, &mut self.rgb);
+                if self.record {
+                    self.recorder
+                        .lock()
+                        .unwrap()
+                        .as_mut()
+                        .map(|r| r.write_frame(frame));
+                }
+                res
+            }
             _ => Ok(false),
         }
     }
@@ -735,6 +776,24 @@ impl VideoHandler {
                 num_threads: 1,
             },
         });
+    }
+
+    /// Start or stop screen record.
+    pub fn record_screen(&mut self, start: bool, w: i32, h: i32, id: String) {
+        self.record = false;
+        if start {
+            self.recorder = Recorder::new(RecorderContext {
+                id,
+                filename: "".to_owned(),
+                width: w as _,
+                height: h as _,
+                codec_id: scrap::record::RecodeCodecID::VP9,
+            })
+            .map_or(Default::default(), |r| Arc::new(Mutex::new(Some(r))));
+        } else {
+            self.recorder = Default::default();
+        }
+        self.record = start;
     }
 }
 
@@ -1069,7 +1128,7 @@ impl LoginConfigHandler {
         } else if err == "2FA Not Authorized" {
             self.password = Default::default();
             interface.msgbox(
-                "re-input-password-allow-2fa",
+                "re-input-password-2fa",
                 err,
                 &format!("{err} - Do you want to enter again and accept 2fa?"),
             );
@@ -1202,6 +1261,7 @@ pub enum MediaData {
     AudioFrame(AudioFrame),
     AudioFormat(AudioFormat),
     Reset,
+    RecordScreen(bool, i32, i32, String),
 }
 
 pub type MediaSender = mpsc::Sender<MediaData>;
@@ -1231,6 +1291,9 @@ where
                     }
                     MediaData::Reset => {
                         video_handler.reset();
+                    }
+                    MediaData::RecordScreen(start, w, h, id) => {
+                        video_handler.record_screen(start, w, h, id)
                     }
                     _ => {}
                 }
@@ -1434,9 +1497,11 @@ pub enum Data {
     SetConfirmOverrideFile((i32, i32, bool, bool, bool)),
     AddJob((i32, String, String, i32, bool, bool)),
     ResumeJob((i32, bool)),
+    RecordScreen(bool, i32, i32, String),
 }
 
-#[derive(Clone)]
+/// Keycode for key events.
+#[derive(Clone, Debug)]
 pub enum Key {
     ControlKey(ControlKey),
     Chr(u32),
@@ -1566,18 +1631,28 @@ lazy_static::lazy_static! {
     ].iter().cloned().collect();
 }
 
+/// Check if the given message is an error and can be retried.
+///
+/// # Arguments
+///
+/// * `msgtype` - The message type.
+/// * `title` - The title of the message.
+/// * `text` - The text of the message.
 #[inline]
 pub fn check_if_retry(msgtype: &str, title: &str, text: &str) -> bool {
     msgtype == "error"
         && title == "Connection Error"
-        && !text.to_lowercase().contains("offline")
-        && !text.to_lowercase().contains("exist")
-        && !text.to_lowercase().contains("handshake")
-        && !text.to_lowercase().contains("failed")
-        && !text.to_lowercase().contains("resolve")
-        && !text.to_lowercase().contains("mismatch")
-        && !text.to_lowercase().contains("manually")
-        && !text.to_lowercase().contains("not allowed")
+        && (text.contains("10054")
+            || text.contains("104")
+            || (!text.to_lowercase().contains("offline")
+                && !text.to_lowercase().contains("exist")
+                && !text.to_lowercase().contains("handshake")
+                && !text.to_lowercase().contains("failed")
+                && !text.to_lowercase().contains("resolve")
+                && !text.to_lowercase().contains("mismatch")
+                && !text.to_lowercase().contains("manually")
+                && !text.to_lowercase().contains("closed the session")				
+                && !text.to_lowercase().contains("not allowed")))
 }
 
 #[inline]
@@ -1590,7 +1665,7 @@ fn get_pk(pk: &[u8]) -> Option<[u8; 32]> {
         None
     }
 }
-
+/*
 #[inline]
 fn get_rs_pk(str_base64: &str) -> Option<sign::PublicKey> {
     if let Ok(pk) = base64::decode(str_base64) {
@@ -1599,6 +1674,7 @@ fn get_rs_pk(str_base64: &str) -> Option<sign::PublicKey> {
         None
     }
 }
+*/
 
 fn decode_id_pk(signed: &[u8], key: &sign::PublicKey) -> ResultType<(String, [u8; 32])> {
     let res = IdPk::parse_from_bytes(
@@ -1610,3 +1686,5 @@ fn decode_id_pk(signed: &[u8], key: &sign::PublicKey) -> ResultType<(String, [u8
         bail!("Wrong public length");
     }
 }
+
+

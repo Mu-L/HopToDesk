@@ -62,7 +62,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Do you want to enter again?", "Вы хотите снова войти?"),
         ("Connection Error", "Ошибка подключения"),
         ("Error", "Ошибка"),
-        ("Reset by the peer", "Сброшено пиром"),
+        ("Connection lost", "Сброшено пиром"),
         ("Connecting...", "Подключение..."),
         ("Connection in progress. Please wait.", "Выполняется подключение. Пожалуйста, подождите."),
         ("Please try 1 minute later", "Попробуйте через 1 минуту"),
@@ -191,7 +191,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Settings", "Настройки"),
         ("Username", "Имя пользователя"),
         ("Invalid port", "Неверный порт"),
-        ("Closed manually by the peer", "Закрыто узлом вручную"),
+        ("The remote partner has closed the session.", "Закрыто узлом вручную"),
         ("Enable remote configuration modification", "Разрешить удаленное изменение конфигурации"),
         ("Run without install", "Запустить без установки"),
         ("Always connected via relay", "Всегда подключен через ретрансляционный сервер"),
@@ -304,5 +304,8 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("remote_restarting_tip", "Удаленное устройство перезапускается. Пожалуйста, закройте это сообщение и через некоторое время переподключитесь, используя постоянный пароль."),
 		("Enable 2FA", "Включить 2FA"),
 		("Enable Wake On LAN", "Включить Wake On LAN"),
+		("2FA QR code", "2FA QR-код"),		
+        ("Scan this QR code with a camera on a secondary device such as a phone to set it up as your 2FA authenticator.", "Отсканируйте этот QR-код с помощью камеры на дополнительном устройстве, например на телефоне, чтобы настроить его в качестве аутентификатора 2FA."),
+        ("You will need to confirm the 2FA on the secondary device with you when trying to connect to this desktop.", "Вам нужно будет подтвердить двухфакторную аутентификацию на дополнительном устройстве при попытке подключения к этому рабочему столу."),		
     ].iter().cloned().collect();
 }
