@@ -9,16 +9,17 @@ var app;
 var tmp = handler.get_connect_status();
 var connect_status = tmp[0];
 var service_stopped = handler.get_option("stop-service") == "Y";
+var show_settings_button = handler.get_config_option("show-settings-button") == "Y";
 var software_update_url = "";
 var key_confirmed = tmp[1];
 var system_error = "";
 
-var svg_menu = <svg #menu viewBox="0 0 512 512">
+var svg_menu = <svg #menu title={translate('Menu')} viewBox="0 0 512 512">
 	<circle cx="256" cy="256" r="64"/>
 	<circle cx="256" cy="448" r="64"/>
 	<circle cx="256" cy="64" r="64"/>
 </svg>;
-var svg_refresh_password = <svg #refresh-password xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 2v6h6M2.66 15.57a10 10 0 1 0 .57-8.38"/></svg>;
+var svg_refresh_password = <svg #refresh-password title={translate('Refresh')} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 2v6h6M2.66 15.57a10 10 0 1 0 .57-8.38"/></svg>;
 
 var my_id = "";
 function get_id() {
@@ -281,14 +282,19 @@ function updateTheme() {
 }
 
 class MyIdMenu: Reactor.Component {
-    function this() {
+    constructor(attr, kids) {
+        this.kids = kids;
+        // everytime the "show settings button" setting is toggled
+        // the "new" button with the "MyIdMenu" will be stored in
+        // "myIdMenu"; only one instance possible as there CAN only
+        // be one "MyIdMenu", depending on weather the setting is on
         myIdMenu = this;
     }
 
     function render() {
         return <div #myid>
             {this.renderPop()}
-            {translate("ID")}{svg_menu}
+            {this.kids}
         </div>;
     }
 
@@ -302,7 +308,7 @@ class MyIdMenu: Reactor.Component {
                 <li #enable-tunnel><span>{svg_checkmark}</span>{translate('Enable TCP Tunneling')}</li>
                 <AudioInputs />
                 <div .separator />
-                <li #custom-api-url>{translate('Custom Api URL')}</li>
+                <li #custom-api-url style="display:none">{translate('Custom API URL')}</li>
                 <li #custom-server style="display:none">{translate('ID/Relay Server')}</li>
                 <li #whitelist title={translate('whitelist_tip')}>{translate('IP Whitelisting')}</li>
                 <li #socks5-server>{translate('SOCKS5 Proxy')}</li>
@@ -312,6 +318,7 @@ class MyIdMenu: Reactor.Component {
                 <li #enable-2fa-auto-accept class={(handler.get_config_option("enable-2fa-auto-accept") == "N" ? "line-through" : "selected") + " " + (handler.is_2fa_enabled() ? "tfa-enabled" : "tfa-disabled")}><span>{svg_checkmark}</span>{translate('Enable 2FA Auto Accept')}</li>
                 <li #stop-service class={service_stopped ? "line-through" : "selected"}><span>{svg_checkmark}</span>{translate("Enable Service")}</li>
                 <DirectServer />
+				<li #show-settings-button style="display:none">{show_settings_button ? translate("Hide Settings Button") : translate("Show Settings Button")}</li>
                 <div .separator />
                 <LanguagePicker />
                 <li #about>{translate('About')} {" "} {handler.get_app_name()}</li>
@@ -319,7 +326,7 @@ class MyIdMenu: Reactor.Component {
         </popup>;
     }
 
-    event click $(svg#menu) (_, me) {
+    event click $(#menu) (_, me) {
         this.showSettingMenu();
     }
 
@@ -329,7 +336,7 @@ class MyIdMenu: Reactor.Component {
         this.toggleMenuState();
         if (direct_server) direct_server.update();
         var menu = this.$(menu#config-options);
-        this.$(svg#menu).popup(menu);
+        this.$(#menu).popup(menu);
     }
 
     function toggleMenuState() {
@@ -441,14 +448,17 @@ class MyIdMenu: Reactor.Component {
                                 let port = json.rendezvous.port.toInteger();
                                 if (port == undefined || port < 0 || port > 65536) return msgbox("custom-error", "Custom API Validity Error", "Port of rendezvous `" + json.rendezvous.port + "` is invalid ipv4 port.");
                                 valid_url();
-                            } else msgbox("custom-error", "Custom API Validity Error", "Server did not respond with `turnservers` and `rendezvous` (received: `" + text_res + "`).");
+                            } else msgbox("custom-error", "Custom API Validity Error", "Server did not give a correct response: (`" + text_res + "`).");
                         },
                         error: (e, s) => {
                             msgbox("custom-error", "Custom API Validity Error", "Check if the url is correct.<br/>Status " + s + ": `" + e + "`", () => {});
                         }
                     });
                 }
-              }, 240)
+            }, 240)
+        } else if (me.id == "show-settings-button") {
+            handler.set_config_option("show-settings-button", (show_settings_button = !show_settings_button) ? "Y" : "");
+            app.update(true);
         } else if (me.id == "custom-server") {
             var configOptions = handler.get_options();
             var old_relay = configOptions["relay-server"] || "";
@@ -562,8 +572,8 @@ class App: Reactor.Component
                         <div .title>{translate('Your Desktop')}</div>
                         <div .lighter-text>{translate('desk_tip')}</div>
                         <div .your-desktop>
-                            <MyIdMenu />
-                            {key_confirmed ? <input type="text" readonly value={formatId(get_id())}/> : translate("Generating ...")}
+                            {!show_settings_button ? <MyIdMenu>{translate("ID")}{svg_menu}</MyIdMenu> : ""}
+                            {key_confirmed ? <input type="text" readonly title={translate('ID')} value={formatId(get_id())}/> : translate("Generating ...")}
                         </div>
                         <PasswordArea />
                     </div>
@@ -582,13 +592,16 @@ class App: Reactor.Component
                 </div>
                 <div .right-pane>
                     <div .right-content>
-                        <div .title>{translate('Control Remote Desktop')}</div>
+                        <div .top-line>
+                            <div .title>{translate('Control Remote Desktop')}</div>
+                            {show_settings_button ? <MyIdMenu><div style="margin:top: -20px; position: fixed; top: 10; border-radius: 50px; width: 100px;float:right;padding: 10px;background: #2D81D4 url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAkCAYAAAD7PHgWAAAABGdBTUEAAK/INwWK6QAAABl0RVh0U29mdHdhcmUAQWRvYmUgSW1hZ2VSZWFkeXHJZTwAAASASURBVHjaYvz//z/DYAYAAcTEMMgBQAANegcCBNCgdyBAANHKgcZAvAmIXwPxGyA+BMQe5BgEEEAMoExCZewAxG//Y4LfQBxDqnkAAcRI5VzMBsRngVgHh/w9INYC4p/EGggQQCxkOoQXiB2BWA2If0AddQYqhuy4biB+B8R1QMwJxEpAHAjEa4BYE4itgJgfiB8C8QEgfoluEUAAkROFukB8Dkv0nQXil0hil5H0rEMS/wzEp4D4K5oZ94HYGd0+gAAi1XF8QHzpP3EgDkmfDRD/JELPPSAWQLYTIIBIdaA/moEngPgWmtgnIK7AojcKiF+gqX0ExPuB+C+SWAqyPoAAIjUNqiOxTwKxLTQ9+gGxKhB/BuItQHwFi95lUD0BQCwMxE+AeDMQP4bKRULVmQDxHJgmgAAi1YE/kNggS3igmWABkfrvAnEvlrJYDIn/FVkSIIBILahBIfAbylaB5khcQAMaWiFAbIgnMCyB2AnK/gPEO5ElAQKInFx8Bim9dGGRB+XEXUD8DUndLyA+CcTBWNSnIam7ii4PEECkhCAHELsBsTSS2Ac0NQlAvA2IXaHlHgywArEZEK8C4hI0Pe+Q2GLQUOeHCQAEELGh5gTE54H4H5JvfwCxDloV9wstl96Chso/NPFkJH1C0NyMDO7AqkWAACLGcYZA/B5LmVWOpIYJiPchyYGKkxAg5gJiDiB2hDoUuVDmR9IfgsVzIE/5AwQQMQ5cgaYRFJLxaGo0kSz4iyOtGUBrERjwRZP3BOLDaHbtBQggYhz4FElDNxCzYlETjKTmNg41ILwNSR22whwUE7lISeI5QAAxkdigeINUzOAqrkAtlb9ElKPMWOT/oTUYWAACiJgQ3I7ka1AFvwqI7bGk079IRYotFnNkgfg1klnhaPKgDDcfLRkcBwggYhzoilZXgsB3II5EUsOK1sIBZQgTJHllUHpCkn8DxOJI8tZY6mkQSAUIIGKLmVggvo6mGdRqVkJSEwDEf9BCG5TmNkAdhAxKkPSBcvMVLI0IUBplBAggUmoQbmi0fEAyqBRNTQkRTao+PC2kT9AyUhgmDxBA5FR1JwlUdSlYmmAg8AyLh0A4HUnNRXR5gAAitTWjg9akf4RFDaiptBraFNOC5ta70J7dCyzq7yOx1aBV4imYAEAAkRp6mWjpRIYKvUBOaMMXBtqR5QECiNQQ5Edr24EanYxAbA31/Ucg3o/WAEAGPNCmlSg09EGh+h2ILwKxOVSNCLIGgAAi1beRaB2lpUC8B60YAlX0YVj02kCrSWRwHIhnAfEXJLECZH0AAUSqA8XRqj5cAOR4N7S6+jUR+kDFkTSynQABRE6aATVIb2Ax/BraiMIJJD0L0crHy1h6eU/RCn8wBgggckcWBKHNfSMg/gbEe5DGX9YjqcsH4udAPB+IuaFiqUC8GNoN8IamuetQfY/RLQIIIGoPfYAywTUglsUh/xKamT4RayBAAFF7dOsLEFdAWyXYQD8pjgMBgACidgjCAKhfkQ7EetCC+ia07zuTVIMAAgwABC/z2Wrp3KsAAAAASUVORK5CYII=');" #menu><span style="font-size: 16px; float:right; color: #FFFFFF">{translate('Settings')}</span></div></MyIdMenu> : ""}
+                        </div>
 						<div .card-connect>
 
                             <ID @{this.remote_id} />
                             <div .right-buttons>
-                                <button .button .outline #file-transfer>{translate('Transfer File')}</button>
-                                <button .button #connect>{translate('Connect')}</button>
+                                <button .button .outline #file-transfer title={translate('Transfer File')}>{translate('Transfer File')}</button>
+                                <button .button #connect title={translate('Connect')}>{translate('Connect')}</button>
                             </div>
                         </div>
                         <MultipleSessions @{this.multipleSessions} />
@@ -621,7 +634,7 @@ class InstallMe: Reactor.Component {
         return <div .install-me style="margin-top: -5px;">
             <span />
             <div>{translate('install_tip')}</div>
-            <div><center><button #install-me .button>{translate('Install')}</button></center></div>
+            <div><center><button #install-me .button title={translate('Install')}>{translate('Install')}</button></center></div>
         </div>;
     }
 
@@ -854,7 +867,7 @@ class PasswordEyeArea : Reactor.Component {
         var value = method != 'use-permanent-password' ? password_cache[0] : "-";
         return
             <div .eye-area style="width: *">
-                <input|text @{this.input} readonly value={value} />
+                <input|text @{this.input} readonly value={value} title={translate('Password')}/>
                 {svg_refresh_password}
             </div>;
     }
@@ -1011,7 +1024,7 @@ function updatePasswordArea() {
 updatePasswordArea();
 class ID: Reactor.Component {
     function render() {
-        return <input type="text" #remote_id .outline-focus novalue={translate("Enter Remote ID")} maxlength="21"
+        return <input type="text" #remote_id .outline-focus title={translate('Enter Remote ID')} novalue={translate("Enter Remote ID")} maxlength="21"
         value={formatId(handler.get_remote_id())} />;
     }
 
@@ -1186,7 +1199,7 @@ function login() {
     var name0 = getUserName();
     var pass0 = '';
     msgbox("custom-login", translate('Login'), <div .form .set-password>
-            <div><span>{translate('Username')}:</span><input|text name="username" value={name0} .outline-focus /></div>
+            <div><span>{translate('Username')}:</span><input|text name="username" value={name0} .outline-focus title={translate("Username")} /></div>
             <div><span>{translate('Password')}:</span><PasswordComponent value={pass0} /></div>
         </div>, function(res=null, show_progress) {
         if (!res) return;

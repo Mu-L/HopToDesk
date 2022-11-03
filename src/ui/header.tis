@@ -164,23 +164,23 @@ class Header: Reactor.Component {
     function renderDisplayPop() {
         return <popup>
             <menu.context #display-options>
-                <li #adjust-window style="display:none">{translate('Adjust Window')}</li> 
+                <li #adjust-window style="display:none" title={translate("Adjust Window")}>{translate('Adjust Window')}</li> 
                 <div #adjust-window .separator style="display:none"/>
-                <li #original type="view-style"><span>{svg_checkmark}</span>{translate('Original')}</li> 
-                <li #shrink type="view-style"><span>{svg_checkmark}</span>{translate('Shrink')}</li> 
-                <li #stretch type="view-style"><span>{svg_checkmark}</span>{translate('Stretch')}</li> 
+                <li #original type="view-style" title={translate("Original")}><span>{svg_checkmark}</span>{translate('Original')}</li> 
+                <li #shrink type="view-style" title={translate("Shrink")}><span>{svg_checkmark}</span>{translate('Shrink')}</li> 
+                <li #stretch type="view-style" title={translate("Stretch")}><span>{svg_checkmark}</span>{translate('Stretch')}</li> 
                 <div .separator />
-                <li #best type="image-quality"><span>{svg_checkmark}</span>{translate('Good image quality')}</li> 
-                <li #balanced type="image-quality"><span>{svg_checkmark}</span>{translate('Balanced')}</li> 
-                <li #low type="image-quality"><span>{svg_checkmark}</span>{translate('Optimize reaction time')}</li> 
-                <li #custom type="image-quality"><span>{svg_checkmark}</span>{translate('Custom')}</li>
+                <li #best type="image-quality" title={translate("Good image quality")}><span>{svg_checkmark}</span>{translate('Good image quality')}</li> 
+                <li #balanced type="image-quality" title={translate("Balanced")}><span>{svg_checkmark}</span>{translate('Balanced')}</li> 
+                <li #low type="image-quality" title={translate("Optimize reaction time")}><span>{svg_checkmark}</span>{translate('Optimize reaction time')}</li> 
+                <li #custom type="image-quality" title={translate("Custom")}><span>{svg_checkmark}</span>{translate('Custom')}</li>
                 <div .separator />
-                <li #show-remote-cursor .toggle-option><span>{svg_checkmark}</span>{translate('Show remote cursor')}</li> 
-                {audio_enabled ? <li #disable-audio .toggle-option><span>{svg_checkmark}</span>{translate('Mute')}</li> : ""}
-                {is_win && pi.platform == 'Windows' && file_enabled ? <li #enable-file-transfer .toggle-option><span>{svg_checkmark}</span>{translate('Allow file copy and paste')}</li> : ""}
-                {keyboard_enabled && clipboard_enabled ? <li #disable-clipboard .toggle-option><span>{svg_checkmark}</span>{translate('Disable clipboard')}</li> : ""} 
-                {keyboard_enabled ? <li #lock-after-session-end .toggle-option><span>{svg_checkmark}</span>{translate('Lock after session end')}</li> : ""} 
-                {keyboard_enabled && pi.platform == "Windows" ? <li #privacy-mode style="display:none"><span>{svg_checkmark}</span>{translate('Privacy mode')}</li> : ""}
+                <li #show-remote-cursor .toggle-option title={translate("Show remote cursor")}><span>{svg_checkmark}</span>{translate('Show remote cursor')}</li> 
+                {audio_enabled ? <li #disable-audio .toggle-option title={translate("Mute")}><span>{svg_checkmark}</span>{translate('Mute')}</li> : ""}
+                {is_win && pi.platform == 'Windows' && file_enabled ? <li #enable-file-transfer .toggle-option title={translate("Allow file copy and paste")}><span>{svg_checkmark}</span>{translate('Allow file copy and paste')}</li> : ""}
+                {keyboard_enabled && clipboard_enabled ? <li #disable-clipboard .toggle-option title={translate("Disable clipboard")}><span>{svg_checkmark}</span>{translate('Disable clipboard')}</li> : ""} 
+                {keyboard_enabled ? <li #lock-after-session-end .toggle-option title={translate("Lock after session end")}><span>{svg_checkmark}</span>{translate('Lock after session end')}</li> : ""} 
+                {keyboard_enabled && pi.platform == "Windows" ? <li #privacy-mode style="display:none" title={translate("Privacy mode")}><span>{svg_checkmark}</span>{translate('Privacy mode')}</li> : ""}
             </menu>
         </popup>;
     }

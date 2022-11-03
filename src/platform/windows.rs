@@ -918,7 +918,7 @@ fn get_after_install(exe: &str) -> String {
 	", ext=ext, exe=exe, app_name=app_name)
 }
 
-pub fn install_me(options: &str, path: String, silent: bool, debug: bool) -> ResultType<()> {
+pub fn install_me(options: &str, path: String, silent: bool, debug: bool, no_startup: bool) -> ResultType<()> {
     let uninstall_str = get_uninstall();
     let mut path = path.trim_end_matches('\\').to_owned();
     let (subkey, _path, start_menu, exe) = get_default_install_info();
@@ -1029,7 +1029,13 @@ copy /Y \"{tmp_path}\\{app_name}.lnk\" \"{start_menu}\\\"
 
     let meta = std::fs::symlink_metadata(std::env::current_exe()?)?;
     let size = meta.len() / 1024;
-	
+
+    let startup = if no_startup {
+        String::new()
+    } else {
+        format!("copy /Y \"{tmp_path}\\{app_name} Tray.lnk\" \"%PROGRAMDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\\"", app_name = crate::get_app_name())
+    };
+
 	use std::env;
     let cpath = env::current_dir()?;
 	let cpathm = cpath.display();
@@ -1077,7 +1083,7 @@ copy /Y \"{ORIGIN_PROCESS_EXE}\" \"{path}\\{broker_exe}\"
 cscript \"{mk_shortcut}\"
 cscript \"{uninstall_shortcut}\"
 cscript \"{tray_shortcut}\"
-copy /Y \"{tmp_path}\\{app_name} Tray.lnk\" \"%PROGRAMDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\\"
+{startup}
 {shortcuts}
 copy /Y \"{tmp_path}\\Uninstall {app_name}.lnk\" \"{path}\\\"
 del /f \"{mk_shortcut}\"

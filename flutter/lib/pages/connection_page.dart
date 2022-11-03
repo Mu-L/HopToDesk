@@ -9,7 +9,7 @@ import '../models/model.dart';
 import 'home_page.dart';
 import 'remote_page.dart';
 import 'settings_page.dart';
-import 'scan_page.dart';
+//import 'scan_page.dart';
 
 class ConnectionPage extends StatefulWidget implements PageShape {
   ConnectionPage({Key? key}) : super(key: key);
@@ -72,8 +72,13 @@ class _ConnectionPageState extends State<ConnectionPage> {
 		FFI.ffiModel.updateEventListener("");
 		FFI.setByName("start_service");
 		await FFI.invokeMethod("init_service_connect");
-	}
-    //await Future.delayed(Duration(milliseconds: 1000),() async {
+    }
+
+    var connectdelay = 10;
+    //if (isAndroid) {connectdelay = 10;}
+    if (FFI.getId() == ''){connectdelay = 1000;}
+
+    await Future.delayed(Duration(milliseconds: connectdelay),() async {
 
     id = id.replaceAll(' ', '');
     if (isFileTransfer) {
@@ -100,7 +105,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
     if (!currentFocus.hasPrimaryFocus) {
       currentFocus.unfocus();
     }
-    //});
+    });
   }
 
   Widget getUpdateUI() {
@@ -152,9 +157,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
                         color: MyTheme.idColor,
                       ),
                      inputFormatters: [
-                        FilteringTextInputFormatter.digitsOnly,
-                        (isAndroid ? LengthLimitingTextInputFormatter(10) : LengthLimitingTextInputFormatter(9)),
-                        new CustomInputFormatter()
+                        (isAndroid ? LengthLimitingTextInputFormatter(15) : LengthLimitingTextInputFormatter(9))
                      ], 
                       decoration: InputDecoration(
                         labelText: translate('Remote ID'),
@@ -322,18 +325,18 @@ class _WebMenuState extends State<WebMenu> {
               logout();
             }
           }
-          if (value == 'scan') {
+          /*if (value == 'scan') {
             Navigator.push(
               context,
               MaterialPageRoute(
                 builder: (BuildContext context) => ScanPage(),
               ),
             );
-          }
+          }*/
         });
   }
 }
-
+/*
 class CustomInputFormatter extends TextInputFormatter {
   @override
   TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
@@ -359,3 +362,4 @@ class CustomInputFormatter extends TextInputFormatter {
     );
   }
 }
+*/

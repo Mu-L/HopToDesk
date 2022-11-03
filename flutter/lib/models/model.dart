@@ -193,6 +193,8 @@ class FfiModel with ChangeNotifier {
     var text = evt['text'];
     if (type == 're-input-password') {
       wrongPasswordDialog(id);
+    } else if (type == 're-input-password-2fa') {
+      tfaNotAuthorizedDialog(id);
     } else if (type == 'input-password') {
       enterPasswordDialog(id);
     } else if (type == 'restarting') {

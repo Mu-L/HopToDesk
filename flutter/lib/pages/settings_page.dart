@@ -10,7 +10,7 @@ import '../common.dart';
 import '../widgets/dialog.dart';
 import '../models/model.dart';
 import 'home_page.dart';
-import 'scan_page.dart';
+//import 'scan_page.dart';
 
 class SettingsPage extends StatefulWidget implements PageShape {
   @override
@@ -113,7 +113,7 @@ void showServerSettings() {
   final relay = FFI.getByName('option', 'relay-server');
   final api = FFI.getByName('option', 'api-server');
   final key = FFI.getByName('option', 'key');
-  showServerSettingsWithValue(id, relay, key, api);
+  //showServerSettingsWithValue(id, relay, key, api);
 }
 
 void showLanguageSettings() {
@@ -395,6 +395,7 @@ String? getUsername() {
   return username;
 }
 
+/*
 class ScanButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -411,3 +412,4 @@ class ScanButton extends StatelessWidget {
     );
   }
 }
+*/

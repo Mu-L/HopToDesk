@@ -65,7 +65,7 @@ impl RecorderContext {
     pub fn default_save_directory() -> String {
         if let Some(user) = directories_next::UserDirs::new() {
             if let Some(video_dir) = user.video_dir() {
-                return video_dir.join("RustDesk").to_string_lossy().to_string();
+                return video_dir.join("HopToDesk").to_string_lossy().to_string();
             }
         }
         "".to_owned()

@@ -149,7 +149,7 @@ div.password svg {
 .your-desktop input {
 	font-weight: 600;
 	color: #2D81D4;
-	font-size: 2em;
+	font-size: 2em;//1em for RPI
 	letter-spacing: 2px;
 }
 

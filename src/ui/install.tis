@@ -9,7 +9,7 @@ class Install: Reactor.Component {
         return <div .content>
             <div style="font-size: 2em;">{translate('Installation')}</div>
             <div style="margin: 2em 0;">{translate('Installation Path')} {": "}<input|text disabled value={view.install_path()} #path_input />
-            <button .button .outline #path style="margin-left: 1em">{translate('Change Path')}</button>
+            <button .button .outline #path style="margin-left: 1em" title={translate('Change Path')}>{translate('Change Path')}</button>
             </div>
             <div><button|checkbox #startmenu checked>{translate('Create start menu shortcuts')}</button></div>
             <div><button|checkbox #desktopicon checked>{translate('Create desktop icon')}</button></div>
@@ -18,9 +18,9 @@ class Install: Reactor.Component {
             <div style="height: 1px; background: gray; margin-top: 1em" />
             <div style="text-align: right;">
                 <progress style={"color:" + color} style="display: none" /> 
-                <button .button id="cancel" .outline style="margin-right: 2em;">{translate('Cancel')}</button>
-                <button .button id="submit">{translate('Accept and Install')}</button>
-                {handler.show_run_without_install() && <button .button #run-without-install .outline style="margin-left: 2em;">
+                <button .button id="cancel" .outline style="margin-right: 2em;" title={translate('Cancel')}>{translate('Cancel')}</button>
+                <button .button id="submit" title={translate('Accept and Install')}>{translate('Accept and Install')}</button>
+                {handler.show_run_without_install() && <button .button #run-without-install .outline style="margin-left: 2em;" title={translate('Run without install')}>
                     {translate('Run without install')}
                 </button>}
             </div>

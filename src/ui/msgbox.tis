@@ -125,9 +125,9 @@ class MsgboxComponent: Reactor.Component {
                     <span style="display:inline-block; max-width: 250px; font-size:12px;" #error />
                     <progress #progress style={"color:" + color + "; display: " + (show_progress ? "inline-block" : "none")} />
                     {hasCancel || this.hasRetry ? <button .button #cancel .outline>{translate(this.hasRetry ? "OK" : "Cancel")}</button> : ""}
-                    {this.hasSkip() ? <button .button #skip .outline>{translate('Skip')}</button> : ""}
+                    {this.hasSkip() ? <button .button #skip .outline title={translate('Skip')}>{translate('Skip')}</button> : ""}
                     {hasOk || this.hasRetry ? <button .button #submit>{translate(this.hasRetry ? "Retry" : "OK")}</button> : ""}
-                    {hasClose ? <button .button #cancel .outline>{translate('Close')}</button> : ""}
+                    {hasClose ? <button .button #cancel .outline title={translate('Close')}>{translate('Close')}</button> : ""}
                 </div>
             </div>
             </div>

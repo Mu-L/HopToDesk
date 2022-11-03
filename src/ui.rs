@@ -254,7 +254,7 @@ impl UI {
         #[cfg(windows)]
         std::thread::spawn(move || {
             allow_err!(crate::platform::windows::install_me(
-                &_options, _path, false, false
+                &_options, _path, false, false, false
             ));
             std::process::exit(0);
         });
@@ -813,6 +813,9 @@ impl UI {
 
     fn set_custom_api_url(&self, url: String) {
         self.set_option("custom-api-url".to_owned(), url);
+        futures::executor::block_on(async move {
+            hbb_common::api::erase_api().await;
+        });		
     }
 
 /*

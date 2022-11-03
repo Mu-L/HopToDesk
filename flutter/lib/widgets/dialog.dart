@@ -208,6 +208,29 @@ void wrongPasswordDialog(String id) {
           ]));
 }
 
+void tfaNotAuthorizedDialog(String id) {
+  DialogManager.show((setState, close) => CustomAlertDialog(
+          title: Text(translate('2FA Not Authorized')),
+          content: Text(translate('Do you want to enter again and accept 2fa?')),
+          actions: [
+            TextButton(
+              style: flatButtonStyle,
+              onPressed: () {
+                close();
+                backToHome();
+              },
+              child: Text(translate('Cancel')),
+            ),
+            TextButton(
+              style: flatButtonStyle,
+              onPressed: () {
+                enterPasswordDialog(id);
+              },
+              child: Text(translate('Retry')),
+            ),
+          ]));
+}
+
 class PasswordWidget extends StatefulWidget {
   PasswordWidget({Key? key, required this.controller}) : super(key: key);
 

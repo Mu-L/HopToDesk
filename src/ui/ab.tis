@@ -235,7 +235,7 @@ class SearchBar: Reactor.Component {
         self.timer(1ms, function() { (me.search_id || {}).value = value; });
         return <div .search-id style="margin-left: 12px">
             <span .search-icon>{search_icon}</span>
-            <input|text @{this.search_id} novalue={translate("Search ID")} />
+            <input|text @{this.search_id} title={translate("Search ID")} novalue={translate("Search ID")} />
             {value && <span .clear-input>{clear_icon}</span>}
         </div>;
     }

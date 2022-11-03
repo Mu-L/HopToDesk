@@ -83,6 +83,7 @@ fn main() {
                     "".to_owned(),
                     false,
                     false,
+                    false
                 ));
                 return;
             } else if args[0] == "--silent-install" {
@@ -91,6 +92,7 @@ fn main() {
                     "".to_owned(),
                     true,
                     args.len() > 1,
+                    false
                 ));
                 return;
             } else if args[0] == "--silent-install-noshortcuts" {
@@ -98,7 +100,11 @@ fn main() {
                     "",
                     "".to_owned(),
                     true,
-                    args.len() > 1,
+                    // it's only debug
+                    //  1. if there are more than 2 args
+                    //  2. if there are more than 1 args, but there isn't `--nostartup`
+                    args.len() > 2 || (args.len() > 1 && args.get(1) != Some(&"--nostartup".to_owned())),
+                    args.get(1) == Some(&"--nostartup".to_owned())
                 ));
                 return;				
             } else if args[0] == "--extract" {

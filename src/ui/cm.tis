@@ -58,9 +58,11 @@ class Body: Reactor.Component
                 </div>}
                 {c.port_forward ? <div>Port Forwarding: {c.port_forward}</div> : ""}
                 <div style="size:*"/>
+                    {!this.security_code ? <div .securitycode-image title={translate('Your Security code')}>
                     <ul style="list-style-type:none; width: 90%; margin-left: -20px;">
 					<div id="seccodee" style="margin-left: -20px; margin-top: -20px; width: 90%; margin-left: 0px;font-size: 12px; font-family: \"Courier New\";"></div>
                     </ul></div> :
+                        <div .url-image></div>}
                 <div .buttons>
                      {!auth_2fa ? <span .auth-2fa-msg>{translate('Approve the request on HopToDesk 2FA')}</span> : ""}
                      {auth || !auth_2fa ? "" : <button .button tabindex="-1" #accept>{translate('Accept')}</button>}

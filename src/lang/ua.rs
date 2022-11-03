@@ -134,7 +134,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Failed to make direct connection to remote desktop", "Не вдалося встановити пряме підключення до віддаленого робочого столу"),
         ("Set Password", "Встановити пароль"),
         ("OS Password", "Пароль ОС"),
-        ("install_tip", "Щоб отримати найкращу продуктивність, виконайте повне встановлення."),
+        ("install_tip", "Рекомендується повне встановлення."),
         ("Click to upgrade", "Натисніть, щоб перевірити наявність оновлень"),
         ("Click to download", "Натисніть, щоб завантажити"),
         ("Click to update", "Натисніть, щоб оновити"),

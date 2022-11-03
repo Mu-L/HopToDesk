@@ -1,5 +1,4 @@
 use crate::ipc::Data;
-use bytes::Bytes;
 pub use connection::*;
 use hbb_common::{
     allow_err,
@@ -22,6 +21,7 @@ use std::{
     sync::{Arc, Mutex, RwLock, Weak},
     time::Duration,
 };
+use bytes::Bytes;
 use x25519_dalek::StaticSecret;
 
 use qrcode::QrCode;
@@ -154,13 +154,10 @@ pub async fn create_tcp_connection(
     if secure && pk.len() == sign::PUBLICKEYBYTES && sk.len() == sign::SECRETKEYBYTES {
         log::info!("create secure tcp connection");
         let mut sk_ = [0u8; sign::SECRETKEYBYTES];
-        log::info!("logx1");
 		sk_[..].copy_from_slice(&sk);
-        log::info!("logx2");
 		let sk = sign::SecretKey(sk_);
         let mut msg_out = Message::new();
         let (our_pk_b, our_sk_b) = box_::gen_keypair();
-        log::info!("logx3");
 		msg_out.set_signed_id(SignedId {
             id: sign::sign(
                 &IdPk {
@@ -175,20 +172,16 @@ pub async fn create_tcp_connection(
             .into(),
             ..Default::default()
         });
-        log::info!("logx4");
 		timeout(CONNECT_TIMEOUT, stream.send(&msg_out)).await??;
-        log::info!("logx5");
 		match timeout(CONNECT_TIMEOUT, stream.next()).await? {
             Some(res) => {
                 let bytes = res?;
-				log::info!("logx6");
                 if let Ok(msg_in) = Message::parse_from_bytes(&bytes) {
                     if let Some(message::Union::PublicKey(pk)) = msg_in.union {
                         if pk.asymmetric_value.len() == box_::PUBLICKEYBYTES {
                             let nonce = box_::Nonce([0u8; box_::NONCEBYTES]);
                             let mut pk_ = [0u8; box_::PUBLICKEYBYTES];
                             pk_[..].copy_from_slice(&pk.asymmetric_value);
-                            log::info!("logx7");
 							let their_pk_b = box_::PublicKey(pk_);
                             let symmetric_key =
                                 box_::open(&pk.symmetric_value, &nonce, &their_pk_b, &our_sk_b)
@@ -198,13 +191,10 @@ pub async fn create_tcp_connection(
                             if symmetric_key.len() != secretbox::KEYBYTES {
                                 bail!("Handshake failed: invalid secret key length from peer");
                             }
-                            log::info!("logx8");
 							let mut key = [0u8; secretbox::KEYBYTES];
                             key[..].copy_from_slice(&symmetric_key);
                             stream.set_key(secretbox::Key(key));
-log::info!("logx8");
                             security_numbers = compute_security_code(&our_sk_b, &their_pk_b);
-                            //security_qr_code = '';
                             log::info!("Security Code: {security_numbers}");
                         } else if pk.asymmetric_value.is_empty() {
                             Config::set_key_confirmed(false);
@@ -224,7 +214,6 @@ log::info!("logx8");
             }
         }
     }
-log::info!("logx9");
     Connection::start(addr, stream, id, Arc::downgrade(&server), security_numbers, security_qr_code).await;
 	log::info!("logx10");
     Ok(())

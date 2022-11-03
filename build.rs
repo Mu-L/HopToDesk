@@ -152,6 +152,7 @@ fn main() {
             chmod(output);
         }
 
+
         // Run packfolder to create target/resources.rc
         Command::new(path)
             .args([
