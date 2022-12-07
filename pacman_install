@@ -1,0 +1,44 @@
+# arg 1:  the new package version
+#pre_install() {
+#}
+
+# arg 1:  the new package version
+post_install() {
+	# do something here
+	cp /usr/share/hoptodesk/files/hoptodesk.service /etc/systemd/system/hoptodesk.service
+	cp /usr/share/hoptodesk/files/hoptodesk.desktop /usr/share/applications/
+	systemctl daemon-reload
+	systemctl enable hoptodesk
+	systemctl start hoptodesk
+	update-desktop-database
+}
+
+# arg 1:  the new package version
+# arg 2:  the old package version
+pre_upgrade() {
+    systemctl stop hoptodesk || true
+}
+
+# arg 1:  the new package version
+# arg 2:  the old package version
+post_upgrade() {
+	cp /usr/share/hoptodesk/files/hoptodesk.service /etc/systemd/system/hoptodesk.service
+	cp /usr/share/hoptodesk/files/hoptodesk.desktop /usr/share/applications/
+	systemctl daemon-reload
+	systemctl enable hoptodesk
+	systemctl start hoptodesk
+	update-desktop-database
+}
+
+# arg 1:  the old package version
+pre_remove() {
+	systemctl stop hoptodesk || true
+	systemctl disable hoptodesk || true
+	rm /etc/systemd/system/hoptodesk.service || true
+}
+
+# arg 1:  the old package version
+post_remove() {
+	rm /usr/share/applications/hoptodesk.desktop || true
+	update-desktop-database
+}

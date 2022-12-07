@@ -1,10 +1,19 @@
-use hbb_common::{log, tcp::FramedStream, tokio::net::TcpStream, ResultType};
-use std::{
-    net::SocketAddr,
-    sync::{Arc, Mutex},
+use hbb_common::{
+    bail, log,
+    tcp::FramedStream,
+    tokio::{
+        self,
+        net::TcpStream,
+        sync::{mpsc},
+    },
+    tokio_util::compat::Compat,
+    ResultType,
 };
+use std::{net::SocketAddr, sync::Arc};
 use turn::client::{tcp::TcpSplit, ClientConfig};
 use webrtc_util::conn::Conn;
+
+use crate::rendezvous_messages::{self, ToJson};
 
 #[derive(Debug)]
 pub struct TurnConfig {
@@ -28,37 +37,111 @@ async fn get_turn_servers() -> Option<Vec<TurnConfig>> {
     Some(servers)
 }
 
-pub async fn new_relay_addrs(
+pub async fn connect_over_turn_servers(
+    peer_id: &str,
     peer_addr: SocketAddr,
-) -> Vec<(TurnClient, Arc<impl Conn>, SocketAddr)> {
-    let mut client_addrs = vec![];
+    mut sender: soketto::Sender<Compat<TcpStream>>,
+) -> ResultType<(Arc<impl Conn>, FramedStream)> {
     if let Some(turn_servers) = get_turn_servers().await {
+        let srv_len = turn_servers.len();
+        let sender = Arc::new(tokio::sync::Mutex::new(sender));
+        let (tx, mut rx) = mpsc::channel(srv_len);
         for config in turn_servers {
-            if let Ok(turn_client) = TurnClient::new(config).await {
-                match turn_client.create_relay_connection(peer_addr).await {
-                    Ok(relay) => {
-                        client_addrs.push((turn_client, relay.0, relay.1));
-                    }
-                    Err(err) => {
-                        log::warn!("create relay conn failed {err}");
-                    }
+            let sender = sender.clone();
+            let peer_id = peer_id.to_owned();
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                let turn_server = config.addr.clone();
+                log::info!(
+                    "[turn] start establishing over TURN server: {}",
+                    turn_server
+                );
+                if let Ok(turn_client) = TurnClient::new(config).await {
+                    match turn_client.create_relay_connection(peer_addr).await {
+                        Ok(relay) => {
+                            let conn = relay.0;
+                            let relay_addr = relay.1;
+                            match establish_over_relay(&peer_id, turn_client, relay_addr, sender)
+                                .await
+                            {
+                                Ok(stream) => {
+                                    tx.send(Some((conn, stream))).await;
+                                    log::info!(
+                                        "[turn] connection has been established by TURN server {}",
+                                        turn_server
+                                    );
+                                    return;
+                                }
+                                Err(err) => log::warn!("{}", err),
+                            };
+                        }
+                        Err(err) => log::warn!("create relay conn failed {err}"),
+                    };
+                }
+
+                tx.send(None).await;
+            });
+        }
+        for _ in 0..srv_len {
+            if let Some(ret) = rx.recv().await {
+                if let Some(ret) = ret {
+                    return Ok(ret);
                 }
             }
         }
+        bail!("Failed to connect via relay server: all condidates are failed!") // all tasks have done without luck.
     }
-    client_addrs
+    bail!("empty turn servers!")
+}
+
+async fn establish_over_relay(
+    peer_id: &str,
+    turn_client: TurnClient,
+    relay_addr: SocketAddr,
+    sender: Arc<tokio::sync::Mutex<soketto::Sender<Compat<TcpStream>>>>,
+) -> ResultType<FramedStream> {
+    let mut sender = sender.lock().await;
+    sender
+        .send_text(&rendezvous_messages::RelayConnection::new(peer_id, relay_addr).to_json())
+        .await?;
+    match turn_client.wait_new_connection().await {
+        Ok(stream) => {
+            sender
+                .send_text(&rendezvous_messages::RelayReady::new(peer_id).to_json())
+                .await?;
+            return Ok(stream);
+        }
+        Err(e) => bail!("Failed to connect via relay server: {}", e),
+    }
 }
 
 pub async fn get_public_ip() -> Option<SocketAddr> {
     let servers = get_turn_servers().await?;
+    let len = servers.len();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(len);
     for config in servers {
-        if let Ok(turn_client) = TurnClient::new(config).await {
-            if let Ok(addr) = turn_client.get_public_ip().await {
-                return Some(addr);
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            log::info!("start retrieve public ip via: {}", config.addr);
+            let turn_addr = config.addr.clone();
+            if let Ok(turn_client) = TurnClient::new(config).await {
+                if let Ok(addr) = turn_client.get_public_ip().await {
+                    tx.send(Some(addr)).await;
+                    log::info!("got public ip: {} via {}", addr, turn_addr);
+                    return;
+                }
+            }
+            tx.send(None).await;
+        });
+    }
+    for _ in 0..len {
+        if let Some(addr) = rx.recv().await {
+            if addr.is_some() {
+                return addr;
             }
         }
     }
-    None
+    return None;
 }
 
 pub struct TurnClient {

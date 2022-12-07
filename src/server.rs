@@ -1,4 +1,5 @@
 use crate::ipc::Data;
+use bytes::Bytes;
 pub use connection::*;
 use hbb_common::{
     allow_err,
@@ -8,32 +9,31 @@ use hbb_common::{
     log,
     message_proto::*,
     protobuf::{Enum, Message as _},
-    sleep,
     sodiumoxide::crypto::{box_, secretbox, sign},
     timeout,
     tokio::{self, net::TcpListener},
     ResultType, Stream,
 };
-use service::{GenericService, Service, ServiceTmpl, Subscriber};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use service::ServiceTmpl;
+use service::{GenericService, Service, Subscriber};
 use std::{
     collections::HashMap,
     net::SocketAddr,
     sync::{Arc, Mutex, RwLock, Weak},
     time::Duration,
 };
-use bytes::Bytes;
-use x25519_dalek::StaticSecret;
 
-use qrcode::QrCode;
-use image::Rgba;
 pub mod audio_service;
 cfg_if::cfg_if! {
 if #[cfg(not(any(target_os = "android", target_os = "ios")))] {
 mod clipboard_service;
 #[cfg(target_os = "linux")]
-mod wayland;
+pub(crate) mod wayland;
 #[cfg(target_os = "linux")]
 pub mod uinput;
+#[cfg(target_os = "linux")]
+pub mod dbus;
 pub mod input_service;
 } else {
 mod clipboard_service {
@@ -47,15 +47,14 @@ pub const NAME_POS: &'static str = "";
 }
 
 mod connection;
+#[cfg(windows)]
+pub mod portable_service;
 mod service;
 mod video_qos;
 pub mod video_service;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::two_factor_auth::sockets::AuthAnswer;
-
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-use crate::two_factor_auth::TFAManager;
 
 use hbb_common::tcp::new_listener;
 
@@ -64,6 +63,7 @@ type ConnMap = HashMap<i32, ConnInner>;
 
 lazy_static::lazy_static! {
     pub static ref CHILD_PROCESS: Childs = Default::default();
+    pub static ref CONN_COUNT: Arc<Mutex<usize>> = Default::default();
 }
 
 pub struct Server {
@@ -86,8 +86,10 @@ pub fn new() -> ServerPtr {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
         server.add_service(Box::new(clipboard_service::new()));
-        server.add_service(Box::new(input_service::new_cursor()));
-        server.add_service(Box::new(input_service::new_pos()));
+        if !video_service::capture_cursor_embeded() {
+            server.add_service(Box::new(input_service::new_cursor()));
+            server.add_service(Box::new(input_service::new_pos()));
+        }
     }
     Arc::new(RwLock::new(server))
 }
@@ -154,11 +156,11 @@ pub async fn create_tcp_connection(
     if secure && pk.len() == sign::PUBLICKEYBYTES && sk.len() == sign::SECRETKEYBYTES {
         log::info!("create secure tcp connection");
         let mut sk_ = [0u8; sign::SECRETKEYBYTES];
-		sk_[..].copy_from_slice(&sk);
-		let sk = sign::SecretKey(sk_);
+        sk_[..].copy_from_slice(&sk);
+        let sk = sign::SecretKey(sk_);
         let mut msg_out = Message::new();
         let (our_pk_b, our_sk_b) = box_::gen_keypair();
-		msg_out.set_signed_id(SignedId {
+        msg_out.set_signed_id(SignedId {
             id: sign::sign(
                 &IdPk {
                     id: Config::get_id(),
@@ -172,8 +174,8 @@ pub async fn create_tcp_connection(
             .into(),
             ..Default::default()
         });
-		timeout(CONNECT_TIMEOUT, stream.send(&msg_out)).await??;
-		match timeout(CONNECT_TIMEOUT, stream.next()).await? {
+        timeout(CONNECT_TIMEOUT, stream.send(&msg_out)).await??;
+        match timeout(CONNECT_TIMEOUT, stream.next()).await? {
             Some(res) => {
                 let bytes = res?;
                 if let Ok(msg_in) = Message::parse_from_bytes(&bytes) {
@@ -182,7 +184,7 @@ pub async fn create_tcp_connection(
                             let nonce = box_::Nonce([0u8; box_::NONCEBYTES]);
                             let mut pk_ = [0u8; box_::PUBLICKEYBYTES];
                             pk_[..].copy_from_slice(&pk.asymmetric_value);
-							let their_pk_b = box_::PublicKey(pk_);
+                            let their_pk_b = box_::PublicKey(pk_);
                             let symmetric_key =
                                 box_::open(&pk.symmetric_value, &nonce, &their_pk_b, &our_sk_b)
                                     .map_err(|_| {
@@ -191,10 +193,13 @@ pub async fn create_tcp_connection(
                             if symmetric_key.len() != secretbox::KEYBYTES {
                                 bail!("Handshake failed: invalid secret key length from peer");
                             }
-							let mut key = [0u8; secretbox::KEYBYTES];
+                            let mut key = [0u8; secretbox::KEYBYTES];
                             key[..].copy_from_slice(&symmetric_key);
                             stream.set_key(secretbox::Key(key));
-                            security_numbers = compute_security_code(&our_sk_b, &their_pk_b);
+                            security_numbers = hbb_common::password_security::compute_security_code(
+                                &our_sk_b,
+                                &their_pk_b,
+                            );
                             log::info!("Security Code: {security_numbers}");
                         } else if pk.asymmetric_value.is_empty() {
                             Config::set_key_confirmed(false);
@@ -214,8 +219,15 @@ pub async fn create_tcp_connection(
             }
         }
     }
-    Connection::start(addr, stream, id, Arc::downgrade(&server), security_numbers, security_qr_code).await;
-	log::info!("logx10");
+    Connection::start(
+        addr,
+        stream,
+        id,
+        Arc::downgrade(&server),
+        security_numbers,
+        security_qr_code,
+    )
+    .await;
     Ok(())
 }
 
@@ -266,7 +278,7 @@ async fn create_relay_connection_(
     let mut msg_out = RendezvousMessage::new();
     let mut licence_key = Config::get_option("key");
     if licence_key.is_empty() {
-        licence_key = crate::platform::get_license_key();
+        //licence_key = crate::platform::get_license_key();
     }
     msg_out.set_request_relay(RequestRelay {
         licence_key,
@@ -287,6 +299,7 @@ impl Server {
             }
         }
         self.connections.insert(conn.id(), conn);
+        *CONN_COUNT.lock().unwrap() = self.connections.len();
     }
 
     pub fn remove_connection(&mut self, conn: &ConnInner) {
@@ -294,6 +307,18 @@ impl Server {
             s.on_unsubscribe(conn.id());
         }
         self.connections.remove(&conn.id());
+        *CONN_COUNT.lock().unwrap() = self.connections.len();
+    }
+
+    pub fn close_connections(&mut self) {
+        let conn_inners: Vec<_> = self.connections.values_mut().collect();
+        for c in conn_inners {
+            let mut misc = Misc::new();
+            misc.set_stop_service(true);
+            let mut msg = Message::new();
+            msg.set_misc(misc);
+            c.send(Arc::new(msg));
+        }
     }
 
     fn add_service(&mut self, service: Box<dyn Service>) {
@@ -375,6 +400,10 @@ pub async fn start_server(is_server: bool) {
         //#[cfg(windows)]
         //crate::platform::windows::bootstrap();
         input_service::fix_key_down_timeout_loop();
+        #[cfg(target_os = "linux")]
+        if crate::platform::current_is_wayland() {
+            allow_err!(input_service::setup_uinput(0, 1920, 0, 1080).await);
+        }
         #[cfg(target_os = "macos")]
         tokio::spawn(async { sync_and_watch_config_dir().await });
         crate::RendezvousMediator::start_all().await;
@@ -473,22 +502,4 @@ async fn sync_and_watch_config_dir() {
         }
     }
     log::warn!("skipped config sync");
-}
-
-pub fn compute_security_code(
-    own_private_key: &box_::SecretKey,
-    peer_public_key: &box_::PublicKey,
-) -> String {
-    let private_key = StaticSecret::from(own_private_key.0);
-    let public_key = x25519_dalek::PublicKey::from(peer_public_key.0);
-
-    let shared_secret = private_key.diffie_hellman(&public_key);
-    let secret_vec: [u8; 32] = shared_secret.to_bytes();
-    let mut result = String::new();
-
-    for i in 0..16 {
-        let v: u16 = ((secret_vec[i * 2] as u16) << 8) | (secret_vec[i * 2 + 1] as u16);
-        result.push_str(&format!("{:0>5} ", v));
-    }
-    result
 }

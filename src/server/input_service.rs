@@ -1,4 +1,5 @@
 use super::*;
+#[cfg(target_os = "linux")]
 use crate::common::IS_X11;
 #[cfg(target_os = "macos")]
 use dispatch::Queue;
@@ -7,9 +8,12 @@ use hbb_common::{config::COMPRESS_LEVEL, get_time, protobuf::EnumOrUnknown};
 use rdev::{simulate, EventType, Key as RdevKey};
 use std::{
     convert::TryFrom,
+    ops::Sub,
     sync::atomic::{AtomicBool, Ordering},
     time::Instant,
 };
+
+const INVALID_CURSOR_POS: i32 = i32::MIN;
 
 #[derive(Default)]
 struct StateCursor {
@@ -26,21 +30,42 @@ impl super::service::Reset for StateCursor {
     }
 }
 
-#[derive(Default)]
 struct StatePos {
     cursor_pos: (i32, i32),
 }
 
-impl super::service::Reset for StatePos {
-    fn reset(&mut self) {
-        self.cursor_pos = (0, 0);
+impl Default for StatePos {
+    fn default() -> Self {
+        Self {
+            cursor_pos: (INVALID_CURSOR_POS, INVALID_CURSOR_POS),
+        }
     }
 }
 
-#[derive(Default)]
+impl super::service::Reset for StatePos {
+    fn reset(&mut self) {
+        self.cursor_pos = (INVALID_CURSOR_POS, INVALID_CURSOR_POS);
+    }
+}
+
+impl StatePos {
+    #[inline]
+    fn is_valid(&self) -> bool {
+        self.cursor_pos.0 != INVALID_CURSOR_POS
+    }
+
+    #[inline]
+    fn is_moved(&self, x: i32, y: i32) -> bool {
+        self.is_valid() && (self.cursor_pos.0 != x || self.cursor_pos.1 != y)
+    }
+}
+
+#[derive(Default, Clone, Copy)]
 struct Input {
     conn: i32,
     time: i64,
+    x: i32,
+    y: i32,
 }
 
 const KEY_CHAR_START: u64 = 9999;
@@ -100,10 +125,17 @@ pub fn new_pos() -> GenericService {
     sp
 }
 
+fn update_last_cursor_pos(x: i32, y: i32) {
+    let mut lock = LATEST_SYS_CURSOR_POS.lock().unwrap();
+    if lock.1 .0 != x || lock.1 .1 != y {
+        (lock.0, lock.1) = (Instant::now(), (x, y))
+    }
+}
+
 fn run_pos(sp: GenericService, state: &mut StatePos) -> ResultType<()> {
     if let Some((x, y)) = crate::get_cursor_pos() {
-        if state.cursor_pos.0 != x || state.cursor_pos.1 != y {
-            state.cursor_pos = (x, y);
+        update_last_cursor_pos(x, y);
+        if state.is_moved(x, y) {
             let mut msg_out = Message::new();
             msg_out.set_cursor_position(CursorPosition {
                 x,
@@ -112,7 +144,7 @@ fn run_pos(sp: GenericService, state: &mut StatePos) -> ResultType<()> {
             });
             let exclude = {
                 let now = get_time();
-                let lock = LATEST_INPUT.lock().unwrap();
+                let lock = LATEST_PEER_INPUT_CURSOR.lock().unwrap();
                 if now - lock.time < 300 {
                     lock.conn
                 } else {
@@ -121,6 +153,7 @@ fn run_pos(sp: GenericService, state: &mut StatePos) -> ResultType<()> {
             };
             sp.send_without(msg_out, exclude);
         }
+        state.cursor_pos = (x, y);
     }
 
     sp.snapshot(|sps| {
@@ -170,9 +203,14 @@ lazy_static::lazy_static! {
         Arc::new(Mutex::new(Enigo::new()))
     };
     static ref KEYS_DOWN: Arc<Mutex<HashMap<u64, Instant>>> = Default::default();
-    static ref LATEST_INPUT: Arc<Mutex<Input>> = Default::default();
+    static ref LATEST_PEER_INPUT_CURSOR: Arc<Mutex<Input>> = Default::default();
+    static ref LATEST_SYS_CURSOR_POS: Arc<Mutex<(Instant, (i32, i32))>> = Arc::new(Mutex::new((Instant::now().sub(MOUSE_MOVE_PROTECTION_TIMEOUT), (0, 0))));
 }
 static EXITING: AtomicBool = AtomicBool::new(false);
+
+const MOUSE_MOVE_PROTECTION_TIMEOUT: Duration = Duration::from_millis(1_000);
+// Actual diff of (x,y) is (1,1) here. But 5 may be tolerant.
+const MOUSE_ACTIVE_DISTANCE: i32 = 5;
 
 // mac key input must be run in main thread, otherwise crash on >= osx 10.15
 #[cfg(target_os = "macos")]
@@ -181,23 +219,48 @@ lazy_static::lazy_static! {
     static ref IS_SERVER: bool =  std::env::args().nth(1) == Some("--server".to_owned());
 }
 
+// First call set_uinput() will create keyboard and mouse clients.
+// The clients are ipc connections that must live shorter than tokio runtime.
+// Thus this funtion must not be called in a temporary runtime.
 #[cfg(target_os = "linux")]
-pub async fn set_uinput() -> ResultType<()> {
+pub async fn setup_uinput(minx: i32, maxx: i32, miny: i32, maxy: i32) -> ResultType<()> {
     // Keyboard and mouse both open /dev/uinput
     // TODO: Make sure there's no race
+    set_uinput_resolution(minx, maxx, miny, maxy).await?;
+
     let keyboard = super::uinput::client::UInputKeyboard::new().await?;
     log::info!("UInput keyboard created");
     let mouse = super::uinput::client::UInputMouse::new().await?;
     log::info!("UInput mouse created");
 
-    let mut en = ENIGO.lock().unwrap();
-    en.set_uinput_keyboard(Some(Box::new(keyboard)));
-    en.set_uinput_mouse(Some(Box::new(mouse)));
+    ENIGO
+        .lock()
+        .unwrap()
+        .set_custom_keyboard(Box::new(keyboard));
+    ENIGO.lock().unwrap().set_custom_mouse(Box::new(mouse));
     Ok(())
 }
 
 #[cfg(target_os = "linux")]
-pub async fn set_uinput_resolution(minx: i32, maxx: i32, miny: i32, maxy: i32) -> ResultType<()> {
+pub async fn update_mouse_resolution(minx: i32, maxx: i32, miny: i32, maxy: i32) -> ResultType<()> {
+    set_uinput_resolution(minx, maxx, miny, maxy).await?;
+
+    if let Some(mouse) = ENIGO.lock().unwrap().get_custom_mouse() {
+        if let Some(mouse) = mouse
+            .as_mut_any()
+            .downcast_mut::<super::uinput::client::UInputMouse>()
+        {
+            allow_err!(mouse.send_refresh());
+        } else {
+            log::error!("failed downcast uinput mouse");
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+async fn set_uinput_resolution(minx: i32, maxx: i32, miny: i32, maxy: i32) -> ResultType<()> {
     super::uinput::client::set_resolution(minx, maxx, miny, maxy).await
 }
 
@@ -241,14 +304,30 @@ fn get_modifier_state(key: Key, en: &mut Enigo) -> bool {
 }
 
 pub fn handle_mouse(evt: &MouseEvent, conn: i32) {
+    if !active_mouse_(conn) {
+        return;
+    }
+    let evt_type = evt.mask & 0x7;
+    if evt_type == 0 {
+        let time = get_time();
+        *LATEST_PEER_INPUT_CURSOR.lock().unwrap() = Input {
+            time,
+            conn,
+            x: evt.x,
+            y: evt.y,
+        };
+    }
     #[cfg(target_os = "macos")]
     if !*IS_SERVER {
         // having GUI, run main GUI thread, otherwise crash
         let evt = evt.clone();
-        QUEUE.exec_async(move || handle_mouse_(&evt, conn));
+        QUEUE.exec_async(move || handle_mouse_(&evt));
         return;
     }
-    handle_mouse_(evt, conn);
+    #[cfg(windows)]
+    crate::portable_service::client::handle_mouse(evt);
+    #[cfg(not(windows))]
+    handle_mouse_(evt);
 }
 
 pub fn fix_key_down_timeout_loop() {
@@ -356,18 +435,58 @@ fn fix_modifiers(modifiers: &[EnumOrUnknown<ControlKey>], en: &mut Enigo, ck: i3
     }
 }
 
-fn handle_mouse_(evt: &MouseEvent, conn: i32) {
+fn active_mouse_(conn: i32) -> bool {
+    // out of time protection
+    if LATEST_SYS_CURSOR_POS.lock().unwrap().0.elapsed() > MOUSE_MOVE_PROTECTION_TIMEOUT {
+        return true;
+    }
+
+    // last conn input may be protected
+    if LATEST_PEER_INPUT_CURSOR.lock().unwrap().conn != conn {
+        return false;
+    }
+
+    let in_actived_dist = |a: i32, b: i32| -> bool { (a - b).abs() < MOUSE_ACTIVE_DISTANCE };
+
+    // Check if input is in valid range
+    match crate::get_cursor_pos() {
+        Some((x, y)) => {
+            let (last_in_x, last_in_y) = {
+                let lock = LATEST_PEER_INPUT_CURSOR.lock().unwrap();
+                (lock.x, lock.y)
+            };
+            let mut can_active = in_actived_dist(last_in_x, x) && in_actived_dist(last_in_y, y);
+            // The cursor may not have been moved to last input position if system is busy now.
+            // While this is not a common case, we check it again after some time later.
+            if !can_active {
+                // 10 micros may be enough for system to move cursor.
+                // We do not care about the situation which system is too slow(more than 10 micros is required).
+                std::thread::sleep(std::time::Duration::from_micros(10));
+                // Sleep here can also somehow suppress delay accumulation.
+                if let Some((x2, y2)) = crate::get_cursor_pos() {
+                    can_active = in_actived_dist(last_in_x, x2) && in_actived_dist(last_in_y, y2);
+                }
+            }
+            if !can_active {
+                let mut lock = LATEST_PEER_INPUT_CURSOR.lock().unwrap();
+                lock.x = INVALID_CURSOR_POS / 2;
+                lock.y = INVALID_CURSOR_POS / 2;
+            }
+            can_active
+        }
+        None => true,
+    }
+}
+
+pub fn handle_mouse_(evt: &MouseEvent) {
     if EXITING.load(Ordering::SeqCst) {
         return;
     }
+
     #[cfg(windows)]
     crate::platform::windows::try_change_desktop();
     let buttons = evt.mask >> 3;
     let evt_type = evt.mask & 0x7;
-    if evt_type == 0 {
-        let time = get_time();
-        *LATEST_INPUT.lock().unwrap() = Input { time, conn };
-    }
     let mut en = ENIGO.lock().unwrap();
     #[cfg(not(target_os = "macos"))]
     let mut to_release = Vec::new();
@@ -418,7 +537,7 @@ fn handle_mouse_(evt: &MouseEvent, conn: i32) {
             }
             _ => {}
         },
-        3 => {
+        3 | 4 => {
             #[allow(unused_mut)]
             let mut x = evt.x;
             #[allow(unused_mut)]
@@ -428,11 +547,39 @@ fn handle_mouse_(evt: &MouseEvent, conn: i32) {
                 x = -x;
                 y = -y;
             }
-            if x != 0 {
-                en.mouse_scroll_x(x);
+            #[cfg(target_os = "macos")]
+            {
+                // TODO: support track pad on win.
+                let is_track_pad = evt
+                    .modifiers
+                    .contains(&EnumOrUnknown::new(ControlKey::Scroll));
+
+                // fix shift + scroll(down/up)
+                if !is_track_pad
+                    && evt
+                        .modifiers
+                        .contains(&EnumOrUnknown::new(ControlKey::Shift))
+                {
+                    x = y;
+                    y = 0;
+                }
+
+                if x != 0 {
+                    en.mouse_scroll_x(x, is_track_pad);
+                }
+                if y != 0 {
+                    en.mouse_scroll_y(y, is_track_pad);
+                }
             }
-            if y != 0 {
-                en.mouse_scroll_y(y);
+
+            #[cfg(not(target_os = "macos"))]
+            {
+                if x != 0 {
+                    en.mouse_scroll_x(x);
+                }
+                if y != 0 {
+                    en.mouse_scroll_y(y);
+                }
             }
         }
         _ => {}
@@ -595,6 +742,9 @@ pub fn handle_key(evt: &KeyEvent) {
         QUEUE.exec_async(move || handle_key_(&evt));
         return;
     }
+    #[cfg(windows)]
+    crate::portable_service::client::handle_key(evt);
+    #[cfg(not(windows))]
     handle_key_(evt);
 }
 
@@ -620,6 +770,7 @@ fn rdev_key_click(key: RdevKey) {
 }
 
 fn sync_status(evt: &KeyEvent) -> (bool, bool) {
+    /* todo! Shift+delete */
     let mut en = ENIGO.lock().unwrap();
 
     // remote caps status
@@ -639,11 +790,32 @@ fn sync_status(evt: &KeyEvent) -> (bool, bool) {
         || (!caps_locking && en.get_key_state(enigo::Key::CapsLock));
     let click_numlock = (num_locking && !en.get_key_state(enigo::Key::NumLock))
         || (!num_locking && en.get_key_state(enigo::Key::NumLock));
+    #[cfg(windows)]
+    let click_numlock = {
+        let code = evt.chr();
+        let key = rdev::get_win_key(code, 0);
+        match key {
+            RdevKey::Home
+            | RdevKey::UpArrow
+            | RdevKey::PageUp
+            | RdevKey::LeftArrow
+            | RdevKey::RightArrow
+            | RdevKey::End
+            | RdevKey::DownArrow
+            | RdevKey::PageDown
+            | RdevKey::Insert
+            | RdevKey::Delete => en.get_key_state(enigo::Key::NumLock),
+            _ => click_numlock,
+        }
+    };
     return (click_capslock, click_numlock);
 }
 
 fn map_keyboard_mode(evt: &KeyEvent) {
     // map mode(1): Send keycode according to the peer platform.
+    #[cfg(windows)]
+    crate::platform::windows::try_change_desktop();
+
     let (click_capslock, click_numlock) = sync_status(evt);
 
     // Wayland
@@ -703,7 +875,7 @@ fn legacy_keyboard_mode(evt: &KeyEvent) {
     // disable numlock if press home etc when numlock is on,
     // because we will get numpad value (7,8,9 etc) if not
     #[cfg(windows)]
-    let mut disable_numlock = false;
+    let mut _disable_numlock = false;
     #[cfg(target_os = "macos")]
     en.reset_flag();
     // When long-pressed the command key, then press and release
@@ -753,8 +925,8 @@ fn legacy_keyboard_mode(evt: &KeyEvent) {
             if let Some(key) = KEY_MAP.get(&ck.value()) {
                 #[cfg(windows)]
                 if let Some(_) = NUMPAD_KEY_MAP.get(&ck.value()) {
-                    disable_numlock = en.get_key_state(Key::NumLock);
-                    if disable_numlock {
+                    _disable_numlock = en.get_key_state(Key::NumLock);
+                    if _disable_numlock {
                         en.key_down(Key::NumLock).ok();
                         en.key_up(Key::NumLock);
                     }
@@ -824,7 +996,7 @@ fn legacy_keyboard_mode(evt: &KeyEvent) {
     }
 }
 
-fn handle_key_(evt: &KeyEvent) {
+pub fn handle_key_(evt: &KeyEvent) {
     if EXITING.load(Ordering::SeqCst) {
         return;
     }

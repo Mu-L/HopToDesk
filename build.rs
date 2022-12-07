@@ -11,12 +11,12 @@ fn build_manifest() {
     use std::io::Write;
     if std::env::var("PROFILE").unwrap() == "release" {
         let mut res = winres::WindowsResource::new();
-        res.set_icon("icon.ico")
+        res.set_icon("res/icon.ico")
             .set_language(winapi::um::winnt::MAKELANGID(
                 winapi::um::winnt::LANG_ENGLISH,
                 winapi::um::winnt::SUBLANG_ENGLISH_US,
             ))
-            .set_manifest_file("manifest.xml");
+            .set_manifest_file("res/manifest.xml");
         match res.compile() {
             Err(e) => {
                 write!(std::io::stderr(), "{}", e).unwrap();
@@ -77,17 +77,22 @@ fn install_oboe() {
 }
 
 fn gen_flutter_rust_bridge() {
+    let llvm_path = match std::env::var("LLVM_HOME") {
+        Ok(path) => Some(vec![path]),
+        Err(_) => None,
+    };
     // Tell Cargo that if the given file changes, to rerun this build script.
-    println!("cargo:rerun-if-changed=src/mobile_ffi.rs");
+    println!("cargo:rerun-if-changed=src/flutter_ffi.rs");
     // settings for fbr_codegen
     let opts = lib_flutter_rust_bridge_codegen::Opts {
         // Path of input Rust code
-        rust_input: "src/mobile_ffi.rs".to_string(),
+        rust_input: "src/flutter_ffi.rs".to_string(),
         // Path of output generated Dart code
         dart_output: "flutter/lib/generated_bridge.dart".to_string(),
-        // Path of output C files.
-        c_output: Some(vec!["flutter/ios/Runner/generated_bridge.h".to_string()]),
+        // Path of output generated C header
+        c_output: Some(vec!["flutter/macos/Runner/bridge_generated.h".to_string()]),
         // for other options lets use default
+        llvm_path,
         ..Default::default()
     };
     // run fbr_codegen
@@ -95,15 +100,12 @@ fn gen_flutter_rust_bridge() {
 }
 
 use std::path::PathBuf;
+#[cfg(any(feature = "packui", target_os = "linux"))]
 use std::process::Command;
 
+#[cfg(any(feature = "packui", target_os = "linux"))]
 fn wget(path: &str, output: &str) {
-    let command = if cfg!(target_os = "windows") {
-        "wget.exe"
-    } else {
-        "wget"
-    };
-    Command::new(command)
+    Command::new("wget")
         .args([path, "-O", output])
         .output()
         .expect("wget packfolder failed");
@@ -120,7 +122,7 @@ fn main() {
     }
     #[cfg(all(windows, feature = "with_rc"))]
     build_rc_source();
-    
+
     #[cfg(feature = "packui")]
     {
         fn chmod(path: &str) {
@@ -152,14 +154,13 @@ fn main() {
             chmod(output);
         }
 
-
         // Run packfolder to create target/resources.rc
         Command::new(path)
             .args([
                 "src/ui",
                 "target/resources.rc",
                 "-i",
-                "*.html;*.css;*.tis;*.ttf",
+                "*.html;*.css;*.tis",
                 "-v",
                 "resources",
                 "-binary",
@@ -180,8 +181,8 @@ fn main() {
 
     #[cfg(all(windows, feature = "packui"))]
     build_manifest();
-	#[cfg(windows)]
-	static_vcruntime::metabuild();
+    #[cfg(windows)]
+    static_vcruntime::metabuild();
     #[cfg(windows)]
     build_windows();
     #[cfg(target_os = "macos")]

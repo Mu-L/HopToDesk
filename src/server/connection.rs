@@ -4,13 +4,12 @@ use crate::clipboard_file::*;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::common::update_clipboard;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-use crate::two_factor_auth;
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::two_factor_auth::TFAManager;
 use crate::video_service;
 #[cfg(any(target_os = "android", target_os = "ios"))]
-use crate::{common::MOBILE_INFO2, mobile::connection_manager::start_channel};
+use crate::{common::DEVICE_NAME, flutter::connection_manager::start_channel};
 use crate::{ipc, VERSION};
+use cidr_utils::cidr::IpCidr;
 use hbb_common::{
     config::Config,
     fs,
@@ -18,7 +17,9 @@ use hbb_common::{
     futures::{SinkExt, StreamExt},
     get_time, get_version_number,
     message_proto::{option_message::BoolOption, permission_info::Permission},
-    password_security as password, sleep, timeout,
+    //password_security as password, sleep, timeout,
+    password_security::{self as password, ApproveMode},
+    sleep, timeout,
     tokio::{
         net::TcpStream,
         sync::mpsc,
@@ -28,12 +29,11 @@ use hbb_common::{
 };
 #[cfg(any(target_os = "android", target_os = "ios"))]
 use scrap::android::call_main_service_mouse_input;
-use serde_json::{json, value::Value};
+//use serde_json::{json, value::Value};
 use sha2::{Digest, Sha256};
-use std::sync::{
-    atomic::{AtomicI64, Ordering},
-    mpsc as std_mpsc,
-};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use std::sync::atomic::Ordering;
+use std::sync::{atomic::AtomicI64, mpsc as std_mpsc};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use system_shutdown;
 
@@ -85,6 +85,7 @@ pub struct Connection {
     audio: bool,
     file: bool,
     restart: bool,
+    recording: bool,
     last_test_delay: i64,
     lock_after_session_end: bool,
     show_remote_cursor: bool, // by peer
@@ -97,6 +98,8 @@ pub struct Connection {
     peer_info: (String, String),
     lr: LoginRequest,
     last_recv_time: Arc<Mutex<Instant>>,
+    chat_unanswered: bool,
+    close_manually: bool,
     security_numbers: String,
     security_qr_code: String,
 }
@@ -177,6 +180,7 @@ impl Connection {
             audio: Config::get_option("enable-audio").is_empty(),
             file: Config::get_option("enable-file-transfer").is_empty(),
             restart: Config::get_option("enable-remote-restart").is_empty(),
+            recording: Config::get_option("enable-record-session").is_empty(),
             last_test_delay: 0,
             lock_after_session_end: false,
             show_remote_cursor: false,
@@ -189,6 +193,8 @@ impl Connection {
             peer_info: Default::default(),
             lr: Default::default(),
             last_recv_time: Arc::new(Mutex::new(Instant::now())),
+            chat_unanswered: false,
+            close_manually: false,
             security_numbers,
             security_qr_code
         };
@@ -218,6 +224,9 @@ impl Connection {
         }
         if !conn.restart {
             conn.send_permission(Permission::Restart, false).await;
+        }
+        if !conn.recording {
+            conn.send_permission(Permission::Recording, false).await;
         }
         let mut test_delay_timer =
             time::interval_at(Instant::now() + TEST_DELAY_TIMEOUT, TEST_DELAY_TIMEOUT);
@@ -250,9 +259,13 @@ impl Connection {
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         std::thread::spawn(move || Self::handle_input(rx_input, tx_cloned));
         let mut second_timer = time::interval(Duration::from_secs(1));
+        #[cfg(windows)]
         let mut last_uac = false;
+        #[cfg(windows)]
         let mut last_foreground_window_elevated = false;
-
+        #[cfg(windows)]
+        let is_installed = crate::platform::is_installed();
+        
         loop {
             tokio::select! {
                 // biased; // video has higher priority // causing test_delay_timer failed while transfering big file
@@ -287,6 +300,7 @@ impl Connection {
                             let mut msg_out = Message::new();
                             msg_out.set_misc(misc);
                             conn.send(msg_out).await;
+                            conn.chat_unanswered = false;
                         }
                         ipc::Data::SwitchPermission{name, enabled} => {
                             log::info!("Change permission {} -> {}", name, enabled);
@@ -321,6 +335,9 @@ impl Connection {
                             } else if &name == "restart" {
                                 conn.restart = enabled;
                                 conn.send_permission(Permission::Restart, enabled).await;
+                            } else if &name == "recording" {
+                                conn.recording = enabled;
+                                conn.send_permission(Permission::Recording, enabled).await;
                             }
                         }
                         ipc::Data::RawMessage(bytes) => {
@@ -359,6 +376,12 @@ impl Connection {
                                 }
                             };
                             conn.send(msg_out).await;
+                        }
+                        #[cfg(windows)]
+                        ipc::Data::DataPortableService(ipc::DataPortableService::RequestStart) => {
+                            if let Err(e) = crate::portable_service::client::start_portable_service() {
+                                log::error!("Failed to start portable service from cm:{:?}", e);
+                            }
                         }
                         _ => {}
                     }
@@ -418,29 +441,54 @@ impl Connection {
                             _ => {}
                         }
                     }
+                    match &msg.union {
+                        Some(message::Union::Misc(m)) => {
+                            match &m.union {
+                                Some(misc::Union::StopService(_)) => {
+                                    conn.on_close_manually("stop service").await;
+                                    break;
+                                }
+                                _ => {},
+                            }
+                        }
+                        _ => {}
+                    }
                     if let Err(err) = conn.stream.send(msg).await {
                         conn.on_close(&err.to_string(), false).await;
                         break;
                     }
                 },
                 _ = second_timer.tick() => {
+                    #[cfg(windows)]
+                    {
+                        if !is_installed {
+                            let portable_service_running = crate::portable_service::client::PORTABLE_SERVICE_RUNNING.lock().unwrap().clone();
                     let uac = crate::video_service::IS_UAC_RUNNING.lock().unwrap().clone();
                     if last_uac != uac {
                         last_uac = uac;
+                    if !uac || !portable_service_running{
                         let mut misc = Misc::new();
                         misc.set_uac(uac);
                         let mut msg = Message::new();
                         msg.set_misc(misc);
                         conn.inner.send(msg.into());
                     }
+                            }
                     let foreground_window_elevated = crate::video_service::IS_FOREGROUND_WINDOW_ELEVATED.lock().unwrap().clone();
                     if last_foreground_window_elevated != foreground_window_elevated {
                         last_foreground_window_elevated = foreground_window_elevated;
+					if !foreground_window_elevated || !portable_service_running {
                         let mut misc = Misc::new();
                         misc.set_foreground_window_elevated(foreground_window_elevated);
                         let mut msg = Message::new();
                         msg.set_misc(misc);
                         conn.inner.send(msg.into());
+                    }
+                }
+                            let show_elevation = !portable_service_running;
+                            conn.send_to_cm(ipc::Data::DataPortableService(ipc::DataPortableService::CmShowElevation(show_elevation)));
+
+                        }
                     }
                 }
                 _ = test_delay_timer.tick() => {
@@ -606,11 +654,13 @@ impl Connection {
 
     async fn on_open(&mut self, addr: SocketAddr) -> bool {
         log::debug!("#{} Connection opened from {}.", self.inner.id, addr);
+		log::info!("#{} Connection opened from {}.", self.inner.id, addr);
         let whitelist: Vec<String> = Config::get_option("whitelist")
             .split(",")
             .filter(|x| !x.is_empty())
             .map(|x| x.to_owned())
             .collect();
+			 log::info!("#{} Connection opened from {:?}.", self.inner.id, whitelist);
         if !whitelist.is_empty()
             && whitelist
                 .iter()
@@ -619,7 +669,9 @@ impl Connection {
                 .is_none()
             && whitelist
                 .iter()
-                .filter(|x| x.parse() == Ok(addr.ip()))
+                .filter(|x| IpCidr::from_str(x).map_or(false, |y| {
+                    log::info!("y: {} contains addr {}.", y, addr.ip());
+                    y.contains(addr.ip())}))
                 .next()
                 .is_none()
         {
@@ -679,13 +731,10 @@ impl Connection {
         #[allow(unused_mut)]
         let mut username = crate::platform::get_active_username();
         let mut res = LoginResponse::new();
-
         let mut pi = PeerInfo {
             username: username.clone(),
             conn_id: self.inner.id,
-            version: crate::VERSION.to_owned(),
-            // Send mac address for wake on lan
-            mac_address: get_mac(),
+            version: VERSION.to_owned(),
             ..Default::default()
         };
 
@@ -696,7 +745,7 @@ impl Connection {
         }
         #[cfg(target_os = "android")]
         {
-            pi.hostname = MOBILE_INFO2.lock().unwrap().clone();
+            pi.hostname = DEVICE_NAME.lock().unwrap().clone();
             pi.platform = "Android".into();
         }
         #[cfg(feature = "hwcodec")]
@@ -747,7 +796,6 @@ impl Connection {
 
         pi.username = username;
         pi.sas_enabled = sas_enabled;
-        pi.mac_address = get_mac();
         pi.features = Some(Features {
             privacy_mode: video_service::is_privacy_mode_supported(),
             ..Default::default()
@@ -759,9 +807,13 @@ impl Connection {
             res.set_peer_info(pi);
         } else {
             try_activate_screen();
+            if let Some(msg_out) = super::video_service::is_inited_msg() {
+                self.send(msg_out).await;
+            }
+
             match super::video_service::get_displays().await {
                 Err(err) => {
-                    res.set_error(format!("X11 error: {}", err));
+                    res.set_error(format!("{}", err));
                 }
                 Ok((current, displays)) => {
                     pi.displays = displays.into();
@@ -830,6 +882,7 @@ impl Connection {
             file: self.file,
             file_transfer_enabled: self.file_transfer_enabled(),
             restart: self.restart,
+            recording: self.recording,            
             security_numbers: self.security_numbers.clone(),
             security_qr_code: self.security_qr_code.clone(),
         });
@@ -939,6 +992,20 @@ impl Connection {
         false
     }
 
+    pub fn permission(enable_prefix_option: &str) -> bool {
+        #[cfg(feature = "flutter")]
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            let access_mode = Config::get_option("access-mode");
+            if access_mode == "full" {
+                return true;
+            } else if access_mode == "view" {
+                return false;
+            }
+        }
+        return Config::get_option(enable_prefix_option).is_empty();
+    }
+
     async fn on_message(&mut self, msg: Message) -> bool {
         if let Some(message::Union::LoginRequest(lr)) = msg.union {
             self.lr = lr.clone();
@@ -1019,6 +1086,21 @@ impl Connection {
             }
             if !crate::is_ip(&lr.username) && lr.username != Config::get_id() {
                 self.send_login_error("Offline").await;
+            } else if password::approve_mode() == ApproveMode::Click
+                || password::approve_mode() == ApproveMode::Both && !password::has_valid_password()
+            {
+                self.try_start_cm(lr.my_id, lr.my_name, false);
+                if hbb_common::get_version_number(&lr.version)
+                    >= hbb_common::get_version_number("1.2.0")
+                {
+                    self.send_login_error("No Password Access").await;
+                }
+                return true;
+            } else if password::approve_mode() == ApproveMode::Password
+                && !password::has_valid_password()
+            {
+                self.send_login_error("Connection not allowed").await;
+                return false;
             } else if self.is_of_recent_session() {
                 self.try_start_cm(lr.my_id, lr.my_name, true);
                 self.send_logon_response().await;
@@ -1299,6 +1381,7 @@ impl Connection {
                     }
                     Some(misc::Union::ChatMessage(c)) => {
                         self.send_to_cm(ipc::Data::ChatMessage { text: c.text });
+                        self.chat_unanswered = true;
                     }
                     Some(misc::Union::Option(o)) => {
                         self.update_option(&o).await;
@@ -1339,23 +1422,32 @@ impl Connection {
     }
 
     async fn update_option(&mut self, o: &OptionMessage) {
-        log::info!("Option update: {:?}", o);
+        //log::info!("Option update: {:?}", o);
         if let Ok(q) = o.image_quality.enum_value() {
             let image_quality;
             if let ImageQuality::NotSet = q {
                 if o.custom_image_quality > 0 {
                     image_quality = o.custom_image_quality;
                 } else {
-                    image_quality = ImageQuality::Balanced.value();
+                    image_quality = -1;
                 }
             } else {
                 image_quality = q.value();
             }
+            if image_quality > 0 {
+                video_service::VIDEO_QOS
+                    .lock()
+                    .unwrap()
+                    .update_image_quality(image_quality);
+            }
+        }
+        if o.custom_fps > 0 {
             video_service::VIDEO_QOS
                 .lock()
                 .unwrap()
-                .update_image_quality(image_quality);
+                .update_user_fps(o.custom_fps as _);
         }
+
         if let Ok(q) = o.lock_after_session_end.enum_value() {
             if q != BoolOption::NotSet {
                 self.lock_after_session_end = q == BoolOption::Yes;
@@ -1499,8 +1591,28 @@ impl Connection {
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             lock_screen().await;
         }
-        self.tx_to_cm.send(ipc::Data::Close).ok();
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        let data = if self.chat_unanswered && !self.close_manually {
+            ipc::Data::Disconnected
+        } else {
+            ipc::Data::Close
+        };
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        let data = ipc::Data::Close;
+        self.tx_to_cm.send(data).ok();
         self.port_forward_socket.take();
+    }
+
+    async fn on_close_manually(&mut self, close_from: &str) {
+        self.close_manually = true;
+        let mut misc = Misc::new();
+        misc.set_close_reason("Closed manually by the peer".into());
+        let mut msg_out = Message::new();
+        msg_out.set_misc(misc);
+        self.send(msg_out).await;
+        self.on_close(&format!("Close requested from {}", close_from), false)
+            .await;
+        SESSIONS.lock().unwrap().remove(&self.lr.my_id);
     }
 
     fn read_dir(&mut self, dir: &str, include_hidden: bool) {
@@ -1532,11 +1644,22 @@ async fn start_ipc(
     if let Ok(s) = crate::ipc::connect(1000, "_cm").await {
         stream = Some(s);
     } else {
+        let mut args = vec!["--cm"];
+        if password::hide_cm() {
+            args.push("--hide");
+        };
         let run_done;
         if crate::platform::is_root() {
             let mut res = Ok(None);
             for _ in 0..10 {
-                res = crate::platform::run_as_user("--cm");
+                #[cfg(not(target_os = "linux"))]
+                {
+                    res = crate::platform::run_as_user(args.clone());
+                }
+                #[cfg(target_os = "linux")]
+                {
+                    res = crate::platform::run_as_user(args.clone(), None);
+                }
                 if res.is_ok() {
                     break;
                 }
@@ -1553,7 +1676,7 @@ async fn start_ipc(
             super::CHILD_PROCESS
                 .lock()
                 .unwrap()
-                .push(crate::run_me(vec!["--cm"])?);
+                .push(crate::run_me(args)?);
         }
         for _ in 0..10 {
             sleep(0.3).await;
@@ -1609,17 +1732,6 @@ async fn start_ipc(
             }
         }
     }
-}
-
-pub fn get_mac() -> String {
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    if let Ok(Some(mac)) = mac_address::get_mac_address() {
-        mac.to_string()
-    } else {
-        "".to_owned()
-    }
-    #[cfg(any(target_os = "android", target_os = "ios"))]
-    "".to_owned()
 }
 
 // in case screen is sleep and blank, here to activate it

@@ -58,7 +58,6 @@ function createNewConnect(id, type) {
     app.remote_id.value = formatId(id);
     if (!id) return;
     if (id == my_id) {
-        // uncomment if allowed to connect to "yourself" (easier testing)
         msgbox("custom-error", "Error", "You cannot connect to your own computer");
         return;
     }
@@ -104,7 +103,6 @@ class DirectServer: Reactor.Component {
 
 var myIdMenu;
 var audioInputMenu;
-var languageMenu;
 class AudioInputs: Reactor.Component {
     function this() {
         audioInputMenu = this;
@@ -162,63 +160,32 @@ class AudioInputs: Reactor.Component {
     }
 };
 
-class LanguagePicker: Reactor.Component
-{
-    function this() {
-        languageMenu = this;
-    }
-
+class Languages: Reactor.Component {
     function render() {
-        if (!this.show) return <li />;
+        var langs = JSON.parse(handler.get_langs());
         var me = this;
         self.timer(1ms, function() { me.toggleMenuState() });
         return <li>{translate('Language')}
-            <menu #language-picker>
-                <li id="en"><span>{svg_checkmark}</span>English</li>
-				<li id="fr"><span>{svg_checkmark}</span>Français</li>
-				<li id="de"><span>{svg_checkmark}</span>Deutsch</li>
-                <li id="es"><span>{svg_checkmark}</span>Español</li>
-                <li id="it"><span>{svg_checkmark}</span>Italiano</li>
-                <li id="ptbr"><span>{svg_checkmark}</span>Português (Brasil)</li>
-				<li id="eo"><span>{svg_checkmark}</span>Esperanto</li>
-                <li id="cs"><span>{svg_checkmark}</span>Czech</li>
-				<li id="hu"><span>{svg_checkmark}</span>Magyar</li>
-				<li id="da"><span>{svg_checkmark}</span>Dansk</li>
-				<li id="pl"><span>{svg_checkmark}</span>Polski</li>
-				<li id="sk"><span>{svg_checkmark}</span>Slovenski</li>
-                <li id="tr"><span>{svg_checkmark}</span>Türkçe</li>
-                <li id="ru"><span>{svg_checkmark}</span>Русский</li>
-				<li id="ua"><span>{svg_checkmark}</span>Українська</li>
-				<li id="id"><span>{svg_checkmark}</span>Bahasa Indonesia</li>
-                <li id="ko"><span>{svg_checkmark}</span>한국어</li>
-                <li id="ja"><span>{svg_checkmark}</span>日本語</li>
-                <li id="cn"><span>{svg_checkmark}</span>中文 (简体)</li>
-                <li id="tw"><span>{svg_checkmark}</span>中文 (繁体)</li>
-				<li id="vn"><span>{svg_checkmark}</span>Tiếng Việt</li>
-				<li id="th"><span>{svg_checkmark}</span>ไทย</li>
+            <menu #languages key={langs.length}>
+                {langs.map(function(lang) {
+                return <li id={lang[0]}><span>{svg_checkmark}</span>{lang[1]}</li>;
+                })}
             </menu>
         </li>;
     }
 
-    function get_default() {
-        return "en";
-    }
-
-    function get_value() {
-        return handler.get_local_option("lang") || this.get_default();
-    }
 
     function toggleMenuState() {
-        var v = this.get_value();
-        for (var el in this.$$(menu#language-picker>li)) {
-            var selected = el.id == v;
+        var cur = handler.get_local_option("lang") || "default";
+        for (var el in this.$$(menu#languages>li)) {
+            var selected = cur == el.id;
             el.attributes.toggleClass("selected", selected);
         }
     }
 
-    event click $(menu#language-picker>li) (_, me) {
+    event click $(menu#languages>li) (_, me) {
         var v = me.id;
-        if (v == this.get_value()) return;
+        if (v == "default") v = "";
         handler.set_local_option("lang", v);
         app.update();
         this.toggleMenuState();
@@ -240,6 +207,7 @@ class Enhancements: Reactor.Component {
             <menu #enhancements-menu>
                 {has_hwcodec ? <li #enable-hwcodec><span>{svg_checkmark}</span>{translate("Hardware Codec")} (beta)</li> : ""}
                 <li #enable-abr><span>{svg_checkmark}</span>{translate("Adaptive Bitrate")} (beta)</li>
+                <li #screen-recording>{translate("Recording")}</li>
             </menu>
         </li>;
     }
@@ -258,6 +226,26 @@ class Enhancements: Reactor.Component {
         var v = me.id;
         if (v.indexOf("enable-") == 0) {
             handler.set_option(v, handler.get_option(v) != 'N' ? 'N' : '');
+        } else if (v == 'screen-recording') {
+            var dir = handler.get_option("video-save-directory");
+            if (!dir) dir = handler.default_video_save_directory();
+            var ts0 = handler.get_option("enable-record-session") == '' ? { checked: true } : {};
+            var ts1 = handler.get_option("allow-auto-record-incoming") == 'Y' ? { checked: true } : {};
+            msgbox("custom-recording", translate('Recording'),
+                <div .form>
+                    <div><button|checkbox(enable_record_session) {ts0}>{translate('Enable Recording Session')}</button></div>
+                    <div><button|checkbox(auto_record_incoming) {ts1}>{translate('Automatically record incoming sessions')}</button></div>
+                    <div>
+                        <div style="word-wrap:break-word"><span>{translate("Directory")}:&nbsp;&nbsp;</span><span #folderPath>{dir}</span></div>
+                        <div> <button #select_directory .link>{translate('Change')}</button> </div>
+                    </div>
+                </div>
+                , "", function(res=null) {
+                if (!res) return;
+                handler.set_option("enable-record-session", res.enable_record_session ? '' : 'N');
+                handler.set_option("allow-auto-record-incoming", res.auto_record_incoming ? 'Y' : '');
+                handler.set_option("video-save-directory", $(#folderPath).text);
+            });
         }
         this.toggleMenuState();
     }
@@ -282,19 +270,14 @@ function updateTheme() {
 }
 
 class MyIdMenu: Reactor.Component {
-    constructor(attr, kids) {
-        this.kids = kids;
-        // everytime the "show settings button" setting is toggled
-        // the "new" button with the "MyIdMenu" will be stored in
-        // "myIdMenu"; only one instance possible as there CAN only
-        // be one "MyIdMenu", depending on weather the setting is on
+    function this() {
         myIdMenu = this;
     }
 
     function render() {
         return <div #myid>
             {this.renderPop()}
-            {this.kids}
+            ID{svg_menu}
         </div>;
     }
 
@@ -308,7 +291,7 @@ class MyIdMenu: Reactor.Component {
                 <li #enable-tunnel><span>{svg_checkmark}</span>{translate('Enable TCP Tunneling')}</li>
                 <AudioInputs />
                 <div .separator />
-                <li #custom-api-url style="display:none">{translate('Custom API URL')}</li>
+                <li #custom-api-url>{translate('Choose Network')}</li>
                 <li #custom-server style="display:none">{translate('ID/Relay Server')}</li>
                 <li #whitelist title={translate('whitelist_tip')}>{translate('IP Whitelisting')}</li>
                 <li #socks5-server>{translate('SOCKS5 Proxy')}</li>
@@ -320,23 +303,30 @@ class MyIdMenu: Reactor.Component {
                 <DirectServer />
 				<li #show-settings-button style="display:none">{show_settings_button ? translate("Hide Settings Button") : translate("Show Settings Button")}</li>
                 <div .separator />
-                <LanguagePicker />
+                <Languages />
                 <li #about>{translate('About')} {" "} {handler.get_app_name()}</li>
             </menu>
         </popup>;
     }
 
-    event click $(#menu) (_, me) {
+    event click $(svg#menu) (_, me) {
         this.showSettingMenu();
     }
 
     function showSettingMenu() {
         audioInputMenu.update({ show: true });
-		languageMenu.update({ show: true });
         this.toggleMenuState();
         if (direct_server) direct_server.update();
         var menu = this.$(menu#config-options);
-        this.$(#menu).popup(menu);
+        this.$(svg#menu).popup(menu);
+    }
+
+    event click $(li#login) () {
+        login();
+    }
+
+    event click $(li#logout) () {
+        logout();
     }
 
     function toggleMenuState() {
@@ -366,7 +356,7 @@ class MyIdMenu: Reactor.Component {
 			</div><br>
 			<div style='font-size: 9px; color: #888; text-decoration: none;' .link .custom-event url='http://sciter.com/'>This Application (or Component) uses Sciter Engine, copyright Terra Informatica Software, Inc.</div>
 			<div style='font-size: 9px; color: #888; text-decoration: none;'>Copyright &copy; HopToDesk. Originally forked from RustDesk.</div>			\
-			", function(el) {
+			", "", function(el) {
                 if (el && el.attributes) {
                     handler.open_url(el.attributes['url']);
                 };
@@ -375,19 +365,21 @@ class MyIdMenu: Reactor.Component {
 
     event click $(menu#config-options>li) (_, me) {
         if (me.id && me.id.indexOf("enable-") == 0) {
-            var new_value = handler.get_option(me.id) == "N" ? "" : "N";
-            handler.set_option(me.id, new_value);
+            handler.set_option(me.id, handler.get_option(me.id) == "N" ? "" : "N");
+        }
+        if (me.id && me.id.indexOf("allow-") == 0) {
+            handler.set_option(me.id, handler.get_option(me.id) == "Y" ? "" : "Y");
         }
         if (me.id == "-enable-2fa") {
             var enabled = !(me.is_2fa_enabled());
             if (enabled) {
-                stdout.println("2FA enabled");
+                //stdout.println("2FA enabled");
                 var data = me.enable_2fa();
 
 				msgbox("custom nocancel", translate("2FA QR code"), "<center>" + translate("Scan this QR code with a camera on a secondary device such as a phone to set it up as your 2FA authenticator.") + "<br/><img src='" + data.img_base64 + "'/><br/>" + translate("You will need to confirm the 2FA on the secondary device with you when trying to connect to this desktop.") + "</center>");
-				
+
             } else {
-                stdout.println("2FA disabled");
+                //stdout.println("2FA disabled");
                 me.disable_2fa();
             }
             me.attributes.toggleClass("selected", enabled);
@@ -396,20 +388,20 @@ class MyIdMenu: Reactor.Component {
             var aa = $(menu#config-options>li#enable-2fa-auto-accept);
             aa.attributes.toggleClass("tfa-disabled", !enabled);
             aa.attributes.toggleClass("tfa-enabled", enabled);
-        }
-        if (me.id == "whitelist") {
+        } else if (me.id == "whitelist") {
             var old_value = handler.get_option("whitelist").split(",").join("\n");
             msgbox("custom-whitelist", translate("IP Whitelisting"), "<div .form> \
             <div>" + translate("whitelist_sep") + "</div> \
             <textarea spellcheck=\"false\" name=\"text\" novalue=\"0.0.0.0\" style=\"overflow: scroll-indicator; width:*; height: 140px; font-size: 1.2em; padding: 0.5em; margin-bottom: 10px; \">" + old_value + "</textarea>\
             </div> \
-            ", function(res=null) {
+            ", "", function(res=null) {
                 if (!res) return;
                 var value = (res.text || "").trim();
                 if (value) {
                     var values = value.split(/[\s,;\n]+/g);
                     for (var ip in values) {
-                        if (!ip.match(/^\d+\.\d+\.\d+\.\d+$/)) {
+                        if (!ip.match(/^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]?|0)\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]?|0)\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]?|0)\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]?|0)(\/([1-9]|[1-2][0-9]|3[0-2])){0,1}$/)
+                            && !ip.match(/^(((?:[0-9A-Fa-f]{1,4}))*((?::[0-9A-Fa-f]{1,4}))*::((?:[0-9A-Fa-f]{1,4}))*((?::[0-9A-Fa-f]{1,4}))*|((?:[0-9A-Fa-f]{1,4}))((?::[0-9A-Fa-f]{1,4})){7})(\/([1-9]|[1-9][0-9]|1[0-1][0-9]|12[0-8])){0,1}$/)) {
                             return translate("Invalid IP") + ": " + ip;
                         }
                     }
@@ -421,40 +413,75 @@ class MyIdMenu: Reactor.Component {
             }, 300);
         } else if (me.id == "custom-api-url") {
             let old_url = handler.get_custom_api_url();
-            msgbox("custom-server", "Set API", <div .form>
-            <div><span> {translate("Use Custom API")}: </span><input|text .outline-focus name='url' value={old_url}/></div>
-            </div>, function(res=null) {
-                if (!res) return;
-                if (old_url != res.url) {
-                    let valid_url = () => {
-                        handler.set_custom_api_url(res.url);
-                        msgbox("success", "Restart", "Restart HopToDesk to use the other api server.", () => {});
-                    }
-                    if (res.url == "") return valid_url();
-                    view.request({
-                        type: #get,
-                        url: res.url,
-                        success: (s, _) => {
-                            let text_res = s.toString();
-                            let json;
-                            try {
-                                json = JSON.parse(text_res);
-                            } catch (e) {
-                                return msgbox("custom-error", "Custom API Validity Error", "Failed to parse response as json, check if the url is correct.<br/>`" + e + "`", () => {});
-                            }
-                            if (json instanceof Object && json.turnservers && json.rendezvous) {
-                                let host = json.rendezvous.host;
-                                if (host.split('.').length != 4 || host.split('.').map(n => n.toNumber()).filter(n => n > 255 || n < 0).length > 0) {msgbox("custom-error", "Custom API Validity Error", "Host of rendezvous `" + host + "` is an invalid ipv4 address.");return;}
-                                let port = json.rendezvous.port.toInteger();
-                                if (port == undefined || port < 0 || port > 65536) return msgbox("custom-error", "Custom API Validity Error", "Port of rendezvous `" + json.rendezvous.port + "` is invalid ipv4 port.");
-                                valid_url();
-                            } else msgbox("custom-error", "Custom API Validity Error", "Server did not give a correct response: (`" + text_res + "`).");
-                        },
-                        error: (e, s) => {
-                            msgbox("custom-error", "Custom API Validity Error", "Check if the url is correct.<br/>Status " + s + ": `" + e + "`", () => {});
-                        }
-                    });
+			let uncheckedimg;
+			let selectedhopnetwork;
+			let selectedcustomnetwork;
+			if (old_url) {selectedhopnetwork = ".uncheckednetwork"; selectedcustomnetwork = ".checkednetwork";} else {selectedhopnetwork = ".checkednetwork"; selectedcustomnetwork = ".uncheckednetwork";}
+			
+            msgbox("custom", "Choose Network", "<div .form> \
+            <div> \
+			<div #networkhoptodesk .custom-event " + selectedhopnetwork + " network='networkhoptodesk' style=\"height: 30px; display:block;\"><div style=\"padding-top: 1px; margin-top: 5px; margin-left: 35px; display: block;\">HopToDesk Network (Default)</div></div><br></br> \
+			<div #networkcustom .custom-event " + selectedcustomnetwork + " network='networkcustom' id='networkcustom' style=\"height: 30px; display:block;\"><div style=\"padding-top: 1px; margin-top: 5px; margin-left: 35px; display: block;\">Custom Network Settings</div></div><br></br> \
+			<span style=\"margin-top: 5px; margin-bottom: 5px;\">" + translate("Enter your custom network settings URL:") + "</span><br></br><br></br> \
+			<input|text .outline-focus name='url' value='" + old_url + "' style=\"margin-bottom: 5px;\" #customurl/></div> \
+            </div> \
+			", "", function(el) {
+				if (el) {
+					if (el.id !== 'networkcustom' && el.id !== 'networkhoptodesk' ) {
+						let resurl = $(#customurl).value;
+						if (!resurl) {handler.set_custom_api_url('');return;};
+								
+						if (old_url != resurl) {
+							let valid_url = () => {
+								handler.set_custom_api_url(resurl);
+							}
+							if (resurl == "") return valid_url();
+							view.request({
+								type: #get,
+								url: resurl,
+								success: (s, _) => {
+									let text_res = s.toString();
+									let json;
+									try {
+										json = JSON.parse(text_res);
+									} catch (e) {
+										return msgbox("custom-error", "Custom Network Error", "The custom network URL provided was not valid, please try again.<br/>`" + e + "`", () => {});
+									}
+									if (json instanceof Object && json.turnservers && json.rendezvous) {
+										let host = json.rendezvous.host;
+										//if (host.split('.').length != 4 || host.split('.').map(n => n.toNumber()).filter(n => n > 255 || n < 0).length > 0) {msgbox("custom-error", "Custom Network Error", "Server `" + host + "` is an invalid IPv4 address.");return;}
+										let port = json.rendezvous.port.toInteger();
+										if (port == undefined || port < 0 || port > 65536) return msgbox("custom-error", "Custom Network Error", "Port `" + json.rendezvous.port + "` is an invalid port.");
+										valid_url();
+									} else msgbox("custom-error", "Custom Network Error", "The custom network URL provided did not return a correct response: (`" + text_res + "`).");
+								},
+								error: (e, s) => {
+									msgbox("custom-error", "Custom Network Error", "The custom network URL provided was not valid, please try again.<br/>Status " + s + ": `" + e + "`", () => {});
+								}
+							});
+						}
+
+					} else {
+						if (el && el.attributes['network'] === 'networkhoptodesk') {
+							$(#customurl).value = '';
+							$(#networkhoptodesk).attributes.addClass("checkednetwork");
+							$(#networkhoptodesk).attributes.removeClass("uncheckednetwork");
+							$(#networkcustom).attributes.removeClass("checkednetwork");
+							$(#networkcustom).attributes.addClass("uncheckednetwork");
+						}
+						if (el && el.attributes['network'] === 'networkcustom') {
+							$(#customurl).state.focus = true;
+							$(#networkhoptodesk).attributes.removeClass("checkednetwork");
+							$(#networkhoptodesk).attributes.addClass("uncheckednetwork");
+							$(#networkcustom).attributes.addClass("checkednetwork");
+							$(#networkcustom).attributes.removeClass("uncheckednetwork");
+						}
+						return;
+					}
                 }
+				
+				if (!resurl) return;
+
             }, 240)
         } else if (me.id == "show-settings-button") {
             handler.set_config_option("show-settings-button", (show_settings_button = !show_settings_button) ? "Y" : "");
@@ -467,7 +494,7 @@ class MyIdMenu: Reactor.Component {
             <div><span>" + translate("ID Server") + ": </span><input|text .outline-focus name='id' value='" + old_id + "' /></div> \
             <div><span>" + translate("Relay Server") + ": </span><input|text name='relay' value='" + old_relay + "' /></div> \
             </div> \
-            ", function(res=null) {
+            ", "", function(res=null) {
                 if (!res) return;
                 var id = (res.id || "").trim();
                 var relay = (res.relay || "").trim();
@@ -494,7 +521,7 @@ class MyIdMenu: Reactor.Component {
             <div><span>{translate("Username")}:</span><input|text name='username' value={old_username} /></div>
             <div><span>{translate("Password")}:</span><PasswordComponent value={old_password} /></div>
             </div>
-            , function(res=null) {
+            , "", function(res=null) {
                 if (!res) return;
                 var proxy = (res.proxy || "").trim();
                 var username = (res.username || "").trim();
@@ -539,7 +566,7 @@ function editDirectAccessPort() {
                     <input|text name='port' novalue={21118} />;
     msgbox("custom-direct-access-port", translate('Direct IP Access Settings'), <div .form .set-password>
             <div><span style="width: 60px; ">{translate('Port')}:</span>{port}</div>
-        </div>, function(res=null) {
+        </div>, "", function(res=null) {
         if (!res) return;
         var p = (res.port || '').trim();
         if (p) {
@@ -580,7 +607,7 @@ class App: Reactor.Component
 
                     {!is_win || handler.is_installed() ? "": <InstallMe />}
                     {is_win && handler.is_installed() ? <EmptyMe />: ""}
-					{handler.requires_update() ? <div #launch-update .update_available .link url='https://www.hoptodesk.com/'>{translate('NEW UPDATE AVAILABLE')}</div> : ""}
+					{handler.requires_update() ? <div #launch-update .update_available .link url='https://www.hoptodesk.com/'>{translate('New Update Available')}</div> : ""}
                     {is_can_screen_recording ? "": <CanScreenRecording />}
                     {is_can_screen_recording && !handler.is_process_trusted(false) ? <TrustMe /> : ""}
                     {!service_stopped && is_can_screen_recording && handler.is_process_trusted(false) && handler.is_installed() && !handler.is_installed_daemon(false) ? <InstallDaemon /> : ""}
@@ -623,10 +650,10 @@ class App: Reactor.Component
     function newRemote(type) {
         createNewConnect(this.remote_id.value, type);
     }
-	
+
     event click $(#launch-update) {
         handler.open_url("https://www.hoptodesk.com");
-    }	
+    }
 }
 
 class InstallMe: Reactor.Component {
@@ -693,7 +720,6 @@ class UpgradeMe: Reactor.Component {
         handler.update_me("");
     }
 }
-
 class UpdateMe: Reactor.Component {
     function render() {
         var update_or_download = "download"; // !is_win ? "download" : "update";
@@ -864,7 +890,8 @@ function watch_screen_recording() {
 class PasswordEyeArea : Reactor.Component {
     render() {
         var method = handler.get_option('verification-method');
-        var value = method != 'use-permanent-password' ? password_cache[0] : "-";
+        var mode= handler.get_option('approve-mode');
+        var value = mode == 'click' ||  method == 'use-permanent-password' ? "-" : password_cache[0];
         return
             <div .eye-area style="width: *">
                 <input|text @{this.input} readonly value={value} title={translate('Password')}/>
@@ -889,7 +916,7 @@ class TemporaryPasswordLengthMenu: Reactor.Component {
         var me = this;
         var method = handler.get_option('verification-method');
         self.timer(1ms, function() { me.toggleMenuState() });
-        return <li disabled={ method == 'use-permanent-password' ? "true" : "false" }>{translate("Set temporary password length")}
+        return <li disabled={ method == 'use-permanent-password' ? "true" : "false" }>{translate("One-time password length")}
             <menu #temporary-password-length>
                 <li #temporary-password-length-6><span>{svg_checkmark}</span>6</li>
                 <li #temporary-password-length-8><span>{svg_checkmark}</span>8</li>
@@ -941,27 +968,46 @@ class PasswordArea: Reactor.Component {
 
     function renderPop() {
         var method = handler.get_option('verification-method');
+        var approve_mode= handler.get_option('approve-mode');
+        var show_password = approve_mode != 'click';
         return <popup><menu.context #edit-password-context>
-            <li #use-temporary-password><span>{svg_checkmark}</span>{translate('Use temporary password')}</li>
-            <li #use-permanent-password><span>{svg_checkmark}</span>{translate('Use permanent password')}</li>
-            <li #use-both-passwords><span>{svg_checkmark}</span>{translate('Use both passwords')}</li>
-            <div .separator />
-            <li #set-password  disabled={ method == 'use-temporary-password' ? "true" : "false" }>{translate('Set permanent password')}</li>
-            <TemporaryPasswordLengthMenu />
+            <li #approve-mode-password><span>{svg_checkmark}</span>{translate('Accept sessions via password')}</li>
+            <li #approve-mode-click><span>{svg_checkmark}</span>{translate('Accept sessions via click')}</li>
+            <li #approve-mode-both><span>{svg_checkmark}</span>{translate('Accept sessions via both')}</li>
+            { !show_password ? '' : <div .separator /> }
+            { !show_password ? '' : <li #use-temporary-password><span>{svg_checkmark}</span>{translate('Use one-time password')}</li> }
+            { !show_password ? '' : <li #use-permanent-password><span>{svg_checkmark}</span>{translate('Use permanent password')}</li> }
+            { !show_password ? '' : <li #use-both-passwords><span>{svg_checkmark}</span>{translate('Use both passwords')}</li> }
+            { !show_password ? '' : <div .separator /> }
+            { !show_password ? '' : <li #set-password  disabled={ method == 'use-temporary-password' ? "true" : "false" }>{translate('Set permanent password')}</li> }
+            { !show_password ? '' : <TemporaryPasswordLengthMenu /> }
         </menu></popup>;
     }
 
     function toggleMenuState() {
-        var id = handler.get_option('verification-method');
-        if (id != 'use-temporary-password' && id != 'use-permanent-password')
-            id = 'use-both-passwords';
-        for (var el in [this.$(li#use-temporary-password), this.$(li#use-permanent-password), this.$(li#use-both-passwords)]) {
-            el.attributes.toggleClass("selected", el.id == id);
+         var mode= handler.get_option('approve-mode');
+        var mode_id;
+        if (mode == 'password')
+            mode_id = 'approve-mode-password';
+        else if (mode == 'click')
+            mode_id = 'approve-mode-click';
+        else
+            mode_id = 'approve-mode-both';
+        var pwd_id = handler.get_option('verification-method');
+        if (pwd_id != 'use-temporary-password' && pwd_id != 'use-permanent-password')
+            pwd_id = 'use-both-passwords';
+        for (var el in this.$$(menu#edit-password-context>li)) {
+            if (el.id.indexOf("approve-mode-") == 0)
+                el.attributes.toggleClass("selected", el.id == mode_id);
+            if (el.id.indexOf("use-") == 0)
+                el.attributes.toggleClass("selected", el.id == pwd_id);
         }
     }
 
     event click $(svg#edit) (_, me) {
-        temporaryPasswordLengthMenu.update({show: true });
+        var approve_mode= handler.get_option('approve-mode');
+        var show_password = approve_mode != 'click';
+        if(show_password && temporaryPasswordLengthMenu) temporaryPasswordLengthMenu.update({show: true });
         var menu = $(menu#edit-password-context);
         me.popup(menu);
     }
@@ -974,11 +1020,11 @@ class PasswordArea: Reactor.Component {
             <div><span>" + translate('Password') + ":</span><input|password(password) .outline-focus " + value_field + " /></div> \
             <div><span>" + translate('Confirmation') + ":</span><input|password(confirmation) " + value_field + " /></div> \
         </div> \
-        ", function(res=null) {
+        ", "", function(res=null) {
             if (!res) return;
             var p0 = (res.password || "").trim();
             var p1 = (res.confirmation || "").trim();
-            if (p0.length < 6) {
+            if (p0.length < 6 && p0.length != 0) {
                 return translate("Too short, at least 6 characters.");
             }
             if (p0 != p1) {
@@ -994,16 +1040,28 @@ class PasswordArea: Reactor.Component {
             handler.set_option('verification-method', me.id);
             this.toggleMenuState();
             passwordArea.update();
+        } else if (me.id.indexOf('approve-mode') == 0) {
+            var approve_mode;
+            if (me.id == 'approve-mode-password')
+                approve_mode = 'password';
+            else if (me.id == 'approve-mode-click')
+                approve_mode = 'click';
+            else
+                approve_mode = '';
+            handler.set_option('approve-mode', approve_mode);
+            this.toggleMenuState();
+            passwordArea.update();
         }
     }
 }
 
-var password_cache = ["","",""];
+var password_cache = ["","","",""];
 function updatePasswordArea() {
     self.timer(1s, function() {
         var temporary_password = handler.temporary_password();
         var verification_method = handler.get_option('verification-method');
         var temporary_password_length = handler.get_option('temporary-password-length');
+        var approve_mode = handler.get_option('approve-mode');
         var update = false;
         if (password_cache[0] != temporary_password) {
             password_cache[0] = temporary_password;
@@ -1017,11 +1075,16 @@ function updatePasswordArea() {
             password_cache[2] = temporary_password_length;
             update = true;
         }
+        if (password_cache[3] != approve_mode) {
+            password_cache[3] = approve_mode;
+            update = true;
+        }
         if (update) passwordArea.update();
         updatePasswordArea();
     });
 }
 updatePasswordArea();
+
 class ID: Reactor.Component {
     function render() {
         return <input type="text" #remote_id .outline-focus title={translate('Enter Remote ID')} novalue={translate("Enter Remote ID")} maxlength="21"
@@ -1116,24 +1179,13 @@ function showSettings() {
 }
 
 function checkConnectStatus() {
+    //handler.check_mouse_time(); // trigger connection status updater
     self.timer(1s, function() {
         var tmp = !!handler.get_option("stop-service");
         if (tmp != service_stopped) {
             service_stopped = tmp;
             app.update();
         }
-/*
-        tmp = !!handler.get_option("stop-rendezvous-service");
-        if (tmp != rendezvous_service_stopped) {
-            rendezvous_service_stopped = tmp;
-            myIdMenu.update();
-        }
-        tmp = handler.using_public_server();
-        if (tmp != using_public_server) {
-            using_public_server = tmp;
-            app.connect_status.update();
-        }
-*/
         tmp = handler.get_connect_status();
         if (tmp[0] != connect_status) {
             connect_status = tmp[0];
@@ -1201,7 +1253,7 @@ function login() {
     msgbox("custom-login", translate('Login'), <div .form .set-password>
             <div><span>{translate('Username')}:</span><input|text name="username" value={name0} .outline-focus title={translate("Username")} /></div>
             <div><span>{translate('Password')}:</span><PasswordComponent value={pass0} /></div>
-        </div>, function(res=null, show_progress) {
+        </div>, "", function(res=null, show_progress) {
         if (!res) return;
         show_progress();
         var name = (res.username || '').trim();

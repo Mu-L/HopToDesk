@@ -1,5 +1,4 @@
 // 2FA
-
 use crate::two_factor_auth::sockets::{AuthAnswer, TFAChecker};
 use futures::lock::Mutex;
 use hbb_common::{log, tokio};
@@ -10,7 +9,7 @@ pub mod utils {
     use crate::two_factor_auth::api_access;
     use hbb_common::config::Config;
     use hbb_common::rand::random;
-    use image::{Luma, Rgba};
+    use image::{Rgba};
     use qrcode::QrCode;
     use sha2::{Digest, Sha256, Sha512};
 
@@ -95,7 +94,7 @@ pub mod utils {
 }
 
 mod api_access {
-    use serde_derive::{Deserialize, Serialize};
+    use serde_derive::{Deserialize};
 
     #[derive(Deserialize)]
     struct WebsocketsURL {
@@ -129,8 +128,7 @@ mod api_access {
     }
 
     pub async fn get_hash_algorithm() -> String {
-        let body =
-            serde_json::from_value::<API2FAWrapper>(hbb_common::api::call_api().await.unwrap());
+        let body = serde_json::from_value::<API2FAWrapper>(hbb_common::api::call_api().await.unwrap());
 
         body.map(|x| x.tfa.and_then(|x| x.hash_algorithm))
             .unwrap_or(Some("md5".to_owned()))
@@ -138,8 +136,7 @@ mod api_access {
     }
 
     pub async fn get_ping_time() -> f64 {
-        let body =
-            serde_json::from_value::<API2FAWrapper>(hbb_common::api::call_api().await.unwrap());
+        let body = serde_json::from_value::<API2FAWrapper>(hbb_common::api::call_api().await.unwrap());
 
         body.map(|x| x.tfa.and_then(|x| x.ping_time))
             .unwrap_or(Some(10.0))
@@ -151,17 +148,16 @@ pub mod sockets {
     use crate::two_factor_auth::api_access;
     use crate::two_factor_auth::utils::*;
     use futures::lock::Mutex;
-    use futures::{FutureExt, SinkExt, StreamExt, TryStreamExt};
+    use futures::{SinkExt, StreamExt};
     use hbb_common::tokio::net::TcpStream;
     use hbb_common::tokio::time::sleep;
     use hbb_common::{log, tokio};
     use serde_derive::{Deserialize, Serialize};
-    use std::fmt::{Display, Formatter, Write};
-    use std::future::Future;
+    use std::fmt::{Display, Formatter};
     use std::ops::{Deref, DerefMut};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
-    use tokio_tungstenite::tungstenite::{Error, Message};
+    use tokio_tungstenite::tungstenite::{Message};
     use tokio_tungstenite::Connector::NativeTls;
     use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
@@ -491,7 +487,7 @@ pub mod ui {
     use crate::two_factor_auth::utils::*;
     use crate::two_factor_auth::{TFAManager, TFA_MANAGER};
     use hbb_common::config::Config;
-    use hbb_common::log;
+    use hbb_common::{log};
     use sciter::{EventHandler, Value, HELEMENT};
     use std::time::Instant;
 

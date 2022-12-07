@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use crate::client::*;
 use hbb_common::{
     allow_err, bail,
@@ -12,7 +13,6 @@ use hbb_common::{
     tokio_util::codec::{BytesCodec, Framed},
     ResultType, Stream,
 };
-use std::sync::Arc;
 
 fn run_rdp(port: u16) {
     std::process::Command::new("cmdkey")
@@ -68,14 +68,14 @@ pub async fn listen(
                         let interface = interface.clone();
                         tokio::spawn(async move {
                             if let Err(err) = run_forward(forward, stream).await {
-                               interface.msgbox("error", "Error", &err.to_string());
+                               interface.msgbox("error", "Error", &err.to_string(), "");
                             }
                             log::info!("connection from {:?} closed", addr);
                             _ = relay;
                        });
                     }
                     Err(err) => {
-                        interface.msgbox("error", "Error", &err.to_string());
+                        interface.msgbox("error", "Error", &err.to_string(), "");
                     }
                     _ => {}
                 }

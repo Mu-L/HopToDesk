@@ -1,12 +1,20 @@
-use crate::rendezvous_mediator::RendezvousMediator;
+use std::{collections::HashMap, sync::atomic::Ordering};
+#[cfg(not(windows))]
+use std::{fs::File, io::prelude::*};
+
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::two_factor_auth::sockets::AuthAnswer;
 
 use bytes::Bytes;
+use parity_tokio_ipc::{
+    Connection as Conn, ConnectionClient as ConnClient, Endpoint, Incoming, SecurityAttributes,
+};
+use serde_derive::{Deserialize, Serialize};
+
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub use clipboard::ClipbaordFile;
 use hbb_common::{
-    allow_err, bail, bytes,
+    allow_err, api, bail, bytes,
     bytes_codec::BytesCodec,
     config::{self, Config, Config2},
     futures::StreamExt as _,
@@ -16,13 +24,8 @@ use hbb_common::{
     tokio_util::codec::Framed,
     ResultType,
 };
-use parity_tokio_ipc::{
-    Connection as Conn, ConnectionClient as ConnClient, Endpoint, Incoming, SecurityAttributes,
-};
-use serde_derive::{Deserialize, Serialize};
-use std::{collections::HashMap, sync::atomic::Ordering};
-#[cfg(not(windows))]
-use std::{fs::File, io::prelude::*};
+
+use crate::rendezvous_mediator::RendezvousMediator;
 
 // State with timestamp, because std::time::Instant cannot be serialized
 #[derive(Debug, Serialize, Deserialize, Copy, Clone)]
@@ -117,6 +120,7 @@ pub enum DataMouse {
     Click(enigo::MouseButton),
     ScrollX(i32),
     ScrollY(i32),
+    Refresh,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -132,9 +136,22 @@ pub enum DataControl {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "t", content = "c")]
+pub enum DataPortableService {
+    Ping,
+    Pong,
+    ConnCount(Option<usize>),
+    Mouse(Vec<u8>),
+    Key(Vec<u8>),
+    RequestStart,
+    WillClose,
+    CmShowElevation(bool),
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(tag = "t", content = "c")]
 pub enum Data {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-	TFA {
+    TFA {
         id: i32,
         answer: crate::two_factor_auth::sockets::AuthAnswer,
     },
@@ -151,9 +168,8 @@ pub enum Data {
         file: bool,
         file_transfer_enabled: bool,
         restart: bool,
-        /// The security numbers of the connection. Empty if None existing.
+        recording: bool,
         security_numbers: String,
-        /// The security qr code of the connection. Empty if None existing.
         security_qr_code: String,
     },
     ChatMessage {
@@ -192,6 +208,8 @@ pub enum Data {
     Mouse(DataMouse),
     Control(DataControl),
     Empty,
+    Disconnected,
+    DataPortableService(DataPortableService),
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -281,7 +299,6 @@ impl CheckIfRestart {
     }
 }
 
-
 async fn handle(data: Data, stream: &mut Connection) {
     match data {
         Data::SystemInfo(_) => {
@@ -355,7 +372,11 @@ async fn handle(data: Data, stream: &mut Connection) {
                 } else if name == "rendezvous_server" {
                     value = Config::get_rendezvous_server().await;
                 } else if name == "rendezvous_servers" {
-                    value = Config::get_rendezvous_servers().await.and_then(|v| Some(v.join(",")));
+                    value = Config::get_rendezvous_servers()
+                        .await
+                        .and_then(|v| Some(v.join(",")));
+                } else if name == "custom-api-url" {
+                    value = Some(get_option_async(&name).await)
                 } else {
                     value = None;
                 }
@@ -371,6 +392,10 @@ async fn handle(data: Data, stream: &mut Connection) {
                     Config::set_permanent_password(&value);
                 } else if name == "salt" {
                     Config::set_salt(&value);
+                } else if name == "custom-api-url" {
+                    set_option_async(&name, &value).await;
+                    api::erase_api().await;
+                    RendezvousMediator::restart()
                 } else {
                     return;
                 }
@@ -380,15 +405,15 @@ async fn handle(data: Data, stream: &mut Connection) {
         Data::Options(value) => match value {
             None => {
                 //let v = Config::get_options();
-				let v: HashMap<String, String> = Config::get_options();
+                let v: HashMap<String, String> = Config::get_options();
                 allow_err!(stream.send(&Data::Options(Some(v))).await);
             }
             Some(value) => {
                 //let _chk = CheckIfRestart::new();
-				let check_restart: CheckIfRestart = CheckIfRestart::new().await;
+                let check_restart: CheckIfRestart = CheckIfRestart::new().await;
                 Config::set_options(value);
                 allow_err!(stream.send(&Data::Options(None)).await);
-				check_restart.check().await;
+                check_restart.check().await;
             }
         },
         Data::NatType(_) => {
@@ -419,6 +444,83 @@ pub async fn connect(ms_timeout: u64, postfix: &str) -> ResultType<ConnectionTmp
     let path = Config::ipc_path(postfix);
     let client = timeout(ms_timeout, Endpoint::connect(&path)).await??;
     Ok(ConnectionTmpl::new(client))
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::main(flavor = "current_thread")]
+pub async fn start_pa() {
+    use crate::audio_service::AUDIO_DATA_SIZE_U8;
+
+    match new_listener("_pa").await {
+        Ok(mut incoming) => {
+            loop {
+                if let Some(result) = incoming.next().await {
+                    match result {
+                        Ok(stream) => {
+                            let mut stream = Connection::new(stream);
+                            let mut device: String = "".to_owned();
+                            if let Some(Ok(Some(Data::Config((_, Some(x)))))) =
+                                stream.next_timeout2(1000).await
+                            {
+                                device = x;
+                            }
+                            if !device.is_empty() {
+                                device = crate::platform::linux::get_pa_source_name(&device);
+                            }
+                            if device.is_empty() {
+                                device = crate::platform::linux::get_pa_monitor();
+                            }
+                            if device.is_empty() {
+                                continue;
+                            }
+                            let spec = pulse::sample::Spec {
+                                format: pulse::sample::Format::F32le,
+                                channels: 2,
+                                rate: crate::platform::PA_SAMPLE_RATE,
+                            };
+                            log::info!("pa monitor: {:?}", device);
+                            // systemctl --user status pulseaudio.service
+                            let mut buf: Vec<u8> = vec![0; AUDIO_DATA_SIZE_U8];
+                            match psimple::Simple::new(
+                                None,                             // Use the default server
+                                &crate::get_app_name(),           // Our application’s name
+                                pulse::stream::Direction::Record, // We want a record stream
+                                Some(&device),                    // Use the default device
+                                "record",                         // Description of our stream
+                                &spec,                            // Our sample format
+                                None,                             // Use default channel map
+                                None, // Use default buffering attributes
+                            ) {
+                                Ok(s) => loop {
+                                    if let Ok(_) = s.read(&mut buf) {
+                                        let out =
+                                            if buf.iter().filter(|x| **x != 0).next().is_none() {
+                                                vec![]
+                                            } else {
+                                                buf.clone()
+                                            };
+                                        if let Err(err) = stream.send_raw(out.into()).await {
+                                            log::error!("Failed to send audio data:{}", err);
+                                            break;
+                                        }
+                                    }
+                                },
+                                Err(err) => {
+                                    log::error!("Could not create simple pulse: {}", err);
+                                }
+                            }
+                        }
+                        Err(err) => {
+                            log::error!("Couldn't get pa client: {:?}", err);
+                        }
+                    }
+                }
+            }
+        }
+        Err(err) => {
+            log::error!("Failed to start pa ipc server: {}", err);
+        }
+    }
 }
 
 #[inline]
@@ -538,7 +640,7 @@ where
 }
 
 #[tokio::main(flavor = "current_thread")]
-async fn get_config(name: &str) -> ResultType<Option<String>> {
+pub async fn get_config(name: &str) -> ResultType<Option<String>> {
     get_config_async(name, 1_000).await
 }
 
@@ -552,13 +654,6 @@ async fn get_config_async(name: &str, ms_timeout: u64) -> ResultType<Option<Stri
     }
     return Ok(None);
 }
-
-/*#[tokio::main(flavor = "current_thread")]
-async fn set_config(name: &str, value: String) -> ResultType<()> {
-    let mut c = connect(1000, "").await?;
-    c.send_config(name, value).await?;
-    Ok(())
-}*/
 
 pub async fn set_config_async(name: &str, value: String) -> ResultType<()> {
     let mut c = connect(1000, "").await?;
@@ -604,7 +699,6 @@ pub fn get_id() -> String {
         Config::get_id()
     }
 }
-
 
 pub async fn get_rendezvous_server(ms_timeout: u64) -> Option<String> {
     if let Ok(Some(v)) = get_config_async("rendezvous_server", ms_timeout).await {
@@ -652,8 +746,22 @@ pub fn set_option(key: &str, value: &str) {
     set_options(options).ok();
 }
 
+pub async fn set_option_async(key: &str, value: &str) {
+    let mut options = get_options_async().await;
+    if value.is_empty() {
+        options.remove(key);
+    } else {
+        options.insert(key.to_owned(), value.to_owned());
+    }
+    set_options_async(options).await.ok();
+}
+
 #[tokio::main(flavor = "current_thread")]
 pub async fn set_options(value: HashMap<String, String>) -> ResultType<()> {
+    set_options_async(value).await
+}
+
+pub async fn set_options_async(value: HashMap<String, String>) -> ResultType<()> {
     if let Ok(mut c) = connect(1000, "").await {
         c.send(&Data::Options(Some(value.clone()))).await?;
         // do not put below before connect, because we need to check should_exit

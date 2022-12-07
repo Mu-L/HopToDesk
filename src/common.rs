@@ -1,34 +1,56 @@
+use std::{
+    future::Future,
+    sync::{Arc, Mutex},
+};
+
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub use arboard::Clipboard as ClipboardContext;
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use hbb_common::compress::decompress;
 use hbb_common::{
     allow_err,
     anyhow::bail,
-    compress::{compress as compress_func, decompress},
+    compress::{compress as compress_func},
     config::{self, Config, COMPRESS_LEVEL, RENDEZVOUS_TIMEOUT},
-    get_version_number, log,
+    log,
     message_proto::*,
-    protobuf::Message as _,
     protobuf::Enum,
+    protobuf::Message as _,
     rendezvous_proto::*,
     sleep, socket_client, tokio, ResultType,
 };
 //#[cfg(any(target_os = "android", target_os = "ios", feature = "cli"))]
 use hbb_common::{config::RENDEZVOUS_PORT, futures::future::join_all};
-use std::sync::{Arc, Mutex};
+
 
 pub const CLIPBOARD_NAME: &'static str = "clipboard";
 pub const CLIPBOARD_INTERVAL: u64 = 333;
+
+// the executable name of the portable version
+pub const PORTABLE_APPNAME_RUNTIME_ENV_KEY: &str = "HOPTODESK_APPNAME";
 
 lazy_static::lazy_static! {
     pub static ref CONTENT: Arc<Mutex<String>> = Default::default();
     pub static ref SOFTWARE_UPDATE_URL: Arc<Mutex<String>> = Default::default();
 }
 
-#[cfg(any(target_os = "android", target_os = "ios"))]
 lazy_static::lazy_static! {
-    pub static ref MOBILE_INFO1: Arc<Mutex<String>> = Default::default();
-    pub static ref MOBILE_INFO2: Arc<Mutex<String>> = Default::default();
+    pub static ref DEVICE_ID: Arc<Mutex<String>> = Default::default();
+    pub static ref DEVICE_NAME: Arc<Mutex<String>> = Default::default();
 }
+
+pub fn global_init() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        if !scrap::is_x11() {
+            crate::server::wayland::set_wayland_scrap_map_err();
+        }
+    }
+    true
+}
+
+pub fn global_clean() {}
 
 #[inline]
 pub fn valid_for_numlock(evt: &KeyEvent) -> bool {
@@ -316,6 +338,7 @@ async fn test_nat_type_() -> ResultType<bool> {
             break;
         }
     }
+	Config::set_option("local-ip-addr".to_owned(), addr.ip().to_string());
     let ok = port1 > 0 && port2 > 0;
     if ok {
         let t = if port1 == port2 {
@@ -430,7 +453,7 @@ pub fn username() -> String {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     return whoami::username().trim_end_matches('\0').to_owned();
     #[cfg(any(target_os = "android", target_os = "ios"))]
-    return MOBILE_INFO2.lock().unwrap().clone();
+    return DEVICE_NAME.lock().unwrap().clone();
 }
 
 #[inline]
@@ -532,11 +555,12 @@ pub fn is_ip(id: &str) -> bool {
         .is_match(id)
 }
 
-/*
+
 pub fn is_setup(name: &str) -> bool {
-    name.to_lowercase().ends_with("setdown.exe") || name.to_lowercase().ends_with("??.exe")
+    name.to_lowercase().ends_with("install.exe")
 }
 
+/*
 pub fn get_custom_rendezvous_server(custom: String) -> String {
     if !custom.is_empty() {
         return custom;

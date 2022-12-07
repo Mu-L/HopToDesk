@@ -36,6 +36,7 @@ html.darktheme {
 div.security_number_block {
   text-align: center;
   font-family: 'Courier New';
+  font-size: 1.1em;
 }
 body {
     margin: 0;

@@ -4,11 +4,10 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
     },
-    time::{Instant, SystemTime},
+    time::Instant,
 };
 
 use futures::{SinkExt, StreamExt};
-use soketto::{handshake::ServerResponse, Data};
 use tokio::net::TcpStream;
 use tokio_tungstenite::Connector::NativeTls;
 use tokio_tungstenite::{tungstenite::Message as WsMessage, MaybeTlsStream, WebSocketStream};
@@ -135,31 +134,30 @@ impl RendezvousMediator {
         });
 
         tokio::pin!(socket_packets);
-
         loop {
             select! {
                 _ = timer.tick() => {
-                    if SHOULD_EXIT.load(Ordering::SeqCst) {
-                        break;
+                              if SHOULD_EXIT.load(Ordering::SeqCst) {
+                                    break;
                     }
                     let now = Instant::now();
                     let now_utc = chrono::Utc::now();
                     if now.duration_since(last_timer) < TIMER_OUT {
                         // a workaround of tokio timer bug
-                        continue;
+                                    continue;
                     }
                     last_timer = now;
                     /*log::info!("noe {:?} chr {:?} last_healthcheck_sent {:?} last_data_received {:?}",now,chrono::Utc::now(),last_healthcheck_sent,last_data_received);
                     log::info!("sub {:?}",now_utc - last_data_received);*/
                     if let Some(last_healthcheck_sent) = last_healthcheck_sent {
                         if now_utc - last_healthcheck_sent > chrono::Duration::seconds(10) {
-                            log::info!("Server is unresponding, disconnect.");
+                                          log::info!("Server is unresponding, disconnect.");
                             break;
                         }
                     } else if now_utc - last_data_received > chrono::Duration::seconds(90) {
                         log::info!("Sending healthcheck.");
                         if let Err(error) = sender.send(WsMessage::Text(HEALTHCHECK.to_owned())).await {
-                            log::info!("Send error: {error}, disconnect.");
+                                          log::info!("Send error: {error}, disconnect.");
                             break;
                         };
                         last_healthcheck_sent = Some(chrono::Utc::now());
@@ -213,25 +211,28 @@ impl RendezvousMediator {
                                 CONNECT_TIMEOUT,
                             ).await
                             {
-                                log::error!("start relay if");
-                                let data = socket_packets.next().await;
-                                if let Some(Ok(tokio_tungstenite::tungstenite::Message::Text(msg))) =
-                                    data{
-                                    log::error!("start relay if 1");
-                                    if let Ok(_) = serde_json::from_str::<rendezvous_messages::RelayReady,>(&msg){
-                                    log::error!("start relay if 2");
-                                        let server_clone = server.clone();
-                                        let addr = relay_connection.addr;
-                                        tokio::spawn(async move {
-                                            let _ = crate::create_tcp_connection(
-                                                server_clone,
-                                                stream,
-                                                addr,
-                                                true,
-                                            )
-                                            .await;
-                                        });
+                                //log::error!("start relay if");
+                                match tokio::time::timeout_at(tokio::time::Instant::now() + Duration::from_secs(10), socket_packets.next()).await {
+                                    Ok(data) => {
+                                        if let Some(Ok(tokio_tungstenite::tungstenite::Message::Text(msg))) = data {
+                                            //log::error!("start relay if 1");
+                                            if let Ok(_) = serde_json::from_str::<rendezvous_messages::RelayReady,>(&msg){
+                                                //log::error!("start relay if 2");
+                                                let server_clone = server.clone();
+                                                let addr = relay_connection.addr;
+                                                tokio::spawn(async move {
+                                                    let _ = crate::create_tcp_connection(
+                                                        server_clone,
+                                                        stream,
+                                                        addr,
+                                                        true,
+                                                    )
+                                                        .await;
+                                                });
+                                            }
+                                        }
                                     }
+                                    Err(err) => log::error!("receive relay from channel timeout: {}", err),
                                 }
                             }
                         } else if msg == HEALTHCHECK {

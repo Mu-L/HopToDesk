@@ -1,24 +1,3 @@
-mod cm;
-#[cfg(feature = "inline")]
-mod inline;
-#[cfg(target_os = "macos")]
-mod macos;
-pub mod remote;
-#[cfg(target_os = "windows")]
-pub mod win_privacy;
-use crate::common::SOFTWARE_UPDATE_URL;
-use crate::{ipc, two_factor_auth};
-use hbb_common::get_version_number;
-use hbb_common::rand::random;
-use hbb_common::{
-    allow_err,
-    config::{self, Config, LocalConfig, PeerConfig, APP_NAME, ICON},
-    futures::future::join_all,
-    log, sleep,
-    tcp::FramedStream,
-    tokio::{self, sync::mpsc, time},
-};
-use sciter::Value;
 use std::{
     collections::HashMap,
     iter::FromIterator,
@@ -26,7 +5,38 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-pub type Childs = Arc<Mutex<(bool, HashMap<(String, String), Child>)>>;
+use sciter::Value;
+
+use hbb_common::{
+    allow_err, api,
+    config::{self, Config, PeerConfig, RENDEZVOUS_PORT, RENDEZVOUS_TIMEOUT},
+    futures::future::join_all,
+    log,
+    protobuf::Message as _,
+    rendezvous_proto::*,
+    tcp::FramedStream,
+    tokio::{self, sync::mpsc},
+};
+
+use crate::common::get_app_name;
+use crate::ui_interface::*;
+use crate::{ipc, two_factor_auth};
+use hbb_common::get_version_number;
+use hbb_common::rand::random;
+
+mod cm;
+#[cfg(feature = "inline")]
+pub mod inline;
+#[cfg(target_os = "macos")]
+mod macos;
+pub mod remote;
+#[cfg(target_os = "windows")]
+pub mod win_privacy;
+
+type Message = RendezvousMessage;
+
+pub type Children = Arc<Mutex<(bool, HashMap<(String, String), Child>)>>;
+#[allow(dead_code)]
 type Status = (i32, bool, i64, String);
 
 lazy_static::lazy_static! {
@@ -34,56 +44,45 @@ lazy_static::lazy_static! {
     static ref STUPID_VALUES: Mutex<Vec<Arc<Vec<Value>>>> = Default::default();
 }
 
-struct UI(
-    Childs,
-    Arc<Mutex<Status>>,
-    Arc<Mutex<HashMap<String, String>>>,
-    Arc<Mutex<String>>,
-    mpsc::UnboundedSender<ipc::Data>,
-    Arc<Mutex<String>>,
-);
-
 struct UIHostHandler;
 
 pub fn start(args: &mut [String]) {
     #[cfg(target_os = "macos")]
-    if args.len() == 1 && args[0] == "--server" {
-        macos::make_tray();
-        return;
-    } else {
-        macos::show_dock();
-    }
+    macos::show_dock();
     #[cfg(all(target_os = "linux", feature = "inline"))]
-    sciter::set_library("/usr/lib/hoptodesk/libsciter-gtk.so").ok();
+    {
+        #[cfg(feature = "appimage")]
+        let prefix = std::env::var("APPDIR").unwrap_or("".to_string());
+        #[cfg(not(feature = "appimage"))]
+        let prefix = "".to_string();
+        #[cfg(feature = "flatpak")]
+        let dir = "/app";
+        #[cfg(not(feature = "flatpak"))]
+        let dir = "/usr";
+        sciter::set_library(&(prefix + dir + "/lib/hoptodesk/libsciter-gtk.so")).ok();
+    }
     // https://github.com/c-smile/sciter-sdk/blob/master/include/sciter-x-types.h
     // https://github.com/rustdesk/rustdesk/issues/132#issuecomment-886069737
     #[cfg(windows)]
     allow_err!(sciter::set_options(sciter::RuntimeOptions::GfxLayer(
         sciter::GFX_LAYER::WARP
     )));
-    //comment out for build windows 7
-	#[cfg(all(windows, not(feature = "inline")))]
+    #[cfg(all(windows, not(feature = "inline")))]
     unsafe {
-        winapi::um::shellscalingapi::SetProcessDpiAwareness(2);
-    }
-    #[cfg(windows)]
-    if args.len() > 0 && args[0] == "--tray" {
-        let options = check_connect_status(false).1;
-        crate::tray::start_tray(options);
-        return;
+        if cfg!(target_pointer_width = "64") {
+            winapi::um::shellscalingapi::SetProcessDpiAwareness(2);
+        }
     }
     use sciter::SCRIPT_RUNTIME_FEATURES::*;
     allow_err!(sciter::set_options(sciter::RuntimeOptions::ScriptFeatures(
         ALLOW_FILE_IO as u8 | ALLOW_SOCKET_IO as u8 | ALLOW_EVAL as u8 | ALLOW_SYSINFO as u8
     )));
     let mut frame = sciter::WindowBuilder::main_window().create();
-    // Include resources from packfolder
     #[cfg(feature = "packui")]
     {
         let resources = include_bytes!("../target/resources.rc");
         frame.archive_handler(resources).expect("Invalid archive");
     }
-
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     frame.register_behavior(
         "tfa-manager",
@@ -106,13 +105,11 @@ pub fn start(args: &mut [String]) {
         args[1] = id;
     }
     if args.is_empty() {
-        let childs: Childs = Default::default();
-        let cloned = childs.clone();
-        std::thread::spawn(move || check_zombie(cloned));
-        // execute this BEFORE the UI gets opened
-        set_version();		
+        let children: Children = Default::default();
+        std::thread::spawn(move || check_zombie(children));
+        set_version();
         //crate::common::check_software_update();
-        frame.event_handler(UI::new(childs));
+        frame.event_handler(UI {});
         frame.sciter_handler(UIHostHandler {});
 
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -123,13 +120,12 @@ pub fn start(args: &mut [String]) {
 
         page = "index.html";
     } else if args[0] == "--install" {
-        let childs: Childs = Default::default();
-        frame.event_handler(UI::new(childs));
+        frame.event_handler(UI {});
         frame.sciter_handler(UIHostHandler {});
         page = "install.html";
     } else if args[0] == "--cm" {
         frame.register_behavior("connection-manager", move || {
-            Box::new(cm::ConnectionManager::new())
+            Box::new(cm::SciterConnectionManager::new())
         });
         page = "cm.html";
     } else if (args[0] == "--connect"
@@ -150,7 +146,7 @@ pub fn start(args: &mut [String]) {
         let args: Vec<String> = iter.map(|x| x.clone()).collect();
         frame.set_title(&id);
         frame.register_behavior("native-remote", move || {
-            Box::new(remote::Handler::new(
+            Box::new(remote::SciterSession::new(
                 cmd.clone(),
                 id.clone(),
                 pass.clone(),
@@ -180,42 +176,31 @@ pub fn start(args: &mut [String]) {
         frame.load_html(html.as_bytes(), Some(page));
     }
     #[cfg(all(not(feature = "inline"), not(feature = "packui")))]
+    frame.load_file(&format!(
+        "file://{}/src/ui/{}",
+        std::env::current_dir()
+            .map(|c| c.display().to_string())
+            .unwrap_or("".to_owned()),
+        page
+    ));
+    #[cfg(all(target_os = "macos", not(feature = "packui")))]
     {
         frame.load_file(&format!(
-            "file://{}/src/ui/{}",
+            "file://{}/../Resources/src/ui/{}",
             std::env::current_dir()
                 .map(|c| c.display().to_string())
                 .unwrap_or("".to_owned()),
             page
         ));
     }
-    #[cfg(all(target_os = "macos", not(feature = "packui")))]
-    {
-		frame.load_file(&format!(
-			"file://{}/../Resources/src/ui/{}",
-			std::env::current_dir()
-				.map(|c| c.display().to_string())
-				.unwrap_or("".to_owned()),
-			page
-		));
-	}
     frame.run_app();
 }
 
-impl UI {
-    fn new(childs: Childs) -> Self {
-        let res = check_connect_status(true);
-        Self(childs, res.0, res.1, Default::default(), res.2, res.3)
-    }
+struct UI {}
 
-    fn recent_sessions_updated(&mut self) -> bool {
-        let mut lock = self.0.lock().unwrap();
-        if lock.0 {
-            lock.0 = false;
-            true
-        } else {
-            false
-        }
+impl UI {
+    fn recent_sessions_updated(&self) -> bool {
+        recent_sessions_updated()
     }
 
     fn get_id(&self) -> String {
@@ -223,154 +208,116 @@ impl UI {
     }
 
     fn temporary_password(&mut self) -> String {
-        self.5.lock().unwrap().clone()
+        temporary_password()
     }
 
     fn update_temporary_password(&self) {
-        allow_err!(ipc::update_temporary_password());
+        update_temporary_password()
     }
 
     fn permanent_password(&self) -> String {
-        ipc::get_permanent_password()
+        permanent_password()
     }
 
     fn set_permanent_password(&self, password: String) {
-        allow_err!(ipc::set_permanent_password(password));
+        set_permanent_password(password);
     }
 
     fn get_remote_id(&mut self) -> String {
-        LocalConfig::get_remote_id()
+        get_remote_id()
     }
 
     fn set_remote_id(&mut self, id: String) {
-        LocalConfig::set_remote_id(&id);
+        set_remote_id(id);
     }
 
     fn goto_install(&mut self) {
-        allow_err!(crate::run_me(vec!["--install"]));
+        goto_install();
     }
 
     fn install_me(&mut self, _options: String, _path: String) {
-        #[cfg(windows)]
-        std::thread::spawn(move || {
-            allow_err!(crate::platform::windows::install_me(
-                &_options, _path, false, false, false
-            ));
-            std::process::exit(0);
-        });
+        install_me(_options, _path, false, false);
     }
 
     fn update_me(&self, _path: String) {
-        #[cfg(target_os = "linux")]
-        {
-            std::process::Command::new("pkexec")
-                .args(&["apt", "install", "-f", &_path])
-                .spawn()
-                .ok();
-            std::fs::remove_file(&_path).ok();
-            crate::run_me(Vec::<&str>::new()).ok();
-        }
-        #[cfg(windows)]
-        {
-            let mut path = _path;
-            if path.is_empty() {
-                if let Ok(tmp) = std::env::current_exe() {
-                    path = tmp.to_string_lossy().to_string();
-                }
-            }
-            std::process::Command::new(path)
-                .arg("--update")
-                .spawn()
-                .ok();
-            std::process::exit(0);
-        }
+        update_me(_path);
     }
 
     fn run_without_install(&self) {
-        crate::run_me(vec!["--noinstall"]).ok();
-        std::process::exit(0);
+        run_without_install();
     }
 
     fn show_run_without_install(&self) -> bool {
-        false
+        show_run_without_install()
     }
+    /*
+        fn has_rendezvous_service(&self) -> bool {
+            has_rendezvous_service()
+        }
 
-    fn get_option(&self, key: String) -> String {
-        self.get_option_(&key)
-    }
-
+        fn get_license(&self) -> String {
+            get_license()
+        }
+    */
     fn get_option_(&self, key: &str) -> String {
+        /*
         if let Some(v) = self.2.lock().unwrap().get(key) {
             v.to_owned()
         } else {
             "".to_owned()
         }
+        */
+        //TODO: fix the above
+        "".to_owned()
+    }
+
+    fn get_option(&self, key: String) -> String {
+        get_option(key)
     }
 
     fn get_local_option(&self, key: String) -> String {
-        LocalConfig::get_option(&key)
+        get_local_option(key)
     }
 
     fn set_local_option(&self, key: String, value: String) {
-        LocalConfig::set_option(key, value);
+        set_local_option(key, value);
     }
 
     fn peer_has_password(&self, id: String) -> bool {
-        !PeerConfig::load(&id).password.is_empty()
+        peer_has_password(id)
     }
 
     fn forget_password(&self, id: String) {
-        let mut c = PeerConfig::load(&id);
-        c.password.clear();
-        c.store(&id);
+        forget_password(id);
     }
 
     fn get_peer_option(&self, id: String, name: String) -> String {
-        let c = PeerConfig::load(&id);
-        c.options.get(&name).unwrap_or(&"".to_owned()).to_owned()
+        get_peer_option(id, name)
     }
 
     fn set_peer_option(&self, id: String, name: String, value: String) {
-        let mut c = PeerConfig::load(&id);
-        if value.is_empty() {
-            c.options.remove(&name);
-        } else {
-            c.options.insert(name, value);
-        }
-        c.store(&id);
+        set_peer_option(id, name, value);
     }
 
+    //fn using_public_server(&self) -> bool {
+    //     using_public_server()
+    // }
+
     fn get_options(&self) -> Value {
+        let hashmap: HashMap<String, String> = serde_json::from_str(&get_options()).unwrap();
         let mut m = Value::map();
-        for (k, v) in self.2.lock().unwrap().iter() {
+        for (k, v) in hashmap {
             m.set_item(k, v);
         }
         m
     }
 
     fn test_if_valid_server(&self, host: String) -> String {
-        hbb_common::socket_client::test_if_valid_server(&host)
+        test_if_valid_server(host)
     }
 
     fn get_sound_inputs(&self) -> Value {
-        let mut a = Value::array(0);
-        #[cfg(windows)]
-        {
-            let inputs = Arc::new(Mutex::new(Vec::new()));
-            let cloned = inputs.clone();
-            // can not call below in UI thread, because conflict with sciter sound com initialization
-            std::thread::spawn(move || *cloned.lock().unwrap() = get_sound_inputs())
-                .join()
-                .ok();
-            for name in inputs.lock().unwrap().drain(..) {
-                a.push(name);
-            }
-        }
-        #[cfg(not(windows))]
-        for name in get_sound_inputs() {
-            a.push(name);
-        }
-        a
+        Value::from_iter(get_sound_inputs())
     }
 
     fn set_options(&self, v: Value) {
@@ -384,26 +331,11 @@ impl UI {
                 }
             }
         }
-
-        *self.2.lock().unwrap() = m.clone();
-        ipc::set_options(m).ok();
+        set_options(m);
     }
 
     fn set_option(&self, key: String, value: String) {
-        #[cfg(target_os = "macos")]
-        if &key == "stop-service" {
-            let is_stop = value == "Y";
-            if is_stop && crate::platform::macos::uninstall() {
-                return;
-            }
-        }
-        let mut options = self.2.lock().unwrap();
-        if value.is_empty() {
-            options.remove(&key);
-        } else {
-            options.insert(key.clone(), value.clone());
-        }
-        ipc::set_options(options.clone()).ok();
+        set_option(key, value);
     }
 
     fn get_config_option(&self, key: String) -> String {
@@ -415,109 +347,69 @@ impl UI {
     }
 
     fn requires_update(&self) -> bool {
+        //log::info!("from config {} Vs from wire  {}", crate::VERSION, Config::get_option("api_version"));
         get_version_number(crate::VERSION) < get_version_number(&Config::get_option("api_version"))
     }
 
     fn install_path(&mut self) -> String {
-        #[cfg(windows)]
-        return crate::platform::windows::get_install_info().1;
-        #[cfg(not(windows))]
-        return "".to_owned();
+        install_path()
     }
 
     fn get_socks(&self) -> Value {
-        let s = ipc::get_socks();
-        match s {
-            None => Value::null(),
-            Some(s) => {
-                let mut v = Value::array(0);
-                v.push(s.proxy);
-                v.push(s.username);
-                v.push(s.password);
-                v
-            }
-        }
+        Value::from_iter(get_socks())
     }
 
     fn set_socks(&self, proxy: String, username: String, password: String) {
-        ipc::set_socks(config::Socks5Server {
-            proxy,
-            username,
-            password,
-        })
-        .ok();
+        set_socks(proxy, username, password)
     }
 
     fn is_installed(&self) -> bool {
-        crate::platform::is_installed()
+        is_installed()
+    }
+
+    fn is_root(&self) -> bool {
+        is_root()
+    }
+
+    fn is_release(&self) -> bool {
+        is_release()
     }
 
     fn is_rdp_service_open(&self) -> bool {
-        #[cfg(windows)]
-        return self.is_installed() && crate::platform::windows::is_rdp_service_open();
-        #[cfg(not(windows))]
-        return false;
+        is_rdp_service_open()
     }
 
     fn is_share_rdp(&self) -> bool {
-        #[cfg(windows)]
-        return crate::platform::windows::is_share_rdp();
-        #[cfg(not(windows))]
-        return false;
+        is_share_rdp()
     }
 
     fn set_share_rdp(&self, _enable: bool) {
-        #[cfg(windows)]
-        crate::platform::windows::set_share_rdp(_enable);
+        set_share_rdp(_enable);
     }
 
     fn is_installed_lower_version(&self) -> bool {
-        #[cfg(not(windows))]
-        return false;
-        #[cfg(windows)]
-        {
-            let installed_version = crate::platform::windows::get_installed_version();
-            let a = hbb_common::get_version_number(crate::VERSION);
-            let b = hbb_common::get_version_number(&installed_version);
-            return a > b;
-        }
+        is_installed_lower_version()
     }
 
     fn closing(&mut self, x: i32, y: i32, w: i32, h: i32) {
-        crate::server::input_service::fix_key_down_timeout_at_exit();
-        LocalConfig::set_size(x, y, w, h);
-
-        #[cfg(target_os = "windows")]
-        {
-            // Minimize to tray if it's enabled
-            if self.get_option("enable-minimize-to-tray".to_string()) != "N" {
-                let (_, _, _, exe) = crate::platform::get_install_info();
-                std::process::Command::new(&exe).arg("--tray").spawn().ok();
-            }
-        }
+        closing(x, y, w, h)
     }
 
     fn get_size(&mut self) -> Value {
-        let s = LocalConfig::get_size();
-        let mut v = Value::array(0);
-        v.push(s.0);
-        v.push(s.1);
-        v.push(s.2);
-        v.push(s.3);
-        v
+        Value::from_iter(get_size())
     }
 
     fn get_mouse_time(&self) -> f64 {
-        self.1.lock().unwrap().2 as _
+        get_mouse_time()
     }
 
     fn check_mouse_time(&self) {
-        allow_err!(self.4.send(ipc::Data::MouseMoveTime(0)));
+        check_mouse_time()
     }
 
     fn get_connect_status(&mut self) -> Value {
         let mut v = Value::array(0);
-        let x = self.1.lock().unwrap().clone();
+        let x = get_connect_status();
         v.push(x.0);
         v.push(x.1);
         v.push(x.3);
@@ -532,18 +424,17 @@ impl UI {
             p.info.hostname.clone(),
             p.info.platform.clone(),
             p.options.get("alias").unwrap_or(&"".to_owned()).to_owned(),
-            p.info.mac_address.clone(),
         ];
         Value::from_iter(values)
     }
 
     fn get_peer(&self, id: String) -> Value {
-        let c = PeerConfig::load(&id);
+        let c = get_peer(id.clone());
         Self::get_peer_value(id, c)
     }
 
     fn get_fav(&self) -> Value {
-        Value::from_iter(LocalConfig::get_fav())
+        Value::from_iter(get_fav())
     }
 
     fn store_fav(&self, fav: Value) {
@@ -555,12 +446,12 @@ impl UI {
                 }
             }
         });
-        LocalConfig::set_fav(tmp);
+        store_fav(tmp);
     }
 
     fn get_recent_sessions(&mut self) -> Value {
         // to-do: limit number of recent sessions, and remove old peer file
-        let peers: Vec<Value> = PeerConfig::peers()
+        let peers: Vec<Value> = get_recent_sessions()
             .drain(..)
             .map(|p| Self::get_peer_value(p.0, p.2))
             .collect();
@@ -568,14 +459,13 @@ impl UI {
     }
 
     fn get_icon(&mut self) -> String {
-        crate::get_icon()
+        get_icon()
     }
 
     fn remove_peer(&mut self, id: String) {
-        PeerConfig::remove(&id);
+        remove_peer(id)
     }
 
-/*
     fn remove_discovered(&mut self, id: String) {
         let mut peers = config::LanPeers::load().peers;
         peers.retain(|x| x.id != id);
@@ -585,159 +475,69 @@ impl UI {
     fn send_wol(&mut self, id: String) {
         crate::lan::send_wol(id)
     }
-*/
-    fn new_remote(&mut self, id: String, remote_type: String) {
-        // Send Wake On LAN if enabled in client
-        let enable_wol = self.get_option(String::from("enable-wol")) == String::from("Y");
-        if enable_wol {
-            let peer_config = PeerConfig::load(&id);
-            let mac_address = peer_config.info.mac_address;
-            if !mac_address.is_empty() {
-                let mut bytes = [0; 6];
-                for (i, byte) in mac_address.split(":").enumerate() {
-                    bytes[i] = u8::from_str_radix(byte, 16).expect("Invalid mac_address!");
-                }
 
-                // Send packet
-                let magic_packet = wake_on_lan::MagicPacket::new(&bytes);
-                magic_packet.send().ok();
-            }
-        }
-        let mut lock = self.0.lock().unwrap();
-        let args = vec![format!("--{}", remote_type), id.clone()];
-        let key = (id.clone(), remote_type.clone());
-        if let Some(c) = lock.1.get_mut(&key) {
-            if let Ok(Some(_)) = c.try_wait() {
-                lock.1.remove(&key);
-            } else {
-                if remote_type == "rdp" {
-                    allow_err!(c.kill());
-                    std::thread::sleep(std::time::Duration::from_millis(30));
-                    c.try_wait().ok();
-                    lock.1.remove(&key);
-                } else {
-                    return;
-                }
-            }
-        }
-        match crate::run_me(args) {
-            Ok(child) => {
-                lock.1.insert(key, child);
-            }
-            Err(err) => {
-                log::error!("Failed to spawn remote: {}", err);
-            }
-        }
+    fn new_remote(&mut self, id: String, remote_type: String) {
+        new_remote(id, remote_type)
     }
 
     fn is_process_trusted(&mut self, _prompt: bool) -> bool {
-        #[cfg(target_os = "macos")]
-        return crate::platform::macos::is_process_trusted(_prompt);
-        #[cfg(not(target_os = "macos"))]
-        return true;
+        is_process_trusted(_prompt)
     }
 
     fn is_can_screen_recording(&mut self, _prompt: bool) -> bool {
-        #[cfg(target_os = "macos")]
-        return crate::platform::macos::is_can_screen_recording(_prompt);
-        #[cfg(not(target_os = "macos"))]
-        return true;
+        is_can_screen_recording(_prompt)
     }
 
     fn is_installed_daemon(&mut self, _prompt: bool) -> bool {
-        #[cfg(target_os = "macos")]
-        return crate::platform::macos::is_installed_daemon(_prompt);
-        #[cfg(not(target_os = "macos"))]
-        return true;
+        is_installed_daemon(_prompt)
     }
 
     fn get_error(&mut self) -> String {
-        #[cfg(target_os = "linux")]
-        {
-            let dtype = crate::platform::linux::get_display_server();
-            if "wayland" == dtype {
-                return "".to_owned();
-            }
-            if dtype != "x11" {
-                return format!(
-                    "{} {}, {}",
-                    self.t("Unsupported display server ".to_owned()),
-                    dtype,
-                    self.t("x11 expected".to_owned()),
-                );
-            }
-        }
-        return "".to_owned();
+        get_error()
     }
 
     fn is_login_wayland(&mut self) -> bool {
-        #[cfg(target_os = "linux")]
-        return crate::platform::linux::is_login_wayland();
-        #[cfg(not(target_os = "linux"))]
-        return false;
+        is_login_wayland()
     }
 
     fn fix_login_wayland(&mut self) {
-        #[cfg(target_os = "linux")]
-        return crate::platform::linux::fix_login_wayland();
+        fix_login_wayland()
     }
 
     fn current_is_wayland(&mut self) -> bool {
-        #[cfg(target_os = "linux")]
-        return crate::platform::linux::current_is_wayland();
-        #[cfg(not(target_os = "linux"))]
-        return false;
+        current_is_wayland()
     }
 
     fn modify_default_login(&mut self) -> String {
-        #[cfg(target_os = "linux")]
-        return crate::platform::linux::modify_default_login();
-        #[cfg(not(target_os = "linux"))]
-        return "".to_owned();
+        modify_default_login()
     }
 
     fn get_software_update_url(&self) -> String {
-        SOFTWARE_UPDATE_URL.lock().unwrap().clone()
+        get_software_update_url()
     }
 
     fn get_new_version(&self) -> String {
-        hbb_common::get_version_from_url(&*SOFTWARE_UPDATE_URL.lock().unwrap())
+        get_new_version()
     }
 
     fn get_version(&self) -> String {
-        crate::VERSION.to_owned()
+        get_version()
     }
 
     fn get_app_name(&self) -> String {
-        crate::get_app_name()
+        get_app_name()
     }
 
     fn get_software_ext(&self) -> String {
-        #[cfg(windows)]
-        let p = "exe";
-        #[cfg(target_os = "macos")]
-        let p = "dmg";
-        #[cfg(target_os = "linux")]
-        let p = "deb";
-        p.to_owned()
+        get_software_ext()
     }
 
     fn get_software_store_path(&self) -> String {
-        let mut p = std::env::temp_dir();
-        let name = SOFTWARE_UPDATE_URL
-            .lock()
-            .unwrap()
-            .split("/")
-            .last()
-            .map(|x| x.to_owned())
-            .unwrap_or(crate::get_app_name());
-        p.push(name);
-        format!("{}.{}", p.to_string_lossy(), self.get_software_ext())
+        get_software_store_path()
     }
 
     fn create_shortcut(&self, _id: String) {
-        #[cfg(windows)]
-        crate::platform::windows::create_shortcut(&_id).ok();
+        create_shortcut(_id)
     }
 
     fn discover(&self) {
@@ -747,89 +547,77 @@ impl UI {
     }
 
     fn get_lan_peers(&self) -> String {
-        serde_json::to_string(&config::LanPeers::load().peers).unwrap_or_default()
+        // let peers = get_lan_peers()
+        //     .into_iter()
+        //     .map(|mut peer| {
+        //         (
+        //             peer.remove("id").unwrap_or_default(),
+        //             peer.remove("username").unwrap_or_default(),
+        //             peer.remove("hostname").unwrap_or_default(),
+        //             peer.remove("platform").unwrap_or_default(),
+        //         )
+        //     })
+        //     .collect::<Vec<(String, String, String, String)>>();
+        serde_json::to_string(&get_lan_peers()).unwrap_or_default()
     }
 
     fn get_uuid(&self) -> String {
-        base64::encode(hbb_common::get_uuid())
+        get_uuid()
     }
 
     fn open_url(&self, url: String) {
-        #[cfg(windows)]
-        let p = "explorer";
-        #[cfg(target_os = "macos")]
-        let p = "open";
-        #[cfg(target_os = "linux")]
-        let p = if std::path::Path::new("/usr/bin/firefox").exists() {
-            "firefox"
-        } else {
-            "xdg-open"
-        };
-        allow_err!(std::process::Command::new(p).arg(url).spawn());
+        open_url(url)
     }
 
-/*
-    fn change_id(&self, id: String) {
-        let status = self.3.clone();
-        *status.lock().unwrap() = " ".to_owned();
-        let old_id = self.get_id();
-        std::thread::spawn(move || {
-            *status.lock().unwrap() = change_id(id, old_id).to_owned();
-        });
-    }
+    //fn change_id(&self, id: String) {
+    //    let old_id = self.get_id();
+    //    change_id(id, old_id);
+    //}
 
     fn post_request(&self, url: String, body: String, header: String) {
-        let status = self.3.clone();
-        *status.lock().unwrap() = " ".to_owned();
-        std::thread::spawn(move || {
-            *status.lock().unwrap() = match crate::post_request_sync(url, body, &header) {
-                Err(err) => err.to_string(),
-                Ok(text) => text,
-            };
-        });
+        post_request(url, body, header)
     }
 
     fn is_ok_change_id(&self) -> bool {
-        machine_uid::get().is_ok()
+        is_ok_change_id()
     }
 
     fn get_async_job_status(&self) -> String {
-        self.3.clone().lock().unwrap().clone()
+        get_async_job_status()
     }
 
-*/
     fn t(&self, name: String) -> String {
-        crate::client::translate(name)
+        t(name)
     }
 
     fn is_xfce(&self) -> bool {
-        crate::platform::is_xfce()
+        is_xfce()
     }
 
+    /*
+     fn has_hwcodec(&self) -> bool {
+         has_hwcodec()
+     }
+    */
+    fn get_langs(&self) -> String {
+        get_langs()
+    }
 
     fn get_custom_api_url(&self) -> String {
-        self.get_option_("custom-api-url")
+        if let Ok(Some(v)) = ipc::get_config("custom-api-url") {
+            v
+        } else {
+            "".to_owned()
+        }
     }
 
     fn set_custom_api_url(&self, url: String) {
-        self.set_option("custom-api-url".to_owned(), url);
-        futures::executor::block_on(async move {
-            hbb_common::api::erase_api().await;
-        });		
+        ipc::set_config("custom-api-url", url);
+    }
+    fn default_video_save_directory(&self) -> String {
+        default_video_save_directory()
     }
 
-/*
-    fn has_hwcodec(&self) -> bool {
-        #[cfg(not(feature = "hwcodec"))]
-        return false;
-        #[cfg(feature = "hwcodec")]
-        return true;
-    }
-
-    fn get_langs(&self) -> String {
-        crate::lang::LANGS.to_string()
-    }
-*/    
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     fn is_2fa_enabled(&self) -> bool {
         crate::two_factor_auth::utils::is_2fa_enabled()
@@ -839,7 +627,9 @@ impl UI {
 impl sciter::EventHandler for UI {
     sciter::dispatch_script_call! {
         fn t(String);
+        //fn get_api_server();
         fn is_xfce();
+        //fn using_public_server();
         fn get_id();
         fn temporary_password();
         fn update_temporary_password();
@@ -850,7 +640,9 @@ impl sciter::EventHandler for UI {
         fn closing(i32, i32, i32, i32);
         fn get_size();
         fn new_remote(String, bool);
+        //fn send_wol(String);
         fn remove_peer(String);
+        fn remove_discovered(String);
         fn get_connect_status();
         fn get_mouse_time();
         fn check_mouse_time();
@@ -862,6 +654,8 @@ impl sciter::EventHandler for UI {
         fn get_icon();
         fn install_me(String, String);
         fn is_installed();
+        fn is_root();
+        fn is_release();
         fn set_socks(String, String, String);
         fn get_socks();
         fn is_rdp_service_open();
@@ -886,6 +680,8 @@ impl sciter::EventHandler for UI {
         fn peer_has_password(String);
         fn forget_password(String);
         fn set_peer_option(String, String, String);
+        //fn has_rendezvous_service();
+        //fn get_license();
         fn test_if_valid_server(String);
         fn get_sound_inputs();
         fn set_options(Value);
@@ -900,14 +696,21 @@ impl sciter::EventHandler for UI {
         fn get_software_store_path();
         fn get_software_ext();
         fn open_url(String);
+        //fn change_id(String);
+        fn get_async_job_status();
+        fn post_request(String, String, String);
+        fn is_ok_change_id();
         fn create_shortcut(String);
         fn discover();
         fn get_lan_peers();
         fn get_uuid();
+        //fn has_hwcodec();
+        fn get_langs();
+        fn default_video_save_directory();
+        fn is_2fa_enabled();
+        fn requires_update();
         fn get_config_option(String);
         fn set_config_option(String, String);
-		fn requires_update();
-		fn is_2fa_enabled();
         fn get_custom_api_url();
         fn set_custom_api_url(String);
     }
@@ -919,10 +722,10 @@ impl sciter::host::HostHandler for UIHostHandler {
     }
 }
 
-pub fn check_zombie(childs: Childs) {
+pub fn check_zombie(children: Children) {
     let mut deads = Vec::new();
     loop {
-        let mut lock = childs.lock().unwrap();
+        let mut lock = children.lock().unwrap();
         let mut n = 0;
         for (id, c) in lock.1.iter_mut() {
             if let Ok(Some(_)) = c.try_wait() {
@@ -941,107 +744,40 @@ pub fn check_zombie(childs: Childs) {
     }
 }
 
-
 use serde::Deserialize;
 #[derive(Deserialize)]
 struct Version {
     winversion: String,
     linuxversion: String,
     macversion: String,
-    none: String
+    none: String,
 }
 
 async fn get_version_() -> String {
-    let body =
-        serde_json::from_value::<Version>(hbb_common::api::call_api().await.unwrap()).expect("Could not get api_version.");
-
-    if cfg!(windows) {
-        body.winversion
-    } else if cfg!(macos) {
-        body.macversion
-    } else if cfg!(linux) {
-        body.linuxversion
-    } else {
-        body.none
-    }
+    match hbb_common::api::call_api().await {
+        Ok(v) => {
+            let body =  serde_json::from_value::<Version>(v).expect("Could not get api_version.");
+            
+            if cfg!(windows) {
+                return body.winversion
+            } else if cfg!(macos) {
+                return body.macversion
+            } else if cfg!(linux) {
+                return body.linuxversion
+            } else {
+                return body.none
+            }
+        }
+        Err(e) =>  {
+            log::info!("{:?}", e);
+             return "".to_owned();
+        }
+    };
 }
+
 #[tokio::main]
 async fn set_version() {
     Config::set_option("api_version".to_owned(), get_version_().await)
-}
-
-
-// notice: avoiding create ipc connection repeatedly,
-// because windows named pipe has serious memory leak issue.
-#[tokio::main(flavor = "current_thread")]
-async fn check_connect_status_(
-    reconnect: bool,
-    status: Arc<Mutex<Status>>,
-    options: Arc<Mutex<HashMap<String, String>>>,
-    rx: mpsc::UnboundedReceiver<ipc::Data>,
-    password: Arc<Mutex<String>>,
-) {
-    let mut key_confirmed = false;
-    let mut rx = rx;
-    let mut mouse_time = 0;
-    let mut id = "".to_owned();
-    loop {
-        if let Ok(mut c) = ipc::connect(1000, "").await {
-            let mut timer = time::interval(time::Duration::from_secs(1));
-            loop {
-                tokio::select! {
-                    res = c.next() => {
-                        match res {
-                            Err(err) => {
-                                log::error!("ipc connection closed: {}", err);
-                                break;
-                            }
-                            Ok(Some(ipc::Data::MouseMoveTime(v))) => {
-                                mouse_time = v;
-                                status.lock().unwrap().2 = v;
-                            }
-                            Ok(Some(ipc::Data::Options(Some(v)))) => {
-                                *options.lock().unwrap() = v
-                            }
-                            Ok(Some(ipc::Data::Config((name, Some(value))))) => {
-                                if name == "id" {
-                                    id = value;
-                                } else if name == "temporary-password" {
-                                    *password.lock().unwrap() = value;
-                                }
-                            }
-                            Ok(Some(ipc::Data::OnlineStatus(Some((mut x, c))))) => {
-                                if x > 0 {
-                                    x = 1
-                                }
-                                key_confirmed = c;
-                                *status.lock().unwrap() = (x as _, key_confirmed, mouse_time, id.clone());
-                            }
-                            _ => {}
-                        }
-                    }
-                    Some(data) = rx.recv() => {
-                        allow_err!(c.send(&data).await);
-                    }
-                    _ = timer.tick() => {
-                        c.send(&ipc::Data::OnlineStatus(None)).await.ok();
-                        c.send(&ipc::Data::Options(None)).await.ok();
-                        c.send(&ipc::Data::Config(("id".to_owned(), None))).await.ok();
-                        c.send(&ipc::Data::Config(("temporary-password".to_owned(), None))).await.ok();
-                    }
-                }
-            }
-        }
-        if !reconnect {
-            options
-                .lock()
-                .unwrap()
-                .insert("ipc-closed".to_owned(), "Y".to_owned());
-            break;
-        }
-        *status.lock().unwrap() = (-1, key_confirmed, mouse_time, id.clone());
-        sleep(1.).await;
-    }
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -1070,30 +806,10 @@ fn get_sound_inputs() -> Vec<String> {
         .collect()
 }
 
-fn check_connect_status(
-    reconnect: bool,
-) -> (
-    Arc<Mutex<Status>>,
-    Arc<Mutex<HashMap<String, String>>>,
-    mpsc::UnboundedSender<ipc::Data>,
-    Arc<Mutex<String>>,
-) {
-    let status = Arc::new(Mutex::new((0, false, 0, "".to_owned())));
-    let options = Arc::new(Mutex::new(Config::get_options()));
-    let cloned = status.clone();
-    let cloned_options = options.clone();
-    let (tx, rx) = mpsc::unbounded_channel::<ipc::Data>();
-    let password = Arc::new(Mutex::new(String::default()));
-    let cloned_password = password.clone();
-    std::thread::spawn(move || {
-        check_connect_status_(reconnect, cloned, cloned_options, rx, cloned_password)
-    });
-    (status, options, tx, password)
-}
-/*
 const INVALID_FORMAT: &'static str = "Invalid format";
 const UNKNOWN_ERROR: &'static str = "Unknown error";
 
+/*
 #[tokio::main(flavor = "current_thread")]
 async fn change_id(id: String, old_id: String) -> &'static str {
     if !hbb_common::is_valid_custom_id(&id) {
@@ -1125,6 +841,7 @@ async fn change_id(id: String, old_id: String) -> &'static str {
     }
     err
 }
+*/
 
 async fn check_id(
     rendezvous_server: String,
@@ -1152,7 +869,7 @@ async fn check_id(
             if let Some(Ok(bytes)) = socket.next_timeout(3_000).await {
                 if let Ok(msg_in) = RendezvousMessage::parse_from_bytes(&bytes) {
                     match msg_in.union {
-                        Some(rendezvous_message::Union::register_pk_response(rpr)) => {
+                        Some(rendezvous_message::Union::RegisterPkResponse(rpr)) => {
                             match rpr.result.enum_value_or_default() {
                                 register_pk_response::Result::OK => {
                                     ok = true;
@@ -1185,7 +902,6 @@ async fn check_id(
     }
     ""
 }
-*/
 
 // sacrifice some memory
 pub fn value_crash_workaround(values: &[Value]) -> Arc<Vec<Value>> {

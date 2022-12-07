@@ -23,7 +23,46 @@ mod tw;
 mod vn;
 mod kz;
 mod ua;
+mod fa;
+mod ca;
+mod gr;
+mod sv;
+mod sq;
 mod th;
+
+lazy_static::lazy_static! {
+    pub static ref LANGS: Value =
+        json!(vec![
+            ("en", "English"),
+            ("fr", "Français"),
+            ("de", "Deutsch"),
+            ("es", "Español"),
+            ("it", "Italiano"),
+            ("pt", "Português (Brazil)"),
+            ("ca", "Català"),
+            ("eo", "Esperanto"),
+            ("cs", "Čeština"),
+            ("hu", "Magyar"),
+            ("da", "Dansk"),
+            ("sv", "Svenska"),
+            ("pl", "Polski"),
+            ("sq", "Shqip"),
+            ("sk", "Slovenčina"),
+            ("gr", "Ελληνικά"),
+            ("tr", "Türkçe"),
+            ("ru", "Русский"),
+            ("ua", "Українська"),
+            ("kz", "Қазақ"),
+            ("fa", "فارسی"),
+            ("id", "Indonesia"),
+            ("ko", "한국어"),
+            ("ja", "日本語"),
+            ("cn", "简体中文"),
+            ("tw", "繁體中文"),
+            ("vn", "Tiếng Việt"),
+            ("th", "ไทย"),			
+        ]);
+}
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn translate(name: String) -> String {
@@ -55,7 +94,7 @@ pub fn translate_locale(name: String, locale: &str) -> String {
         "tw" => tw::T.deref(),
         "de" => de::T.deref(),
         "es" => es::T.deref(),
-		"hu" => hu::T.deref(),	
+        "hu" => hu::T.deref(),
         "ru" => ru::T.deref(),
         "eo" => eo::T.deref(),
         "id" => id::T.deref(),
@@ -66,23 +105,30 @@ pub fn translate_locale(name: String, locale: &str) -> String {
         "cs" => cs::T.deref(),
         "da" => da::T.deref(),
         "sk" => sk::T.deref(),
-		"vn" => vn::T.deref(),
-		"pl" => pl::T.deref(),
-		"ja" => ja::T.deref(),
-		"ko" => ko::T.deref(),
-		"kz" => kz::T.deref(),
-        "ua" => ua::T.deref(),			
-		"th" => th::T.deref(),		
+        "vn" => vn::T.deref(),
+        "pl" => pl::T.deref(),
+        "ja" => ja::T.deref(),
+        "ko" => ko::T.deref(),
+        "kz" => kz::T.deref(),
+        "ua" => ua::T.deref(),
+        "fa" => fa::T.deref(),
+        "ca" => ca::T.deref(),
+        "gr" => gr::T.deref(),		
+        "sv" => sv::T.deref(),
+        "sq" => sq::T.deref(),
+        "th" => th::T.deref(),		
         _ => en::T.deref(),
     };
     if let Some(v) = m.get(&name as &str) {
-        v.to_string()
-    } else {
-        if lang != "en" {
-            if let Some(v) = en::T.get(&name as &str) {
-                return v.to_string();
+        if v.is_empty() {
+            if lang != "en" {
+                if let Some(v) = en::T.get(&name as &str) {
+                    return v.to_string();
+                }
             }
+        } else {
+            return v.to_string();
         }
-        name
     }
+    name
 }

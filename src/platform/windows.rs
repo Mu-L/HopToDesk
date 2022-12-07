@@ -9,6 +9,7 @@ use std::io::prelude::*;
 use std::{
     ffi::{CString, OsString},
     fs, io, mem,
+    path::PathBuf,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -19,9 +20,12 @@ use winapi::{
         errhandlingapi::GetLastError,
         handleapi::CloseHandle,
         minwinbase::STILL_ACTIVE,
-        processthreadsapi::{GetCurrentProcess, GetExitCodeProcess, OpenProcess, OpenProcessToken},
+        processthreadsapi::{
+            GetCurrentProcess, GetCurrentProcessId, GetExitCodeProcess, OpenProcess,
+            OpenProcessToken,
+        },
         securitybaseapi::GetTokenInformation,
-        shellapi::ShellExecuteA,
+        shellapi::ShellExecuteW,
         winbase::*,
         wingdi::*,
         winnt::{
@@ -57,7 +61,7 @@ pub fn get_cursor() -> ResultType<Option<u64>> {
     unsafe {
         let mut ci: CURSORINFO = mem::MaybeUninit::uninit().assume_init();
         ci.cbSize = std::mem::size_of::<CURSORINFO>() as _;
-        if GetCursorInfo(&mut ci) == FALSE {
+        if crate::portable_service::client::get_cursor_info(&mut ci) == FALSE {
             return Err(io::Error::last_os_error().into());
         }
         if ci.flags & CURSOR_SHOWING == 0 {
@@ -574,11 +578,11 @@ async fn launch_server(session_id: DWORD, close_first: bool) -> ResultType<HANDL
     Ok(h)
 }
 
-pub fn run_as_user(arg: &str) -> ResultType<Option<std::process::Child>> {
+pub fn run_as_user(arg: Vec<&str>) -> ResultType<Option<std::process::Child>> {
     let cmd = format!(
         "\"{}\" {}",
         std::env::current_exe()?.to_str().unwrap_or(""),
-        arg,
+        arg.join(" "),
     );
     let session_id = unsafe { get_current_session(share_rdp()) };
     use std::os::windows::ffi::OsStrExt;
@@ -590,7 +594,7 @@ pub fn run_as_user(arg: &str) -> ResultType<Option<std::process::Child>> {
     let h = unsafe { LaunchProcessWin(wstr, session_id, TRUE) };
     if h.is_null() {
         bail!(
-            "Failed to launch {} with session id {}: {}",
+            "Failed to launch {:?} with session id {}: {}",
             arg,
             session_id,
             get_error()
@@ -733,6 +737,17 @@ pub fn get_active_username() -> String {
         .to_owned()
 }
 
+pub fn get_active_user_home() -> Option<PathBuf> {
+    let username = get_active_username();
+    if !username.is_empty() {
+        let drive = std::env::var("SystemDrive").unwrap_or("C:".to_owned());
+        let home = PathBuf::from(format!("{}\\Users\\{}", drive, username));
+        if home.exists() {
+            return Some(home);
+        }
+    }
+    None
+}
 pub fn is_prelogin() -> bool {
     let username = get_active_username();
     username.is_empty() || username == "SYSTEM"
@@ -897,7 +912,6 @@ pub fn update_me() -> ResultType<()> {
 fn get_after_install(exe: &str) -> String {
 	let app_name = crate::get_app_name();
     let ext = app_name.to_lowercase();
-		
     format!("
     chcp 65001
     reg add HKEY_CLASSES_ROOT\\.{ext} /f
@@ -1212,7 +1226,7 @@ fn run_cmds(cmds: String, show: bool, tip: &str) -> ResultType<()> {
         .args(&["/C", &tmp_fn])
         .show(show)
         .force_prompt(true)
-        .status();
+        .status();     
     if let Ok(res) = res {
         if res.success() {
             allow_err!(std::fs::remove_file(tmp));
@@ -1296,7 +1310,12 @@ fn get_reg_of(subkey: &str, name: &str) -> String {
 
 /*
 fn get_license_from_exe_name() -> ResultType<License> {
-    let exe = std::env::current_exe()?.to_str().unwrap_or("").to_owned();
+    let mut exe = std::env::current_exe()?.to_str().unwrap_or("").to_owned();
+    // if defined portable appname entry, replace original executable name with it.
+    if let Ok(portable_exe) = std::env::var(PORTABLE_APPNAME_RUNTIME_ENV_KEY) {
+        exe = portable_exe;
+        log::debug!("update portable executable name to {}", exe);
+    }
     get_license_from_string(&exe)
 }
 */
@@ -1440,18 +1459,41 @@ pub fn get_user_token(session_id: u32, as_user: bool) -> HANDLE {
     }
 }
 
-pub fn run_uac(exe: &str, arg: &str) -> ResultType<bool> {
+pub fn run_background(exe: &str, arg: &str) -> ResultType<bool> {
+    let wexe = wide_string(exe);
+    let warg;
     unsafe {
-        let cstring;
-        let ret = ShellExecuteA(
+        let ret = ShellExecuteW(
             NULL as _,
-            CString::new("runas")?.as_ptr() as _,
-            CString::new(exe)?.as_ptr() as _,
+            NULL as _,
+            wexe.as_ptr() as _,
             if arg.is_empty() {
                 NULL as _
             } else {
-                cstring = CString::new(arg)?;
-                cstring.as_ptr() as _
+                warg = wide_string(arg);
+                warg.as_ptr() as _
+            },
+            NULL as _,
+            SW_HIDE,
+        );
+        return Ok(ret as i32 > 32);
+    }
+}
+
+pub fn run_uac(exe: &str, arg: &str) -> ResultType<bool> {
+    let wop = wide_string("runas");
+    let wexe = wide_string(exe);
+    let warg;
+    unsafe {
+        let ret = ShellExecuteW(
+            NULL as _,
+            wop.as_ptr() as _,
+            wexe.as_ptr() as _,
+            if arg.is_empty() {
+                NULL as _
+            } else {
+                warg = wide_string(arg);
+                warg.as_ptr() as _
             },
             NULL as _,
             SW_SHOWNORMAL,
@@ -1461,7 +1503,13 @@ pub fn run_uac(exe: &str, arg: &str) -> ResultType<bool> {
 }
 
 pub fn check_super_user_permission() -> ResultType<bool> {
-    run_uac("cmd", "/c /q")
+    run_uac(
+        std::env::current_exe()?
+            .to_string_lossy()
+            .to_string()
+            .as_str(),
+        "--version",
+    )
 }
 
 pub fn elevate(arg: &str) -> ResultType<bool> {
@@ -1483,7 +1531,14 @@ pub fn run_as_system(arg: &str) -> ResultType<()> {
 }
 
 pub fn elevate_or_run_as_system(is_setup: bool, is_elevate: bool, is_run_as_system: bool) {
-    // avoid possible run recursively due to failed run, which hasn't happened yet.
+    // avoid possible run recursively due to failed run.
+    log::info!(
+        "elevate:{}->{:?}, run_as_system:{}->{}",
+        is_elevate,
+        is_elevated(None),
+        is_run_as_system,
+        crate::username(),
+    );
     let arg_elevate = if is_setup {
         "--noinstall --elevate"
     } else {
@@ -1494,37 +1549,40 @@ pub fn elevate_or_run_as_system(is_setup: bool, is_elevate: bool, is_run_as_syst
     } else {
         "--run-as-system"
     };
-    let rerun_as_system = || {
-        if !is_root() {
-            if run_as_system(arg_run_as_system).is_ok() {
-                std::process::exit(0);
-            } else {
-                log::error!("Failed to run as system");
-            }
-        }
-    };
 
-    if is_elevate {
-        if !is_elevated(None).map_or(true, |b| b) {
-            log::error!("Failed to elevate");
-            return;
-        }
-        rerun_as_system();
-    } else if is_run_as_system {
-        if !is_root() {
-            log::error!("Failed to be system");
+    if is_root() {
+        if is_run_as_system {
+            log::info!("run portable service");
+            crate::portable_service::server::run_portable_service();
         }
     } else {
-        if let Ok(true) = is_elevated(None) {
-            // right click
-            rerun_as_system();
-        } else {
-            // left click || run without install
-            if let Ok(true) = elevate(arg_elevate) {
-                std::process::exit(0);
-            } else {
-                // do nothing but prompt
+        match is_elevated(None) {
+            Ok(elevated) => {
+                if elevated {
+                    if !is_run_as_system {
+                        if run_as_system(arg_run_as_system).is_ok() {
+                            std::process::exit(0);
+                        } else {
+                            unsafe {
+                                log::error!("Failed to run as system, errno={}", GetLastError());
+                            }
+                        }
+                    }
+                } else {
+                    if !is_elevate {
+                        if let Ok(true) = elevate(arg_elevate) {
+                            std::process::exit(0);
+                        } else {
+                            unsafe {
+                                log::error!("Failed to elevate, errno={}", GetLastError());
+                            }
+                        }
+                    }
+                }
             }
+            Err(_) => unsafe {
+                log::error!("Failed to get elevation status, errno={}", GetLastError());
+            },
         }
     }
 }
@@ -1581,4 +1639,56 @@ pub fn is_foreground_window_elevated() -> ResultType<bool> {
         }
         is_elevated(Some(process_id))
     }
+}
+
+fn get_current_pid() -> u32 {
+    unsafe { GetCurrentProcessId() }
+}
+
+pub fn get_double_click_time() -> u32 {
+    unsafe { GetDoubleClickTime() }
+}
+
+fn wide_string(s: &str) -> Vec<u16> {
+    use std::os::windows::prelude::OsStrExt;
+    std::ffi::OsStr::new(s)
+        .encode_wide()
+        .chain(Some(0).into_iter())
+        .collect()
+}
+
+/// send message to currently shown window
+pub fn send_message_to_hnwd(
+    class_name: &str,
+    window_name: &str,
+    dw_data: usize,
+    data: &str,
+    show_window: bool,
+) -> bool {
+    unsafe {
+        let class_name_utf16 = wide_string(class_name);
+        let window_name_utf16 = wide_string(window_name);
+        let window = FindWindowW(class_name_utf16.as_ptr(), window_name_utf16.as_ptr());
+        if window.is_null() {
+            log::warn!("no such window {}:{}", class_name, window_name);
+            return false;
+        }
+        let mut data_struct = COPYDATASTRUCT::default();
+        data_struct.dwData = dw_data;
+        let mut data_zero: String = data.chars().chain(Some('\0').into_iter()).collect();
+        println!("send {:?}", data_zero);
+        data_struct.cbData = data_zero.len() as _;
+        data_struct.lpData = data_zero.as_mut_ptr() as _;
+        SendMessageW(
+            window,
+            WM_COPYDATA,
+            0,
+            &data_struct as *const COPYDATASTRUCT as _,
+        );
+        if show_window {
+            ShowWindow(window, SW_NORMAL);
+            SetForegroundWindow(window);
+        }
+    }
+    return true;
 }

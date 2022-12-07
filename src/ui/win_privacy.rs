@@ -35,7 +35,7 @@ use winapi::{
 
 pub const ORIGIN_PROCESS_EXE: &'static str = "C:\\Windows\\System32\\RuntimeBroker.exe";
 pub const INJECTED_PROCESS_EXE: &'static str = "RuntimeBroker_hoptodesk.exe";
-pub const PRIVACY_WINDOW_NAME: &'static str = "HopToDeskPrivacyWindoww";
+pub const PRIVACY_WINDOW_NAME: &'static str = "HopToDeskPrivacyWindow";
 
 pub const GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT: u32 = 2;
 pub const GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS: u32 = 4;
@@ -318,9 +318,7 @@ fn wait_find_privacy_hwnd(msecs: u128) -> ResultType<HWND> {
 }
 
 pub fn is_process_consent_running() -> ResultType<bool> {
-	use std::os::windows::process::CommandExt;
 	const CREATE_NO_WINDOW: u32 = 0x08000000;
-
     let output = std::process::Command::new("cmd")
         .args(&["/C", "tasklist | findstr consent.exe"])
 		.creation_flags(CREATE_NO_WINDOW)

@@ -1,6 +1,6 @@
 [package]
 name = "hoptodesk"
-version = "1.32.0"
+version = "1.32.4"
 authors = ["hoptodesk <info@hoptodesk.com>"]
 edition = "2021"
 build= "build.rs"
@@ -69,8 +69,9 @@ tempfile = "3.3.0"
 md5 = "0.7.0"
 errno = "0.2.8"
 rdev = { git = "https://github.com/janus/rdev" }
-x25519-dalek = { version = "1.2.0", features = ["reusable_secrets"] }
-chrono = "0.4.22"
+#url = { version = "2.1", features = ["serde"] }
+chrono = "0.4.23"
+cidr-utils = "0.5.9"
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-features=false }
@@ -101,6 +102,8 @@ winreg = "0.10"
 windows-service = "0.4"
 virtual_display = { path = "libs/virtual_display" }
 impersonate_system = { git = "https://github.com/21pages/impersonate-system" }
+shared_memory = "0.12.4"
+shutdown_hooks = "0.1.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc = "0.2"
@@ -119,6 +122,8 @@ rust-pulsectl = { git = "https://github.com/open-trade/pulsectl" }
 async-process = "1.3"
 mouce = { git="https://github.com/janus/mouce.git" }
 evdev = { git="https://github.com/fufesou/evdev" }
+dbus = "0.9"
+dbus-crossroads = "0.5"
 tokio-tungstenite = { version = "^0.17.2", features = ["native-tls-vendored"] }
 native-tls = { version = "0.2.10", features = ["vendored"] }
 
@@ -155,11 +160,11 @@ hound = "3.5"
 [package.metadata.bundle]
 name = "HopToDesk"
 identifier = "com.hoptodesk.hoptodesk"
-icon = ["32x32.png", "128x128.png", "128x128@2x.png"]
-deb_depends = ["libgtk-3-0", "libxcb-randr0", "libxdo3", "libxfixes3", "libxcb-shape0", "libxcb-xfixes0", "libasound2", "libsystemd0", "pipewire", "curl"]
+icon = ["res/32x32.png", "res/128x128.png", "res/128x128@2x.png"]
+deb_depends = ["libgtk-3-0", "libxcb-randr0", "libxdo3", "libxfixes3", "libxcb-shape0", "libxcb-xfixes0", "libasound2", "libsystemd0", "curl", "pipewire"]
 osx_frameworks = ["libsciter"]
 osx_minimum_system_version = "10.14"
-resources = ["mac-tray.png"]
+resources = ["res/mac-tray.png"]
 
 #https://github.com/johnthagen/min-sized-rust
 [profile.release]

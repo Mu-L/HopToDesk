@@ -20,6 +20,7 @@ use hbb_common::{bail, log};
 use include_dir::{include_dir, Dir};
 use objc::{class, msg_send, sel, sel_impl};
 use scrap::{libc::c_void, quartz::ffi::*};
+use std::path::PathBuf;
 
 static PRIVILEGES_SCRIPTS_DIR: Dir =
     include_dir!("$CARGO_MANIFEST_DIR/src/platform/privileges_scripts");
@@ -48,7 +49,7 @@ pub fn is_process_trusted(prompt: bool) -> bool {
 
 // macOS >= 10.15
 // https://stackoverflow.com/questions/56597221/detecting-screen-recording-settings-on-macos-catalina/
-// remove just one app from all the permissions: tccutil reset All com.carriez.rustdesk
+// remove just one app from all the permissions: tccutil reset All com.hoptodesk.app
 pub fn is_can_screen_recording(prompt: bool) -> bool {
     let mut can_record_screen: bool = false;
     unsafe {
@@ -374,6 +375,17 @@ pub fn get_active_userid() -> String {
     get_active_user("-n")
 }
 
+pub fn get_active_user_home() -> Option<PathBuf> {
+    let username = get_active_username();
+    if !username.is_empty() {
+        let home = PathBuf::from(format!("/Users/{}", username));
+        if home.exists() {
+            return Some(home);
+        }
+    }
+    None
+}
+
 pub fn is_prelogin() -> bool {
     get_active_userid() == "0"
 }
@@ -382,12 +394,12 @@ pub fn is_root() -> bool {
     crate::username() == "root"
 }
 
-pub fn run_as_user(arg: &str) -> ResultType<Option<std::process::Child>> {
+pub fn run_as_user(arg: Vec<&str>) -> ResultType<Option<std::process::Child>> {
     let uid = get_active_userid();
     let cmd = std::env::current_exe()?;
-    let task = std::process::Command::new("launchctl")
-        .args(vec!["asuser", &uid, cmd.to_str().unwrap_or(""), arg])
-        .spawn()?;
+    let mut args = vec!["asuser", &uid, cmd.to_str().unwrap_or("")];
+    args.append(&mut arg.clone());
+    let task = std::process::Command::new("launchctl").args(args).spawn()?;
     Ok(Some(task))
 }
 
@@ -524,4 +536,10 @@ pub fn quit_gui() {
     unsafe {
         let () = msg_send!(NSApp(), terminate: nil);
     };
+}
+
+
+pub fn get_double_click_time() -> u32 {
+    // to-do: https://github.com/servo/core-foundation-rs/blob/786895643140fa0ee4f913d7b4aeb0c4626b2085/cocoa/src/appkit.rs#L2823
+    500 as _
 }
