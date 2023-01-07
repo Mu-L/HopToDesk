@@ -192,9 +192,9 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Change Path", "Alterar Caminho"),
         ("Create Folder", "Criar Diretório"),
         ("Please enter the folder name", "Por favor introduza o nome do diretório"),
-        ("Fix it", "Reparar"),
+        ("Disable Wayland", "Reparar"),
         ("Warning", "Aviso"),
-        ("Login screen using Wayland is not supported", "Tela de Login com Wayland não é suportada"),
+        ("Login screen using Wayland is not supported.", "Tela de Login com Wayland não é suportada"),
         ("Reboot required", "Reinicialização necessária"),
         ("Unsupported display server ", "Servidor de display não suportado"),
         ("x11 expected", "x11 em falha"),
@@ -400,6 +400,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
 		("Enable Wake On LAN", "Ativar Wake On LAN"),
 		("Enable 2FA", "Ativar 2FA"),
         ("Scan this QR code with a camera on a secondary device such as a phone to set it up as your 2FA authenticator.", "Digitalize este código QR com uma câmera em um dispositivo secundário, como um telefone, para configurá-lo como seu autenticador 2FA."),
-        ("You will need to confirm the 2FA on the secondary device with you when trying to connect to this desktop.", "Você precisará confirmar o 2FA no dispositivo secundário com você ao tentar se conectar a esta área de trabalho."),		
+        ("You will need to confirm the 2FA on the secondary device with you when trying to connect to this desktop.", "Você precisará confirmar o 2FA no dispositivo secundário com você ao tentar se conectar a esta área de trabalho."),
+		("Choose Network", "Escolha a rede"),				
     ].iter().cloned().collect();
 }

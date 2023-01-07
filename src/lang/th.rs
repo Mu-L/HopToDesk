@@ -174,7 +174,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Change Path","เปลี่ยนเส้นทาง"),
         ("Create Folder","สร้างโฟลเดอร์"),
         ("Please enter the folder name","กรุณาใส่ชื่อโฟลเดอร์"),
-        ("Fix it","แก้ไข"),
+        ("Disable Wayland","ปิดการใช้งาน Wayland"),
         ("Warning","คำเตือน"),
         ("Login screen using Wayland is not supported.","ไม่รองรับหน้าจอเข้าสู่ระบบโดยใช้ Wayland"),
         ("Reboot required","จำเป็นต้องรีบูต"),

@@ -179,7 +179,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Change Path", "更改路徑"),
         ("Create Folder", "建立資料夾"),
         ("Please enter the folder name", "請輸入資料夾名稱"),
-        ("Fix it", "修復"),
+        ("Disable Wayland", "修復"),
         ("Warning", "警告"),
         ("Login screen using Wayland is not supported.", "不支援使用 Wayland 的登入畫面"),
         ("Reboot required", "需要重新啟動"),

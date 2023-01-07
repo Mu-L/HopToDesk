@@ -188,7 +188,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Change Path", "Zmeniť adresár"),
         ("Create Folder", "Vytvoriť adresár"),
         ("Please enter the folder name", "Zadajte názov adresára"),
-        ("Fix it", "Opraviť to"),
+        ("Disable Wayland", "Opraviť to"),
         ("Warning", "Upozornenie"),
         ("Login screen using Wayland is not supported.", "Prihlasovacia obrazovka prostredníctvom Wayland nie je podporovaná"),
         ("Reboot required", "Vyžaduje sa reštart"),

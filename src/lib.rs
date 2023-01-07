@@ -1,6 +1,7 @@
 #[cfg(not(any(target_os = "ios")))]
 /// cbindgen:ignore
 pub mod platform;
+mod keyboard;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub use platform::{get_cursor, get_cursor_data, get_cursor_pos, start_os_service};
 #[cfg(not(any(target_os = "ios")))]
@@ -52,6 +53,5 @@ pub mod clipboard_file;
 
 #[cfg(all(windows, feature = "with_rc"))]
 pub mod rc;
-
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod two_factor_auth;

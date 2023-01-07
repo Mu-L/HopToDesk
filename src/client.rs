@@ -51,10 +51,7 @@ pub use super::lang::*;
 pub mod file_trait;
 pub mod helper;
 pub mod io_loop;
-use crate::{
-    server::video_service::{SCRAP_X11_REF_URL, SCRAP_X11_REQUIRED},
-    ui_session_interface::global_save_keyboard_mode,
-};
+use crate::server::video_service::{SCRAP_X11_REF_URL, SCRAP_X11_REQUIRED};
 pub static SERVER_KEYBOARD_ENABLED: AtomicBool = AtomicBool::new(true);
 pub static SERVER_FILE_TRANSFER_ENABLED: AtomicBool = AtomicBool::new(true);
 pub static SERVER_CLIPBOARD_ENABLED: AtomicBool = AtomicBool::new(true);
@@ -528,16 +525,16 @@ impl Client {
         token: &str,
         conn_type: ConnType,
     ) -> ResultType<Stream> {
-        let any_addr = Config::get_any_listen_addr();
         let mut succeed = false;
         let mut uuid = "".to_owned();
+        let mut ipv4 = true;
         for i in 1..=3 {
             // use different socket due to current hbbs implement requiring different nat address for each attempt
-            let mut socket =
-                socket_client::connect_tcp(rendezvous_server, any_addr, RENDEZVOUS_TIMEOUT)
-                    .await
-                    .with_context(|| "Failed to connect to rendezvous server")?;
+            let mut socket = socket_client::connect_tcp(rendezvous_server, RENDEZVOUS_TIMEOUT)
+                .await
+                .with_context(|| "Failed to connect to rendezvous server")?;
 
+            ipv4 = socket.local_addr().is_ipv4();
             let mut msg_out = RendezvousMessage::new();
             uuid = Uuid::new_v4().to_string();
             log::info!(
@@ -581,10 +578,10 @@ impl Client {
         relay_server: String,
         key: &str,
         conn_type: ConnType,
+        ipv4: bool,
     ) -> ResultType<Stream> {
         let mut conn = socket_client::connect_tcp(
-            crate::check_port(relay_server, RELAY_PORT),
-            Config::get_any_listen_addr(),
+            socket_client::ipv4_to_ipv6(crate::check_port(relay_server, RELAY_PORT), ipv4),
             CONNECT_TIMEOUT,
         )
         .await
@@ -992,6 +989,17 @@ impl LoginConfigHandler {
         self.save_config(config);
     }
 
+    /// Save keyboard mode to the current config.
+    ///
+    /// # Arguments
+    ///
+    /// * `value` - The view style to be saved.
+    pub fn save_keyboard_mode(&mut self, value: String) {
+        let mut config = self.load_config();
+        config.keyboard_mode = value;
+        self.save_config(config);
+    }
+    
     /// Save scroll style to the current config.
     ///
     /// # Arguments
@@ -1373,9 +1381,6 @@ interface.msgbox("re-input-password", err, "Do you want to enter again?", "");
         if !pi.version.is_empty() {
             self.version = hbb_common::get_version_number(&pi.version);
         }
-        if hbb_common::get_version_number(&pi.version) < hbb_common::get_version_number("1.2.0") {
-            global_save_keyboard_mode("legacy".to_owned());
-        }
         self.features = pi.features.clone().into_option();
         let serde = PeerInfoSerde {
             username: pi.username.clone(),
@@ -1396,6 +1401,14 @@ interface.msgbox("re-input-password", err, "Do you want to enter again?", "");
             if !password0.is_empty() {
                 config.password = Default::default();
                 log::debug!("remove password of {}", self.id);
+            }
+        }
+        if config.keyboard_mode == "" {
+            if hbb_common::get_version_number(&pi.version) < hbb_common::get_version_number("1.2.0")
+            {
+                config.keyboard_mode = "legacy".to_string();
+            } else {
+                config.keyboard_mode = "map".to_string();
             }
         }
         self.conn_id = pi.conn_id;
@@ -1704,6 +1717,35 @@ fn _input_os_password(p: String, activate: bool, interface: impl Interface) {
     interface.send(Data::Message(msg_out));
 }
 
+/// Handle login error.
+/// Return true if the password is wrong, return false if there's an actual error.
+pub fn handle_login_error(
+    lc: Arc<RwLock<LoginConfigHandler>>,
+    err: &str,
+    interface: &impl Interface,
+) -> bool {
+    if err == "Wrong Password" {
+        lc.write().unwrap().password = Default::default();
+        interface.msgbox("re-input-password", err, "Do you want to enter again?", "");
+        true
+    } else if err == "No Password Access" {
+        lc.write().unwrap().password = Default::default();
+        interface.msgbox(
+            "wait-remote-accept-nook",
+            "Prompt",
+            "Please wait for the remote side to accept your session request...",
+            "",
+        );
+        true
+    } else {
+        if err.contains(SCRAP_X11_REQUIRED) {
+            interface.msgbox("error", "Login Error", err, SCRAP_X11_REF_URL);
+        } else {
+            interface.msgbox("error", "Login Error", err, "");
+        }
+        false
+    }
+}
 /// Handle hash message sent by peer.
 /// Hash will be used for login.
 ///
@@ -2013,7 +2055,3 @@ fn decode_id_pk(signed: &[u8], key: &sign::PublicKey) -> ResultType<(String, [u8
     }
 }
 
-#[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
-pub fn disable_keyboard_listening() {
-    crate::ui_session_interface::KEYBOARD_HOOKED.store(true, Ordering::SeqCst);
-}

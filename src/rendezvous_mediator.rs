@@ -15,10 +15,9 @@ use tokio_tungstenite::{tungstenite::Message as WsMessage, MaybeTlsStream, WebSo
 use hbb_common::{
     allow_err,
     anyhow::{anyhow, bail},
-    config::{self, Config, CONNECT_TIMEOUT, REG_INTERVAL, RENDEZVOUS_PORT},
+    config::{Config, CONNECT_TIMEOUT, RENDEZVOUS_PORT},
     futures::future::join_all,
     log,
-    protobuf::Message as _,
     rendezvous_proto::*,
     sleep, socket_client,
     tokio::{
@@ -33,8 +32,6 @@ use crate::{
     server::{check_zombie, new as new_server, ServerPtr},
     turn_client,
 };
-
-type Message = RendezvousMessage;
 
 lazy_static::lazy_static! {
     static ref SOLVING_PK_MISMATCH: Arc<Mutex<String>> = Default::default();
@@ -203,7 +200,6 @@ impl RendezvousMediator {
                         } else if let Ok(relay_connection) =
                             serde_json::from_str::<rendezvous_messages::RelayConnection>(&msg)
                         {
-                            log::error!("start relay");
                             last_data_received = chrono::Utc::now();
                             if let Ok(stream) = socket_client::connect_tcp(
                                 relay_connection.addr,
@@ -211,13 +207,10 @@ impl RendezvousMediator {
                                 CONNECT_TIMEOUT,
                             ).await
                             {
-                                //log::error!("start relay if");
                                 match tokio::time::timeout_at(tokio::time::Instant::now() + Duration::from_secs(10), socket_packets.next()).await {
                                     Ok(data) => {
                                         if let Some(Ok(tokio_tungstenite::tungstenite::Message::Text(msg))) = data {
-                                            //log::error!("start relay if 1");
                                             if let Ok(_) = serde_json::from_str::<rendezvous_messages::RelayReady,>(&msg){
-                                                //log::error!("start relay if 2");
                                                 let server_clone = server.clone();
                                                 let addr = relay_connection.addr;
                                                 tokio::spawn(async move {

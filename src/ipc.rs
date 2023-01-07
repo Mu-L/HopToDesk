@@ -4,7 +4,6 @@ use std::{fs::File, io::prelude::*};
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::two_factor_auth::sockets::AuthAnswer;
-
 use bytes::Bytes;
 use parity_tokio_ipc::{
     Connection as Conn, ConnectionClient as ConnClient, Endpoint, Incoming, SecurityAttributes,
@@ -77,6 +76,11 @@ pub enum FS {
     WriteDone {
         id: i32,
         file_num: i32,
+    },
+    WriteError {
+        id: i32,
+        file_num: i32,
+        err: String,
     },
     WriteOffset {
         id: i32,
@@ -369,6 +373,9 @@ async fn handle(data: Data, stream: &mut Connection) {
                     value = Some(Config::get_permanent_password());
                 } else if name == "salt" {
                     value = Some(Config::get_salt());
+                } else if name == "password-file-transfer" {
+                    let id_password = password::file_transfer_password();
+                    value = Some(id_password.clone());
                 } else if name == "rendezvous_server" {
                     value = Config::get_rendezvous_server().await;
                 } else if name == "rendezvous_servers" {
@@ -392,6 +399,8 @@ async fn handle(data: Data, stream: &mut Connection) {
                     Config::set_permanent_password(&value);
                 } else if name == "salt" {
                     Config::set_salt(&value);
+                } else if name == "password-file-transfer" {
+                    password::update_file_transfer_password(value.clone());
                 } else if name == "custom-api-url" {
                     set_option_async(&name, &value).await;
                     api::erase_api().await;
@@ -682,6 +691,18 @@ pub fn get_permanent_password() -> String {
 pub fn set_permanent_password(v: String) -> ResultType<()> {
     Config::set_permanent_password(&v);
     set_config("permanent-password", v)
+}
+
+pub fn set_password_for_file_transfer(v: String, id: String) -> ResultType<()> {
+    set_config("password-file-transfer", format!("{}:{}", id, v))
+}
+
+pub fn get_password_for_file_transfer() -> String {
+    if let Ok(Some(v)) = get_config("password-file-transfer") {
+        v
+    } else {
+        "".to_owned()
+    }
 }
 
 pub fn get_id() -> String {

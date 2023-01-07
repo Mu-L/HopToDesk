@@ -232,8 +232,8 @@ pub fn make_tray() {
     unsafe {
         set_delegate(None);
     }
-    crate::tray::make_tray();
-/*    
+    //crate::tray::make_tray();
+    
     use tray_item::TrayItem;
     if let Ok(mut tray) = TrayItem::new(&crate::get_app_name(), "mac-tray.png") {
         tray.add_label(&format!(
@@ -251,7 +251,7 @@ pub fn make_tray() {
             std::thread::sleep(std::time::Duration::from_secs(3));
         }
     }
-*/    
+    
 }
 
 pub fn check_main_window() {

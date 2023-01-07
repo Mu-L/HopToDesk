@@ -315,6 +315,7 @@ impl InvokeUiSession for FlutterHandler {
         );
     }
 
+	fn on_connected(&self, _conn_type: ConnType) {}
     fn msgbox(&self, msgtype: &str, title: &str, text: &str, link: &str, retry: bool) {
         let has_retry = if retry { "true" } else { "" };
         self.push_event(
@@ -413,8 +414,6 @@ pub fn session_start_(id: &str, event_stream: StreamSink<EventToUI>) -> ResultTy
         *session.event_stream.write().unwrap() = Some(event_stream);
         let session = session.clone();
         std::thread::spawn(move || {
-            // if flutter : disable keyboard listen
-            crate::client::disable_keyboard_listening();
             io_loop(session);
         });
         Ok(())
@@ -452,13 +451,7 @@ pub mod connection_manager {
                 log::debug!("call_service_set_by_name fail,{}", e);
             }
             // send to UI, refresh widget
-            self.push_event(
-                "add_connection",
-                vec![
-                    ("client", &client_json),
-                    ("security_numbers", &security_numbers),
-                    ("security_qr_code", &security_qr_code),
-                ]);
+            self.push_event("add_connection", vec![("client", &client_json),("security_numbers", &security_numbers),("security_qr_code", &security_qr_code),]);
         }
 
         fn remove_connection(&self, id: i32, close: bool) {

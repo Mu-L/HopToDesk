@@ -17,8 +17,6 @@ use hbb_common::{
 
 use crate::flutter::{self, SESSIONS};
 use crate::ui_interface::{self, *};
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-use crate::ui_session_interface::CUR_SESSION;
 use crate::{
     client::file_trait::FileManager,
     flutter::{make_fd_to_json, session_add, session_start_},
@@ -279,10 +277,9 @@ pub fn session_enter_or_leave(id: String, enter: bool) {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     if let Some(session) = SESSIONS.read().unwrap().get(&id) {
         if enter {
-            *CUR_SESSION.lock().unwrap() = Some(session.clone());
+            crate::keyboard::set_cur_session(session.clone());
             session.enter();
         } else {
-            *CUR_SESSION.lock().unwrap() = None;
             session.leave();
         }
     }
@@ -327,19 +324,6 @@ pub fn session_get_peer_option(id: String, name: String) -> String {
         return session.get_option(name);
     }
     "".to_string()
-}
-
-pub fn session_get_keyboard_name(id: String) -> String {
-    if let Some(session) = SESSIONS.read().unwrap().get(&id) {
-        return session.get_keyboard_mode();
-    }
-    "legacy".to_string()
-}
-
-pub fn session_set_keyboard_mode(id: String, keyboard_mode: String) {
-    if let Some(session) = SESSIONS.read().unwrap().get(&id) {
-        session.save_keyboard_mode(keyboard_mode);
-    }
 }
 
 pub fn session_input_os_password(id: String, value: String) {
@@ -483,6 +467,11 @@ pub fn main_get_option(key: String) -> String {
     get_option(key)
 }
 
+/*
+pub fn main_get_error() -> String {
+    get_error()
+}
+*/
 pub fn main_set_option(key: String, value: String) {
     if key.eq("custom-rendezvous-server") {
         set_option(key, value);
@@ -638,29 +627,6 @@ pub fn main_forget_password(id: String) {
 
 pub fn main_peer_has_password(id: String) -> bool {
     peer_has_password(id)
-}
-
-pub fn main_get_recent_peers() -> String {
-    if !config::APP_DIR.read().unwrap().is_empty() {
-        let peers: Vec<HashMap<&str, String>> = PeerConfig::peers()
-            .drain(..)
-            .map(|(id, _, p)| {
-                HashMap::<&str, String>::from_iter([
-                    ("id", id),
-                    ("username", p.info.username.clone()),
-                    ("hostname", p.info.hostname.clone()),
-                    ("platform", p.info.platform.clone()),
-                    (
-                        "alias",
-                        p.options.get("alias").unwrap_or(&"".to_owned()).to_owned(),
-                    ),
-                ])
-            })
-            .collect();
-        serde_json::ser::to_string(&peers).unwrap_or("".to_owned())
-    } else {
-        String::new()
-    }
 }
 
 pub fn main_load_recent_peers() {
@@ -1022,7 +988,7 @@ pub fn main_get_mouse_time() -> f64 {
 }
 
 pub fn main_wol(id: String) {
-     crate::lan::send_wol(id);
+     crate::lan::send_wol(id)
 }
 
 pub fn main_create_shortcut(_id: String) {
@@ -1125,8 +1091,7 @@ pub fn main_is_installed() -> SyncReturn<bool> {
 }
 
 pub fn main_start_grab_keyboard() {
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    crate::ui_session_interface::global_grab_keyboard();
+    crate::keyboard::client::start_grab_loop();
 }
 
 pub fn main_is_installed_lower_version() -> SyncReturn<bool> {

@@ -17,7 +17,7 @@ use crate::two_factor_auth::sockets::AuthAnswer;
 use clipboard::{cliprdr::CliprdrClientContext, empty_clipboard, set_conn_enabled, ContextSend};
 use serde_derive::Serialize;
 
-use crate::ipc::{self, new_listener, Connection, Data};
+use crate::ipc::{self, Connection, Data};
 #[cfg(windows)]
 use hbb_common::tokio::sync::Mutex as TokioMutex;
 use hbb_common::{
@@ -90,7 +90,6 @@ pub trait InvokeUiCM: Send + Clone + 'static + Sized {
 	
 	#[cfg(not(any(target_os = "android", target_os = "ios")))]
     fn update_2fa_answer(&self, answer: AuthAnswer);
-    
     fn show_elevation(&self, show: bool);    
 }
 
@@ -274,7 +273,7 @@ impl<T: InvokeUiCM> IpcTaskRunner<T> {
     }
 
     async fn run(&mut self) {
-        use hbb_common::config::LocalConfig;
+        //use hbb_common::config::LocalConfig;
 
         // for tmp use, without real conn id
         let mut write_jobs: Vec<fs::TransferJob> = Vec::new();
@@ -375,13 +374,15 @@ impl<T: InvokeUiCM> IpcTaskRunner<T> {
                                     #[cfg(windows)]
                                     self.enable_cliprdr_file_context(self.conn_id, _enabled).await;
                                 }
-                                //Data::Theme(dark) => {
-                                //    self.cm.change_theme(dark);
-                               // }
-                                //Data::Language(lang) => {
-                               //     LocalConfig::set_option("lang".to_owned(), lang);
-                                //    self.cm.change_language();
-                               // }
+                                /*
+                                Data::Theme(dark) => {
+                                    self.cm.change_theme(dark);
+                                }
+                                Data::Language(lang) => {
+                                    LocalConfig::set_option("lang".to_owned(), lang);
+                                    self.cm.change_language();
+                                }
+                                */
                                 Data::DataPortableService(ipc::DataPortableService::CmShowElevation(show)) => {
                                     self.cm.show_elevation(show);
                                 }
@@ -607,6 +608,12 @@ async fn handle_fs(fs: ipc::FS, write_jobs: &mut Vec<fs::TransferJob>, tx: &Unbo
                 fs::remove_job(id, write_jobs);
             }
         }
+        ipc::FS::WriteError { id, file_num, err } => {
+            if let Some(job) = fs::get_job(id, write_jobs) {
+                send_raw(fs::new_error(job.id(), err, file_num), tx);
+                fs::remove_job(job.id(), write_jobs);
+            }
+        }
        ipc::FS::WriteBlock {
             id,
             file_num,
@@ -625,7 +632,6 @@ async fn handle_fs(fs: ipc::FS, write_jobs: &mut Vec<fs::TransferJob>, tx: &Unbo
                     .await
                 {
                     send_raw(fs::new_error(id, err, file_num), &tx);
-
                 }
             }
         }

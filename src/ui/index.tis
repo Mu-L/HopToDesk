@@ -14,12 +14,12 @@ var software_update_url = "";
 var key_confirmed = tmp[1];
 var system_error = "";
 
-var svg_menu = <svg #menu title={translate('Menu')} viewBox="0 0 512 512">
+var svg_menu = <svg #menu title={translate('Menu')} tabindex="0" viewBox="0 0 512 512">
 	<circle cx="256" cy="256" r="64"/>
 	<circle cx="256" cy="448" r="64"/>
 	<circle cx="256" cy="64" r="64"/>
 </svg>;
-var svg_refresh_password = <svg #refresh-password title={translate('Refresh')} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 2v6h6M2.66 15.57a10 10 0 1 0 .57-8.38"/></svg>;
+var svg_refresh_password = <svg #refresh-password tabindex="0" title={translate('Refresh Password')} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 2v6h6M2.66 15.57a10 10 0 1 0 .57-8.38"/></svg>;
 
 var my_id = "";
 function get_id() {
@@ -63,6 +63,7 @@ function createNewConnect(id, type) {
     }
     handler.set_remote_id(id);
     handler.new_remote(id, type);
+	app.update();
 }
 
 class ShareRdp: Reactor.Component {
@@ -88,7 +89,7 @@ class DirectServer: Reactor.Component {
         var text = translate("Enable Direct IP Access");
         var enabled = handler.get_option("direct-server") == "Y";
         var cls = enabled ? "selected" : "line-through";
-        return <li class={cls}><span>{svg_checkmark}</span>{text}{enabled && <EditDirectAccessPort />}</li>;
+        return <li class={cls} title={translate(text)}><span>{svg_checkmark}</span>{text}{enabled && <EditDirectAccessPort />}</li>;
     }
 
     function onClick() {
@@ -168,7 +169,7 @@ class Languages: Reactor.Component {
         return <li>{translate('Language')}
             <menu #languages key={langs.length}>
                 {langs.map(function(lang) {
-                return <li id={lang[0]}><span>{svg_checkmark}</span>{lang[1]}</li>;
+                return <li id={lang[0]} title={lang[1]}><span>{svg_checkmark}</span>{lang[1]}</li>;
                 })}
             </menu>
         </li>;
@@ -283,28 +284,27 @@ class MyIdMenu: Reactor.Component {
 
     function renderPop() {
         return <popup>
-            <menu.context #config-options>
-                <li #enable-keyboard><span>{svg_checkmark}</span>{translate('Enable Keyboard/Mouse')}</li>
-                <li #enable-clipboard><span>{svg_checkmark}</span>{translate('Enable Clipboard')}</li>
-                <li #enable-file-transfer><span>{svg_checkmark}</span>{translate('Enable File Transfer')}</li>
-                <li #enable-remote-restart><span>{svg_checkmark}</span>{translate('Enable Remote Restart')}</li>
-                <li #enable-tunnel><span>{svg_checkmark}</span>{translate('Enable TCP Tunneling')}</li>
+            <menu.context #config-options title={translate('Menu')}>
+                <li #enable-keyboard tabindex="0"><span>{svg_checkmark}</span>{translate('Enable Keyboard/Mouse')}</li>
+                <li #enable-clipboard title={translate('Enable Clipboard')}><span>{svg_checkmark}</span>{translate('Enable Clipboard')}</li>
+                <li #enable-file-transfer title={translate('Enable File Transfer')}><span>{svg_checkmark}</span>{translate('Enable File Transfer')}</li>
+                <li #enable-remote-restart title={translate('Enable Remote Restart')}><span>{svg_checkmark}</span>{translate('Enable Remote Restart')}</li>
+                <li #enable-tunnel title={translate('Enable TCP Tunneling')}><span>{svg_checkmark}</span>{translate('Enable TCP Tunneling')}</li>
                 <AudioInputs />
                 <div .separator />
-                <li #custom-api-url>{translate('Choose Network')}</li>
-                <li #custom-server style="display:none">{translate('ID/Relay Server')}</li>
-                <li #whitelist title={translate('whitelist_tip')}>{translate('IP Whitelisting')}</li>
-                <li #socks5-server>{translate('SOCKS5 Proxy')}</li>
+                <li #custom-api-url title={translate('Choose Network')}>{translate('Choose Network')}</li>
+                <li #whitelist style="display:none" title={translate('whitelist_tip')}>{translate('IP Whitelisting')}</li>
+                <li #socks5-server title={translate('SOCKS5 Proxy')}>{translate('SOCKS5 Proxy')}</li>
                 <div .separator />
-				<li #enable-wol><span>{svg_checkmark}</span>{translate("Enable Wake On LAN")}</li>
-				<li #-enable-2fa style="behavior: enable-2fa-button" class={!handler.is_2fa_enabled() ? "line-through" : "selected"}><span>{svg_checkmark}</span>{translate("Enable 2FA")}</li>
-                <li #enable-2fa-auto-accept class={(handler.get_config_option("enable-2fa-auto-accept") == "N" ? "line-through" : "selected") + " " + (handler.is_2fa_enabled() ? "tfa-enabled" : "tfa-disabled")}><span>{svg_checkmark}</span>{translate('Enable 2FA Auto Accept')}</li>
-                <li #stop-service class={service_stopped ? "line-through" : "selected"}><span>{svg_checkmark}</span>{translate("Enable Service")}</li>
+				<li #enable-wol title={translate('Enable Wake On LAN')}><span>{svg_checkmark}</span>{translate("Enable Wake On LAN")}</li>
+				<li #-enable-2fa title={translate('Enable 2FA')} style="behavior: enable-2fa-button" class={!handler.is_2fa_enabled() ? "line-through" : "selected"}><span>{svg_checkmark}</span>{translate("Enable 2FA")}</li>
+                <li #enable-2fa-auto-accept title={translate('Enable 2FA Auto Accept')} class={(handler.get_config_option("enable-2fa-auto-accept") == "N" ? "line-through" : "selected") + " " + (handler.is_2fa_enabled() ? "tfa-enabled" : "tfa-disabled")}><span>{svg_checkmark}</span>{translate('Enable 2FA Auto Accept')}</li>
+                <li #stop-service title={translate('Enable Service')} class={service_stopped ? "line-through" : "selected"}><span>{svg_checkmark}</span>{translate("Enable Service")}</li>
                 <DirectServer />
 				<li #show-settings-button style="display:none">{show_settings_button ? translate("Hide Settings Button") : translate("Show Settings Button")}</li>
                 <div .separator />
                 <Languages />
-                <li #about>{translate('About')} {" "} {handler.get_app_name()}</li>
+                <li #about title={translate('About')}>{translate('About')} {" "} {handler.get_app_name()}</li>
             </menu>
         </popup>;
     }
@@ -312,6 +312,22 @@ class MyIdMenu: Reactor.Component {
     event click $(svg#menu) (_, me) {
         this.showSettingMenu();
     }
+
+	event keypress $(svg#menu) (evt)
+	{
+		var scanCode = evt.keyCode;
+		for(var (name,code) in Event) {
+		  if( typeof code == #integer && (code == 13 || code == 32)) {
+				this.showSettingMenu();
+				this.$(svg#menu).focus();
+		  }
+		}
+	}
+	
+	event focusout $(svg#menu) (evt)
+	{
+		this.toggleMenuState();
+	}	
 
     function showSettingMenu() {
         audioInputMenu.update({ show: true });
@@ -330,10 +346,16 @@ class MyIdMenu: Reactor.Component {
     }
 
     function toggleMenuState() {
-        for (var el in $$(menu#config-options>li)) {
-            if (el.id && el.id.indexOf("enable-") == 0) {
-                var enabled = handler.get_option(el.id) != "N";
-                el.attributes.toggleClass("selected", enabled);
+		for (var el in $$(menu#config-options>li)) {
+			if (el.id && el.id.indexOf("enable-") == 0) {
+				var enabled = handler.get_option(el.id) != "N";
+                if (enabled) {
+					el.attributes["title"] = translate(el.value) + " " + "(On)";
+				} else {
+					el.attributes["title"] = translate(el.value) + " " + "(Off)";
+				}
+				
+				el.attributes.toggleClass("selected", enabled);
                 el.attributes.toggleClass("line-through", !enabled);
             } else if (el.id && el.id === "stop-service") {
                 el.attributes.toggleClass("selected", !service_stopped);
@@ -420,10 +442,10 @@ class MyIdMenu: Reactor.Component {
 			
             msgbox("custom", "Choose Network", "<div .form> \
             <div> \
-			<div #networkhoptodesk .custom-event " + selectedhopnetwork + " network='networkhoptodesk' style=\"height: 30px; display:block;\"><div style=\"padding-top: 1px; margin-top: 5px; margin-left: 35px; display: block;\">HopToDesk Network (Default)</div></div><br></br> \
-			<div #networkcustom .custom-event " + selectedcustomnetwork + " network='networkcustom' id='networkcustom' style=\"height: 30px; display:block;\"><div style=\"padding-top: 1px; margin-top: 5px; margin-left: 35px; display: block;\">Custom Network Settings</div></div><br></br> \
+			<div #networkhoptodesk .custom-event title='HopToDesk Network' " + selectedhopnetwork + " network='networkhoptodesk' style=\"height: 30px; display:block;\"><div style=\"padding-top: 1px; margin-top: 5px; margin-left: 35px; display: block;\">HopToDesk Network (Default)</div></div><br></br> \
+			<div #networkcustom .custom-event title='Custom Network Settings' " + selectedcustomnetwork + " network='networkcustom' id='networkcustom' style=\"height: 30px; display:block;\"><div style=\"padding-top: 1px; margin-top: 5px; margin-left: 35px; display: block;\">Custom Network Settings</div></div><br></br> \
 			<span style=\"margin-top: 5px; margin-bottom: 5px;\">" + translate("Enter your custom network settings URL:") + "</span><br></br><br></br> \
-			<input|text .outline-focus name='url' value='" + old_url + "' style=\"margin-bottom: 5px;\" #customurl/></div> \
+			<input|text .outline-focus name='url' value='" + old_url + "' placeholder='" + 'Custom network settings URL' + "' style=\"margin-bottom: 5px;\" #customurl/></div> \
             </div> \
 			", "", function(el) {
 				if (el) {
@@ -486,6 +508,7 @@ class MyIdMenu: Reactor.Component {
         } else if (me.id == "show-settings-button") {
             handler.set_config_option("show-settings-button", (show_settings_button = !show_settings_button) ? "Y" : "");
             app.update(true);
+/*
         } else if (me.id == "custom-server") {
             var configOptions = handler.get_options();
             var old_relay = configOptions["relay-server"] || "";
@@ -511,6 +534,7 @@ class MyIdMenu: Reactor.Component {
                 configOptions["relay-server"] = relay;
                 handler.set_options(configOptions);
             }, 240);
+*/
         } else if (me.id == "socks5-server") {
             var socks5 = handler.get_socks() || {};
             var old_proxy = socks5[0] || "";
@@ -590,16 +614,16 @@ class App: Reactor.Component
         var is_can_screen_recording = handler.is_can_screen_recording(false);
         return
             <div .app>
-                    <popup><menu.context #edit-password-context>
-                        <li #refresh-password>{translate('Refresh random password')}</li>
-                        <li #set-password>{translate('Set your own password')}</li>
+                    <popup><menu.context #edit-password-context tabindex="0">
+                        <li #refresh-password title={translate('Refresh random password')}>{translate('Refresh random password')}</li>
+                        <li #set-password title={translate('Set your own password')}>{translate('Set your own password')}</li>
                     </menu></popup>
                     <div .left-pane>
                     <div>
                         <div .title>{translate('Your Desktop')}</div>
                         <div .lighter-text>{translate('desk_tip')}</div>
                         <div .your-desktop>
-                            {!show_settings_button ? <MyIdMenu>{translate("ID")}{svg_menu}</MyIdMenu> : ""}
+                            {!show_settings_button ? <MyIdMenu>{translate("ID")}<div tabindex="0">{svg_menu}</div></MyIdMenu> : ""}
                             {key_confirmed ? <input type="text" readonly title={translate('ID')} value={formatId(get_id())}/> : translate("Generating ...")}
                         </div>
                         <PasswordArea />
@@ -822,7 +846,7 @@ class FixWayland: Reactor.Component {
         return <div .trust-me style="margin-top: -5px;">
             <div style="margin-top: 10px; padding-top: 5px;">{translate('Change Display')}</div>
             <div>{translate('Login screen using Wayland is not supported.')}</div>
-            <div #fix-wayland .link>{translate('Fix it')}</div>
+            <div #fix-wayland .link>{translate('Disable Wayland')}</div>
             <div style="text-align: center">({translate('Reboot required')})</div>
         </div>;
     }
@@ -838,7 +862,7 @@ class ModifyDefaultLogin: Reactor.Component {
         return <div .trust-me>
             <div style="margin-top: 10px; padding-top: 5px;">{translate('Change Display')}</div>
             <div>{translate('Current Wayland display server is not supported.')}</div>
-            <div #modify-default-login .link>{translate('Fix it')}</div>
+            <div #modify-default-login .link>{translate('Disable Wayland')}</div>
             <div style="text-align: center">({translate('Reboot required')})</div>
         </div>;
     }
@@ -1011,6 +1035,21 @@ class PasswordArea: Reactor.Component {
         var menu = $(menu#edit-password-context);
         me.popup(menu);
     }
+
+	event keypress $(svg#edit) (evt, me)
+	{
+		var scanCode = evt.keyCode;
+		for(var (name,code) in Event) {
+		  if( typeof code == #integer && (code == 13 || code == 32)) {
+				stdout.println(code);
+				var approve_mode= handler.get_option('approve-mode');
+				var show_password = approve_mode != 'click';
+				if(show_password && temporaryPasswordLengthMenu) temporaryPasswordLengthMenu.update({show: true });
+				var menu = $(menu#edit-password-context);
+				me.popup(menu);
+		  }
+		}
+	}
 
     event click $(li#set-password) {
         var me = this;

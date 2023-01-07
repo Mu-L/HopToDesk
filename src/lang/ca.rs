@@ -192,9 +192,9 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Change Path", "Cnviar ruta"),
         ("Create Folder", "Crear carpeta"),
         ("Please enter the folder name", "Indiqui el nom de la carpeta"),
-        ("Fix it", "Soluciona-ho"),
+        ("Disable Wayland", "Apagueu Wayland"),
         ("Warning", "Avís"),
-        ("Login screen using Wayland is not supported", "La pantalla d'inici de sessió amb Wayland no és compatible"),
+        ("Login screen using Wayland is not supported.", "La pantalla d'inici de sessió amb Wayland no és compatible"),
         ("Reboot required", "Cal reiniciar"),
         ("Unsupported display server ", "Servidor de visualització no compatible"),
         ("x11 expected", "x11 necessari"),
@@ -400,5 +400,8 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("hide_cm_tip", ""),
         ("wayland_experiment_tip", ""),
         ("Right click to select tabs", ""),
+        ("Add to Address Book", ""),
+        ("Group", ""),
+        ("Search", ""),
     ].iter().cloned().collect();
 }

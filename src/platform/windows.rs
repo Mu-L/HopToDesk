@@ -437,6 +437,7 @@ extern "C" {
     fn win32_disable_lowlevel_keyboard(hwnd: HWND);
     fn win_stop_system_key_propagate(v: BOOL);
     fn is_win_down() -> BOOL;
+    fn is_local_system() -> BOOL;
 }
 
 extern "system" {

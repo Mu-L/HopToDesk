@@ -483,13 +483,11 @@ impl TFAManager {
 }
 
 pub mod ui {
-    use crate::two_factor_auth::sockets::*;
     use crate::two_factor_auth::utils::*;
-    use crate::two_factor_auth::{TFAManager, TFA_MANAGER};
+    use crate::two_factor_auth::{TFAManager};
     use hbb_common::config::Config;
     use hbb_common::{log};
     use sciter::{EventHandler, Value, HELEMENT};
-    use std::time::Instant;
 
     struct Enable2FA;
 

@@ -3,6 +3,14 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+#[derive(Debug, Eq, PartialEq)]
+pub enum GrabState {
+    Ready,
+    Run,
+    Wait,
+    Exit,
+}
+
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub use arboard::Clipboard as ClipboardContext;
 
@@ -11,14 +19,12 @@ use hbb_common::compress::decompress;
 use hbb_common::{
     allow_err,
     anyhow::bail,
-    compress::{compress as compress_func},
+    compress::compress as compress_func,
     config::{self, Config, COMPRESS_LEVEL, RENDEZVOUS_TIMEOUT},
     log,
     message_proto::*,
     protobuf::Enum,
-    protobuf::Message as _,
-    rendezvous_proto::*,
-    sleep, socket_client, tokio, ResultType,
+    socket_client, tokio, ResultType,
 };
 //#[cfg(any(target_os = "android", target_os = "ios", feature = "cli"))]
 use hbb_common::{config::RENDEZVOUS_PORT, futures::future::join_all};
@@ -282,7 +288,7 @@ async fn test_nat_type_() -> ResultType<bool> {
         return Ok(true);
     }
     let start = std::time::Instant::now();
-    let rendezvous_server = get_rendezvous_server(1_000).await;
+    let (rendezvous_server, _, _) = get_rendezvous_server(1_000).await;
     let server1 = rendezvous_server;
     let tmp: Vec<&str> = server1.split(":").collect();
     if tmp.len() != 2 {
@@ -360,19 +366,19 @@ pub async fn get_rendezvous_server(ms_timeout: u64) -> Option<String> {
     Config::get_rendezvous_server().await
 }
 
-//#[inline]
+#[inline]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub async fn get_rendezvous_server(ms_timeout: u64) -> Option<String> {
     crate::ipc::get_rendezvous_server(ms_timeout).await
 }
 
-//#[inline]
+#[inline]
 #[cfg(any(target_os = "android", target_os = "ios"))]
 pub async fn get_nat_type(_ms_timeout: u64) -> i32 {
     Config::get_nat_type()
 }
 
-//#[inline]
+#[inline]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub async fn get_nat_type(ms_timeout: u64) -> i32 {
     crate::ipc::get_nat_type(ms_timeout).await
@@ -674,7 +680,7 @@ pub fn make_privacy_mode_msg(state: back_notification::PrivacyModeState) -> Mess
     msg_out.set_misc(misc);
     msg_out
 }
-
+/*
 pub fn make_fd_to_json(fd: FileDirectory) -> String {
     use serde_json::json;
     let mut fd_json = serde_json::Map::new();
@@ -693,6 +699,7 @@ pub fn make_fd_to_json(fd: FileDirectory) -> String {
     fd_json.insert("entries".into(), json!(entries));
     serde_json::to_string(&fd_json).unwrap_or("".into())
 }
+*/
 
 #[cfg(not(target_os = "linux"))]
 lazy_static::lazy_static! {

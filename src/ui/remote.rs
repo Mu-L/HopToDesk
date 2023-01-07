@@ -79,8 +79,8 @@ impl InvokeUiSession for SciterHandler {
         }
     }
 
-    fn set_display(&self, x: i32, y: i32, w: i32, h: i32, cursor_embeded: bool) {
-        self.call("setDisplay", &make_args!(x, y, w, h, cursor_embeded));
+    fn set_display(&self, x: i32, y: i32, w: i32, h: i32, cursor_embedded: bool) {
+        self.call("setDisplay", &make_args!(x, y, w, h, cursor_embedded));
         // https://sciter.com/forums/topic/color_spaceiyuv-crash
         // Nothing spectacular in decoder – done on CPU side.
         // So if you can do BGRA translation on your side – the better.
@@ -127,17 +127,8 @@ impl InvokeUiSession for SciterHandler {
         self.call("setCursorPosition", &make_args!(cp.x, cp.y));
     }
 
-    fn set_connection_type(
-        &self,
-        is_secured: bool,
-        direct: bool,
-        security_numbers: String,
-        security_qr_code: String,
-    ) {
-        self.call(
-            "setConnectionType",
-            &make_args!(is_secured, direct, security_numbers, security_qr_code),
-        );
+    fn set_connection_type(&self, is_secured: bool, direct: bool, security_numbers: String, security_qr_code: String,) {
+        self.call("setConnectionType", &make_args!(is_secured, direct, security_numbers, security_qr_code));
     }
 
     fn job_error(&self, id: i32, err: String, file_num: i32) {
@@ -232,12 +223,23 @@ impl InvokeUiSession for SciterHandler {
             display.set_item("y", d.y);
             display.set_item("width", d.width);
             display.set_item("height", d.height);
-            display.set_item("cursor_embeded", d.cursor_embeded);
+            display.set_item("cursor_embedded", d.cursor_embedded);
             displays.push(display);
         }
         pi_sciter.set_item("displays", displays);
         pi_sciter.set_item("current_display", pi.current_display);
         self.call("updatePi", &make_args!(pi_sciter));
+    }
+
+    fn on_connected(&self, conn_type: ConnType) {
+        match conn_type {
+            ConnType::RDP => {}
+            ConnType::PORT_FORWARD => {}
+            ConnType::FILE_TRANSFER => {}
+            ConnType::DEFAULT_CONN => {
+                crate::keyboard::client::start_grab_loop();
+            },
+        }
     }
 
     fn msgbox(&self, msgtype: &str, title: &str, text: &str, link: &str, retry: bool) {
@@ -443,6 +445,10 @@ impl SciterSession {
         Self(session)
     }
 
+    pub fn inner(&self) -> Session<SciterHandler> {
+        self.0.clone()
+    }
+    
     fn get_custom_image_quality(&mut self) -> Value {
         let mut v = Value::array(0);
         for x in self.lc.read().unwrap().custom_image_quality.iter() {
@@ -681,7 +687,20 @@ impl SciterSession {
 
     fn transfer_file(&mut self) {
         let id = self.get_id();
-        let args = vec!["--file-transfer", &id, &self.password];
+        let id_password = crate::ipc::get_password_for_file_transfer();
+        let id_passwords: Vec<&str> = id_password.split(":").collect();
+
+        let args = if !id_password.is_empty() {
+            let idd = id_passwords[0].clone();
+            let password = id_passwords[1].clone();
+            if !password.is_empty() && idd == id {
+                vec!["--file-transfer", &id, password]
+            } else {
+                vec!["--file-transfer", &id, &self.password]
+            }
+        } else {
+            vec!["--file-transfer", &id, &self.password]
+        };
         if let Err(err) = crate::run_me(args) {
             log::error!("Failed to spawn file transfer: {}", err);
         }

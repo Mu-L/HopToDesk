@@ -3,8 +3,6 @@
 //#![windows_subsystem = "windows"]
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-
-use hbb_common::log;
 use libhoptodesk::*;
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
@@ -13,9 +11,11 @@ fn main() {
         return;
     }
     common::test_rendezvous_server();
-    //    common::test_nat_type();
-    //    #[cfg(target_os = "android")]
-    //    crate::common::check_software_update();
+    /*
+    common::test_nat_type();
+    #[cfg(target_os = "android")]
+    crate::common::check_software_update();
+    */
     common::global_clean();
 }
 
@@ -32,6 +32,9 @@ fn main() {
 
 #[cfg(feature = "cli")]
 fn main() {
+    if !common::global_init() {
+        return;
+    }
     use clap::App;
     use hbb_common::log;
     let args = format!(
@@ -72,6 +75,8 @@ fn main() {
             remote_host = options[3].clone();
         }
         /*
+        common::test_rendezvous_server();
+        common::test_nat_type();
         let key = matches.value_of("key").unwrap_or("").to_owned();
         let token = LocalConfig::get_option("access_token");
         cli::start_one_port_forward(
@@ -83,7 +88,6 @@ fn main() {
             token,
         );
         */
-        cli::start_one_port_forward(options[0].clone(), port, remote_host, remote_port);
-        common::global_clean();
     }
+    common::global_clean();
 }

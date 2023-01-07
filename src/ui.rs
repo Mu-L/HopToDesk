@@ -9,20 +9,16 @@ use sciter::Value;
 
 use hbb_common::{
     allow_err, api,
-    config::{self, Config, PeerConfig, RENDEZVOUS_PORT, RENDEZVOUS_TIMEOUT},
-    futures::future::join_all,
+    config::{self, Config, PeerConfig},
     log,
-    protobuf::Message as _,
     rendezvous_proto::*,
-    tcp::FramedStream,
-    tokio::{self, sync::mpsc},
+    tokio::{self},
 };
 
 use crate::common::get_app_name;
 use crate::ui_interface::*;
 use crate::{ipc, two_factor_auth};
 use hbb_common::get_version_number;
-use hbb_common::rand::random;
 
 mod cm;
 #[cfg(feature = "inline")]
@@ -146,12 +142,16 @@ pub fn start(args: &mut [String]) {
         let args: Vec<String> = iter.map(|x| x.clone()).collect();
         frame.set_title(&id);
         frame.register_behavior("native-remote", move || {
-            Box::new(remote::SciterSession::new(
+            let handler = remote::SciterSession::new(
                 cmd.clone(),
                 id.clone(),
                 pass.clone(),
                 args.clone(),
-            ))
+            );
+            #[cfg(not(feature = "flutter"))]
+            crate::keyboard::set_cur_session(handler.inner());
+            
+            Box::new(handler)
         });
         page = "remote.html";
     } else {
@@ -258,7 +258,6 @@ impl UI {
         fn get_license(&self) -> String {
             get_license()
         }
-    */
     fn get_option_(&self, key: &str) -> String {
         /*
         if let Some(v) = self.2.lock().unwrap().get(key) {
@@ -270,7 +269,7 @@ impl UI {
         //TODO: fix the above
         "".to_owned()
     }
-
+    */
     fn get_option(&self, key: String) -> String {
         get_option(key)
     }
@@ -477,7 +476,19 @@ impl UI {
     }
 
     fn new_remote(&mut self, id: String, remote_type: String) {
-        new_remote(id, remote_type)
+        let id_password = ipc::get_password_for_file_transfer();
+        let id_passwords: Vec<&str> = id_password.split(":").collect();
+        if !id_password.is_empty() {
+            let idd = id_passwords[0].clone();
+            let password = id_passwords[1].clone();
+            if !password.is_empty() && idd == id && remote_type == "file-transfer" {
+                new_remote(id, remote_type, password.to_owned());
+            } else {
+                new_remote(id, remote_type, "".to_string());
+            }
+        } else {
+            new_remote(id, remote_type, "".to_string());
+        }
     }
 
     fn is_process_trusted(&mut self, _prompt: bool) -> bool {
@@ -568,11 +579,12 @@ impl UI {
     fn open_url(&self, url: String) {
         open_url(url)
     }
-
-    //fn change_id(&self, id: String) {
-    //    let old_id = self.get_id();
-    //    change_id(id, old_id);
-    //}
+	/*
+    fn change_id(&self, id: String) {
+        let old_id = self.get_id();
+        change_id(id, old_id);
+    }
+    */
 
     fn post_request(&self, url: String, body: String, header: String) {
         post_request(url, body, header)
@@ -640,7 +652,7 @@ impl sciter::EventHandler for UI {
         fn closing(i32, i32, i32, i32);
         fn get_size();
         fn new_remote(String, bool);
-        //fn send_wol(String);
+        fn send_wol(String);
         fn remove_peer(String);
         fn remove_discovered(String);
         fn get_connect_status();
@@ -806,8 +818,8 @@ fn get_sound_inputs() -> Vec<String> {
         .collect()
 }
 
-const INVALID_FORMAT: &'static str = "Invalid format";
-const UNKNOWN_ERROR: &'static str = "Unknown error";
+//const INVALID_FORMAT: &'static str = "Invalid format";
+//const UNKNOWN_ERROR: &'static str = "Unknown error";
 
 /*
 #[tokio::main(flavor = "current_thread")]
@@ -841,7 +853,7 @@ async fn change_id(id: String, old_id: String) -> &'static str {
     }
     err
 }
-*/
+
 
 async fn check_id(
     rendezvous_server: String,
@@ -902,7 +914,7 @@ async fn check_id(
     }
     ""
 }
-
+*/
 // sacrifice some memory
 pub fn value_crash_workaround(values: &[Value]) -> Arc<Vec<Value>> {
     let persist = Arc::new(values.to_vec());

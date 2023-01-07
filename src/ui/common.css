@@ -37,6 +37,8 @@ div.security_number_block {
   text-align: center;
   font-family: 'Courier New';
   font-size: 1.1em;
+  line-height: 2.5em;
+  font-weight: bold;
 }
 body {
     margin: 0;

@@ -25,7 +25,7 @@ use hbb_common::{
 
 #[cfg(feature = "flutter")]
 use crate::hbbs_http::account;
-use crate::{common::SOFTWARE_UPDATE_URL, ipc, platform};
+use crate::{common::SOFTWARE_UPDATE_URL, ipc};
 
 #[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
 type Message = RendezvousMessage;
@@ -126,7 +126,7 @@ pub fn run_without_install() {
     std::process::exit(0);
 }
 
-//#[inline]
+#[inline]
 pub fn show_run_without_install() -> bool {
     let mut it = std::env::args();
     if let Some(tmp) = it.next() {
@@ -234,10 +234,12 @@ pub fn set_peer_option(id: String, name: String, value: String) {
     c.store(&id);
 }
 
-//#[inline]
-//pub fn using_public_server() -> bool {
-//    crate::get_custom_rendezvous_server(get_option_("custom-rendezvous-server")).is_empty()
-//}
+/*
+#[inline]
+pub fn using_public_server() -> bool {
+    crate::get_custom_rendezvous_server(get_option_("custom-rendezvous-server")).is_empty()
+}
+*/
 
 #[inline]
 pub fn get_options() -> String {
@@ -528,9 +530,14 @@ pub fn remove_peer(id: String) {
 }
 
 #[inline]
-pub fn new_remote(id: String, remote_type: String) {
+pub fn new_remote(id: String, remote_type: String, password: String) {
     let mut lock = CHILDREN.lock().unwrap();
-    let args = vec![format!("--{}", remote_type), id.clone()];
+    let config = PeerConfig::load(&id.clone());
+    let args = if !password.is_empty() {
+        vec![format!("--{}", remote_type), id.clone(), password.clone()]
+    } else {
+        vec![format!("--{}", remote_type), id.clone()]
+    };
     let key = (id.clone(), remote_type.clone());
     if let Some(c) = lock.1.get_mut(&key) {
         if let Ok(Some(_)) = c.try_wait() {

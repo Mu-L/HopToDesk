@@ -1,4 +1,3 @@
-use crate::ipc::{self, new_listener, Connection, Data};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::two_factor_auth;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -7,26 +6,15 @@ use crate::two_factor_auth::sockets::{AuthAnswer, TFAChecker};
 use crate::two_factor_auth::ui::Manage2FA;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::two_factor_auth::{ui, TFAManager};
-
 #[cfg(target_os = "linux")]
 use crate::ipc::start_pa;
 use crate::ui_cm_interface::{start_ipc, ConnectionManager, InvokeUiCM};
 
-use crate::VERSION;
-
-use hbb_common::fs::{
-    can_enable_overwrite_detection, get_string, is_write_need_confirmation, new_send_confirm,
-    DigestCheckResult,
-};
 use hbb_common::{
     allow_err,
     config::Config,
-    fs, get_version_number, log,
-    message_proto::*,
-    protobuf::Message as _,
-    tokio::{self, sync::mpsc, task::spawn_blocking},
+    log,
 };
-
 
 use sciter::{make_args, Element, Value, HELEMENT};
 use std::sync::Mutex;
@@ -69,10 +57,8 @@ impl InvokeUiCM for SciterHandler {
 
     fn update_2fa_answer(&self, answer: AuthAnswer) {
         log::info!("update_2fa_answer rs");
-
         self.call("on_2fa_answer", &make_args!(answer.to_string()))
     }
-
     fn new_message(&self, id: i32, text: String) {
         self.call("newMessage", &make_args!(id, text));
     }

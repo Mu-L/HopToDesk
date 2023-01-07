@@ -8,12 +8,18 @@ use hbb_common::{
     },
     tokio_util::compat::Compat,
     ResultType,
+    lazy_static,
 };
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::{SocketAddr, IpAddr, UdpSocket}, sync::Arc, time::{Instant, Duration}};
+use std::sync::Mutex;
 use turn::client::{tcp::TcpSplit, ClientConfig};
 use webrtc_util::conn::Conn;
 
 use crate::rendezvous_messages::{self, ToJson};
+
+lazy_static::lazy_static!{
+    static ref PUBLIC_IP: Arc<Mutex<Option<(IpAddr, SocketAddr, Instant)>>> = Default::default();
+}
 
 #[derive(Debug)]
 pub struct TurnConfig {
@@ -116,6 +122,22 @@ async fn establish_over_relay(
 }
 
 pub async fn get_public_ip() -> Option<SocketAddr> {
+    {
+        let mut cached = PUBLIC_IP.lock().unwrap();
+        if let Some((cached_local_ip, public_ip, cached_at)) = *cached {
+            //  Time since cached is in 10 minutes.
+            if cached_at.elapsed() < Duration::from_secs(600) {
+                let local_ip = get_local_ip().ok()?;
+                // The network environment shouldn't be changed,
+                // as the local ip haven't changed.
+                if cached_local_ip == local_ip {
+                    log::info!("Got public ip from cache: {:?}", public_ip);
+                    return Some(public_ip)
+                }
+            }
+        }
+        *cached = None;
+    }
     let servers = get_turn_servers().await?;
     let len = servers.len();
     let (tx, mut rx) = tokio::sync::mpsc::channel(len);
@@ -137,11 +159,24 @@ pub async fn get_public_ip() -> Option<SocketAddr> {
     for _ in 0..len {
         if let Some(addr) = rx.recv().await {
             if addr.is_some() {
+                if let Ok(local_ip) = get_local_ip() {
+                    let mut cached = PUBLIC_IP.lock().unwrap();
+                    *cached = Some((local_ip, addr.unwrap(), Instant::now()));
+                }
                 return addr;
             }
         }
     }
     return None;
+}
+
+// Create an udp socket and get the local ip address.
+fn get_local_ip() -> ResultType<IpAddr> {
+    let socket = UdpSocket::bind("0.0.0.0:0")?;
+    socket.connect("1.1.1.1:53")?;
+    let addr = socket.local_addr()?;
+    log::info!("Got local addr {:?}", addr.ip());
+    Ok(addr.ip())
 }
 
 pub struct TurnClient {

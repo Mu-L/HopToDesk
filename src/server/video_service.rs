@@ -21,8 +21,9 @@
 use super::{video_qos::VideoQoS, *};
 #[cfg(windows)]
 use crate::portable_service::client::PORTABLE_SERVICE_RUNNING;
+#[cfg(windows)]
+use hbb_common::get_version_number;
 use hbb_common::{
-    get_version_number,
     tokio::sync::{
         mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
         Mutex as TokioMutex,
@@ -77,11 +78,11 @@ fn is_capturer_mag_supported() -> bool {
     false
 }
 
-pub fn capture_cursor_embeded() -> bool {
-    scrap::is_cursor_embeded()
+pub fn capture_cursor_embedded() -> bool {
+    scrap::is_cursor_embedded()
 }
 
-pub fn notify_video_frame_feched(conn_id: i32, frame_tm: Option<Instant>) {
+pub fn notify_video_frame_fetched(conn_id: i32, frame_tm: Option<Instant>) {
     FRAME_FETCHED_NOTIFIER.0.send((conn_id, frame_tm)).unwrap()
 }
 
@@ -161,7 +162,7 @@ fn check_display_changed(
     last_n: usize,
     last_current: usize,
     last_width: usize,
-    last_hegiht: usize,
+    last_height: usize,
 ) -> bool {
     #[cfg(target_os = "linux")]
     {
@@ -186,7 +187,7 @@ fn check_display_changed(
             if i != last_current {
                 return true;
             };
-            if d.width() != last_width || d.height() != last_hegiht {
+            if d.width() != last_width || d.height() != last_height {
                 return true;
             };
         }
@@ -248,7 +249,7 @@ fn create_capturer(
                             PRIVACY_WINDOW_NAME
                         );
                     }
-                    log::debug!("Create maginifier capture for {}", privacy_mode_id);
+                    log::debug!("Create magnifier capture for {}", privacy_mode_id);
                     c = Some(Box::new(c1));
                 }
                 Err(e) => {
@@ -384,10 +385,12 @@ fn get_capturer(use_yuv: bool, portable_service_running: bool) -> ResultType<Cap
         captuerer_privacy_mode_id,
     );
 
-    if privacy_mode_id != captuerer_privacy_mode_id {
-        log::info!("In privacy mode, but show UAC prompt window for now");
-    } else {
-        log::info!("In privacy mode, the peer side cannot watch the screen");
+    if privacy_mode_id != 0 {
+        if privacy_mode_id != captuerer_privacy_mode_id {
+            log::info!("In privacy mode, but show UAC prompt window for now");
+        } else {
+            log::info!("In privacy mode, the peer side cannot watch the screen");
+        }
     }
     let capturer = create_capturer(
         captuerer_privacy_mode_id,
@@ -463,7 +466,7 @@ fn run(sp: GenericService) -> ResultType<()> {
             y: c.origin.1 as _,
             width: c.width as _,
             height: c.height as _,
-            cursor_embeded: capture_cursor_embeded(),
+            cursor_embedded: capture_cursor_embedded(),
             ..Default::default()
         });
         let mut msg_out = Message::new();
@@ -614,9 +617,7 @@ fn run(sp: GenericService) -> ResultType<()> {
                     would_block_count += 1;
                     if !scrap::is_x11() {
                         if would_block_count >= 100 {
-                            // For now, the user should choose and agree screen sharing agiain.
-                            // to-do: Remember choice, attendless...
-                            super::wayland::release_resouce();
+                            super::wayland::release_resource();
                             bail!("Wayland capturer none 100 times, try restart captuere");
                         }
                     }
@@ -670,7 +671,7 @@ fn run(sp: GenericService) -> ResultType<()> {
 
     #[cfg(target_os = "linux")]
     if !scrap::is_x11() {
-        super::wayland::release_resouce();
+        super::wayland::release_resource();
     }
 
     Ok(())
@@ -791,7 +792,7 @@ pub(super) fn get_displays_2(all: &Vec<Display>) -> (usize, Vec<DisplayInfo>) {
             height: d.height() as _,
             name: d.name(),
             online: d.is_online(),
-            cursor_embeded: false,
+            cursor_embedded: false,
             ..Default::default()
         });
     }

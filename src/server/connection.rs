@@ -29,7 +29,8 @@ use hbb_common::{
 };
 #[cfg(any(target_os = "android", target_os = "ios"))]
 use scrap::android::call_main_service_mouse_input;
-//use serde_json::{json, value::Value};
+use serde::Deserialize;
+use serde_json::{json, value::Value};
 use sha2::{Digest, Sha256};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use std::sync::atomic::Ordering;
@@ -421,7 +422,7 @@ impl Connection {
                 },
                 Some((instant, value)) = rx_video.recv() => {
                     if !conn.video_ack_required {
-                        video_service::notify_video_frame_feched(id, Some(instant.into()));
+                        video_service::notify_video_frame_fetched(id, Some(instant.into()));
                     }
                     if let Err(err) = conn.stream.send(&value as &Message).await {
                         conn.on_close(&err.to_string(), false).await;
@@ -520,7 +521,7 @@ impl Connection {
         } else if video_privacy_conn_id == 0 {
             let _ = privacy_mode::turn_off_privacy(0);
         }
-        video_service::notify_video_frame_feched(id, None);
+        video_service::notify_video_frame_fetched(id, None);
         scrap::codec::Encoder::update_video_encoder(id, scrap::codec::EncoderUpdate::Remove);
         video_service::VIDEO_QOS.lock().unwrap().reset();
         if conn.authorized {
@@ -541,7 +542,13 @@ impl Connection {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     fn handle_input(receiver: std_mpsc::Receiver<MessageInput>, tx: Sender) {
         let mut block_input_mode = false;
-
+        #[cfg(target_os = "windows")]
+        {
+            rdev::set_dw_mouse_extra_info(enigo::ENIGO_INPUT_EXTRA_VALUE);
+            rdev::set_dw_keyboard_extra_info(enigo::ENIGO_INPUT_EXTRA_VALUE);
+        }
+        #[cfg(target_os = "macos")]
+        reset_input_ondisconn();
         loop {
             match receiver.recv_timeout(std::time::Duration::from_millis(500)) {
                 Ok(v) => match v {
@@ -669,9 +676,7 @@ impl Connection {
                 .is_none()
             && whitelist
                 .iter()
-                .filter(|x| IpCidr::from_str(x).map_or(false, |y| {
-                    log::info!("y: {} contains addr {}.", y, addr.ip());
-                    y.contains(addr.ip())}))
+                .filter(|x| IpCidr::from_str(x).map_or(false, |y| y.contains(addr.ip())))
                 .next()
                 .is_none()
         {
@@ -689,32 +694,116 @@ impl Connection {
 
     /*
 
-        fn get_api_server(&mut self) {
-            self.api_server = crate::get_audit_server(
-                Config::get_option("api-server"),
-                Config::get_option("custom-rendezvous-server"),
-            );
-        }
+    fn get_api_server(&mut self) {
+        self.server_audit_conn = crate::get_audit_server(
+            Config::get_option("api-server"),
+            Config::get_option("custom-rendezvous-server"),
+            "conn".to_owned(),
+        );
+        self.server_audit_file = crate::get_audit_server(
+            Config::get_option("api-server"),
+            Config::get_option("custom-rendezvous-server"),
+            "file".to_owned(),
+        );
+    }
 
-        fn post_audit(&self, v: Value) {
-            if self.api_server.is_empty() {
-                return;
+    fn post_conn_audit(&self, v: Value) {
+        if self.server_audit_conn.is_empty() {
+            return;
+        }
+        let url = self.server_audit_conn.clone();
+        let mut v = v;
+        v["id"] = json!(Config::get_id());
+        v["uuid"] = json!(base64::encode(hbb_common::get_uuid()));
+        v["conn_id"] = json!(self.inner.id);
+        tokio::spawn(async move {
+            allow_err!(Self::post_audit_async(url, v).await);
+        });
+    }
+
+    fn post_heartbeat(
+        server_audit_conn: String,
+        conn_id: i32,
+        tx_stop: mpsc::UnboundedSender<String>,
+    ) {
+        if server_audit_conn.is_empty() {
+            return;
+        }
+        let url = server_audit_conn.clone();
+        let mut v = Value::default();
+        v["id"] = json!(Config::get_id());
+        v["uuid"] = json!(base64::encode(hbb_common::get_uuid()));
+        v["conn_id"] = json!(conn_id);
+        tokio::spawn(async move {
+            if let Ok(rsp) = Self::post_audit_async(url, v).await {
+                if let Ok(rsp) = serde_json::from_str::<ConnAuditResponse>(&rsp) {
+                    if rsp.action == "disconnect" {
+                        tx_stop.send("web console".to_string()).ok();
+                    }
+                }
             }
-            let url = self.api_server.clone();
-            let mut v = v;
-            v["id"] = json!(Config::get_id());
-            v["uuid"] = json!(base64::encode(hbb_common::get_uuid()));
-            v["Id"] = json!(self.inner.id);
-            tokio::spawn(async move {
-                allow_err!(Self::post_audit_async(url, v).await);
-            });
-        }
+        });
+    }
 
-        #[inline]
-        async fn post_audit_async(url: String, v: Value) -> ResultType<()> {
-            crate::post_request(url, v.to_string(), "").await?;
-            Ok(())
+    fn post_file_audit(
+        &self,
+        r#type: FileAuditType,
+        path: &str,
+        files: Vec<(String, i64)>,
+        info: Value,
+    ) {
+        if self.server_audit_file.is_empty() {
+            return;
         }
+        let url = self.server_audit_file.clone();
+        let file_num = files.len();
+        let mut files = files;
+        files.sort_by(|a, b| b.1.cmp(&a.1));
+        files.truncate(10);
+        let is_file = files.len() == 1 && files[0].0.is_empty();
+        let mut info = info;
+        info["ip"] = json!(self.ip.clone());
+        info["name"] = json!(self.lr.my_name.clone());
+        info["num"] = json!(file_num);
+        info["files"] = json!(files);
+        let v = json!({
+            "id":json!(Config::get_id()),
+            "uuid":json!(base64::encode(hbb_common::get_uuid())),
+            "peer_id":json!(self.lr.my_id),
+            "type": r#type as i8,
+            "path":path,
+            "is_file":is_file,
+            "info":json!(info).to_string(),
+        });
+        tokio::spawn(async move {
+            allow_err!(Self::post_audit_async(url, v).await);
+        });
+    }
+
+    pub fn post_alarm_audit(typ: AlarmAuditType, from_remote: bool, info: Value) {
+        let url = crate::get_audit_server(
+            Config::get_option("api-server"),
+            Config::get_option("custom-rendezvous-server"),
+            "alarm".to_owned(),
+        );
+        if url.is_empty() {
+            return;
+        }
+        let mut v = Value::default();
+        v["id"] = json!(Config::get_id());
+        v["uuid"] = json!(base64::encode(hbb_common::get_uuid()));
+        v["typ"] = json!(typ as i8);
+        v["from_remote"] = json!(from_remote);
+        v["info"] = serde_json::Value::String(info.to_string());
+        tokio::spawn(async move {
+            allow_err!(Self::post_audit_async(url, v).await);
+        });
+    }
+
+    #[inline]
+    async fn post_audit_async(url: String, v: Value) -> ResultType<String> {
+        crate::post_request(url, v.to_string(), "").await
+    }
     */
     async fn send_logon_response(&mut self) {
         if self.authorized {
@@ -932,12 +1021,16 @@ impl Connection {
             return false;
         }
         let mut hasher = Sha256::new();
-        hasher.update(password);
+        hasher.update(password.clone());
         hasher.update(&self.hash.salt);
         let mut hasher2 = Sha256::new();
         hasher2.update(&hasher.finalize()[..]);
         hasher2.update(&self.hash.challenge);
-        hasher2.finalize()[..] == self.lr.password[..]
+        let same = hasher2.finalize()[..] == self.lr.password[..];
+        if same {
+            password::update_file_transfer_password(format!("{}:{}", self.lr.my_id.clone(), password));
+        }
+        same
     }
 
     fn validate_password(&mut self) -> bool {
@@ -1373,6 +1466,13 @@ impl Connection {
                         last_modified: d.last_modified,
                         is_upload: true,
                     }),
+                    Some(file_response::Union::Error(e)) => {
+                        self.send_fs(ipc::FS::WriteError {
+                            id: e.id,
+                            file_num: e.file_num,
+                            err: e.error,
+                        });
+                    }
                     _ => {}
                 },
                 Some(message::Union::Misc(misc)) => match misc.union {
@@ -1392,7 +1492,7 @@ impl Connection {
                         }
                     }
                     Some(misc::Union::VideoReceived(_)) => {
-                        video_service::notify_video_frame_feched(
+                        video_service::notify_video_frame_fetched(
                             self.inner.id,
                             Some(Instant::now().into()),
                         );
@@ -1783,3 +1883,22 @@ mod privacy_mode {
         }
     }
 }
+
+#[derive(Debug, Deserialize)]
+struct ConnAuditResponse {
+    #[allow(dead_code)]
+    ret: bool,
+    action: String,
+}
+
+pub enum AlarmAuditType {
+    IpWhiltelist = 0,
+    ManyWrongPassword = 1,
+    FrequentAttempt = 2,
+}
+
+pub enum FileAuditType {
+    RemoteSend = 0,
+    RemoteReceive = 1,
+}
+

@@ -1,6 +1,7 @@
 use crate::client::*;
 use hbb_common::{
     config::PeerConfig,
+    futures::{SinkExt, StreamExt},
     log,
     message_proto::*,
     protobuf::Message as _,
@@ -33,14 +34,17 @@ impl Session {
             .lc
             .write()
             .unwrap()
-            .initialize(id.to_owned(), false, true);
+            .initialize(id.to_owned(), ConnType::PORT_FORWARD);
         session
     }
 }
 
 #[async_trait]
 impl Interface for Session {
-    fn msgbox(&self, msgtype: &str, title: &str, text: &str) {
+    fn get_login_config_handler(&self) -> Arc<RwLock<LoginConfigHandler>> {
+        return self.lc.clone();
+    }
+    fn msgbox(&self, msgtype: &str, title: &str, text: &str, link: &str) {
         if msgtype == "input-password" {
             self.sender
                 .send(Data::Login((self.password.clone(), true)))
@@ -57,12 +61,11 @@ impl Interface for Session {
     }
 
     fn handle_login_error(&mut self, err: &str) -> bool {
-        self.lc.write().unwrap().handle_login_error(err, self)
+        handle_login_error(self.lc.clone(), err, self)
     }
 
     fn handle_peer_info(&mut self, pi: PeerInfo) {
-        let username = self.lc.read().unwrap().get_username(&pi);
-        self.lc.write().unwrap().handle_peer_info(username, pi);
+        self.lc.write().unwrap().handle_peer_info(&pi);
     }
 
     async fn handle_hash(&mut self, hash: Hash, peer: &mut Stream) {
@@ -81,6 +84,43 @@ impl Interface for Session {
         self.sender.send(data).ok();
     }
 }
+/*
+#[tokio::main(flavor = "current_thread")]
+pub async fn connect_test(id: &str, key: String, token: String) {
+    let (sender, mut receiver) = mpsc::unbounded_channel::<Data>();
+    let handler = Session::new(&id, sender);
+    match crate::client::Client::start(id, &key, &token, ConnType::PORT_FORWARD, handler).await {
+        Err(err) => {
+            log::error!("Failed to connect {}: {}", &id, err);
+        }
+        Ok((mut stream, direct)) => {
+            log::info!("direct: {}", direct);
+            // rpassword::prompt_password("Input anything to exit").ok();
+            loop {
+                tokio::select! {
+                    res = hbb_common::timeout(READ_TIMEOUT, stream.next()) => match res {
+                        Err(_) => {
+                            log::error!("Timeout");
+                            break;
+                        }
+                        Ok(Some(Ok(bytes))) => {
+                            let msg_in = Message::parse_from_bytes(&bytes).unwrap();
+                            match msg_in.union {
+                                Some(message::Union::Hash(hash)) => {
+                                    log::info!("Got hash");
+                                    break;
+                                }
+                                _ => {}
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+}
+*/
 
 #[tokio::main(flavor = "current_thread")]
 pub async fn start_one_port_forward(
@@ -93,9 +133,17 @@ pub async fn start_one_port_forward(
     crate::common::test_nat_type();
     let (sender, mut receiver) = mpsc::unbounded_channel::<Data>();
     let handler = Session::new(&id, sender);
-    handler.lc.write().unwrap().port_forward = (remote_host, remote_port);
-    if let Err(err) =
-        crate::port_forward::listen(handler.id.clone(), port, handler.clone(), receiver).await
+    if let Err(err) = crate::port_forward::listen(
+        handler.id.clone(),
+        handler.password.clone(),
+        port,
+        handler.clone(),
+        receiver,
+        handler.lc.clone(),
+        remote_host,
+        remote_port,
+    )
+    .await
     {
         log::error!("Failed to listen on {}: {}", port, err);
     }

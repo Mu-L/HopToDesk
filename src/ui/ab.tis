@@ -349,7 +349,6 @@ class SessionList: Reactor.Component {
         var hostname = s[2] || s.hostname || "";
         var platform = s[3] || s.platform || "";
         var alias = s[4] || s.alias || "";
-		var mac_address = s[5] || s.mac_address || "";
         if (this.style == "list") {
             return <div .remote-session-link .remote-session-list id={id} platform={platform} title={alias ? "ID: " + id : ""}>
                 <div .platform style={"background: #AFD4FE"}>
@@ -371,7 +370,6 @@ class SessionList: Reactor.Component {
                 {platform && platformSvg(platform, "white")}
                 <div style="color: #393e46; font-weight: 600" .username .ellipsis>{username}@{hostname}</div>
             </div>
-			<div .mac_address style="display:none">{mac_address}</div>
             <div .text>
                 <div #alias .ellipsis>{alias ? alias : formatId(id)}</div>
                 {svg_menu}
@@ -422,6 +420,7 @@ class SessionList: Reactor.Component {
     event click $(menu#remote-context li) (evt, me) {
         var action = me.id;
         var id = current_menu_peer_id;
+		app.update();
         if (action == "connect") {
             createNewConnect(id, "connect");
         } else if (action == "transfer") {

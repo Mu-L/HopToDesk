@@ -152,9 +152,6 @@ pub fn core_main() -> Option<Vec<String>> {
                     "",
                     "".to_owned(),
                     true,
-                    // it's only debug
-                    //  1. if there are more than 2 args
-                    //  2. if there are more than 1 args, but there isn't `--nostartup`
                     args.len() > 2 || (args.len() > 1 && args.get(1) != Some(&"--nostartup".to_owned())),
                     args.get(1) == Some(&"--nostartup".to_owned())
                 ));
@@ -187,7 +184,7 @@ pub fn core_main() -> Option<Vec<String>> {
             crate::start_os_service();
             return None;
         } else if args[0] == "--server" {
-            log::info!("start --server");
+            log::info!("start --server with user {}", crate::username());
             #[cfg(target_os = "windows")]
             {
                 crate::start_server(true);
@@ -196,18 +193,20 @@ pub fn core_main() -> Option<Vec<String>> {
             #[cfg(target_os = "macos")]
             {
                 std::thread::spawn(move || crate::start_server(true));
-                crate::tray::make_tray(); // To be commented out in event of errors (tray related).
+                crate::tray::make_tray();
                 return None;
-                // to-do: for flutter, starting tray not ready yet, or we can reuse sciter's tray implementation.
             }
             #[cfg(target_os = "linux")]
             {
                 let handler = std::thread::spawn(move || crate::start_server(true));
-                //crate::tray::start_tray();
+                // Show the tray in linux only when current user is a normal user
+                // [Note]
+                // As for GNOME, the tray cannot be shown in user's status bar.
+                // As for KDE, the tray can be shown without user's theme.
+                //if !crate::platform::is_root() {
+                    //crate::tray::start_tray();
+                //}
                 // prevent server exit when encountering errors from tray
-                if !crate::platform::is_root() {
-                    // crate::tray::start_tray();
-                }
                 hbb_common::allow_err!(handler.join());
             }
         } else if args[0] == "--import-config" {
@@ -226,7 +225,11 @@ pub fn core_main() -> Option<Vec<String>> {
             return None;
         } else if args[0] == "--password" {
             if args.len() == 2 {
-                crate::ipc::set_permanent_password(args[1].to_owned()).unwrap();
+                if crate::platform::is_root() {
+                    crate::ipc::set_permanent_password(args[1].to_owned()).unwrap();
+                } else {
+                    println!("Administrative privileges required!");
+                }
             }
             return None;
         } else if args[0] == "--check-hwcodec-config" {
@@ -321,6 +324,4 @@ fn core_main_invoke_new_connection(mut args: std::env::Args) -> Option<Vec<Strin
     }
     #[cfg(target_os = "macos")]
     return Some(Vec::new());
-    //#[cfg(not(target_os = "linux"))]
-    //return None;
 }
