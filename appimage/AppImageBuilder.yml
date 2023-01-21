@@ -9,16 +9,17 @@ script:
   # Download sciter.so
   - mkdir -p AppDir/usr/lib/hoptodesk/
   - pushd AppDir/usr/lib/hoptodesk && wget https://github.com/c-smile/sciter-sdk/raw/29a598b6d20220b93848b5e8abab704619296857/bin.lnx/x64/libsciter-gtk.so && popd
-  # pynput_service.py
-  - cp ../pynput_service.py ./AppDir/usr/lib/hoptodesk
+  # Make usr and icons dirs
+  - mkdir -p AppDir/usr/share/icons/hicolor/128x128 && cp ../res/128x128.png AppDir/usr/share/icons/hicolor/128x128/hoptodesk.png
+  - mkdir -p AppDir/usr/share/icons/hicolor/32x32 && cp ../res/32x32.png AppDir/usr/share/icons/hicolor/32x32/hoptodesk.png
   # Build hoptodesk
   - cargo build --features packui,appimage --release
   - mkdir -p AppDir/usr/bin
+  - mkdir AppDir/usr/share/applications/
   - cp ../target/release/hoptodesk  AppDir/usr/bin/hoptodesk
-  # Make usr and icons dirs
-  - mkdir -p AppDir/usr/share/icons/hicolor/128x128 && cp ../128x128.png AppDir/usr/share/icons/hicolor/128x128/hoptodesk.png
-  - mkdir -p AppDir/usr/share/icons/hicolor/32x32 && cp ../32x32.png AppDir/usr/share/icons/hicolor/32x32/hoptodesk.png
   - cp hoptodesk.desktop AppDir/
+  - cp hoptodesk.desktop AppDir/usr/share/applications/
+  - cp ../hoptodesk.desktop AppDir/usr/share/applications/  
 
 AppDir:
   path: ./AppDir
@@ -26,7 +27,7 @@ AppDir:
     id: hoptodesk
     name: HopToDesk
     icon: hoptodesk
-    version: 1.2.4
+    version: 1.32.9
     exec: usr/bin/hoptodesk
     exec_args: $@
   apt:

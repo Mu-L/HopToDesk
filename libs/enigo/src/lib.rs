@@ -104,6 +104,10 @@ pub enum MouseButton {
     Middle,
     /// Right mouse button
     Right,
+    /// Back mouse button
+    Back,
+    /// Forward mouse button
+    Forward,
 
     /// Scroll up button
     ScrollUp,
@@ -118,6 +122,13 @@ pub enum MouseButton {
 /// Representing an interface and a set of mouse functions every
 /// operating system implementation _should_ implement.
 pub trait MouseControllable {
+    // https://stackoverflow.com/a/33687996
+    /// Offer the ability to confer concrete type.
+    fn as_any(&self) -> &dyn std::any::Any;
+
+    /// Offer the ability to confer concrete type.
+    fn as_mut_any(&mut self) -> &mut dyn std::any::Any;
+
     /// Lets the mouse cursor move to the specified x and y coordinates.
     ///
     /// The topleft corner of your monitor screen is x=0 y=0. Move
@@ -425,6 +436,13 @@ pub enum Key {
 /// Representing an interface and a set of keyboard functions every
 /// operating system implementation _should_ implement.
 pub trait KeyboardControllable {
+    // https://stackoverflow.com/a/33687996
+    /// Offer the ability to confer concrete type.
+    fn as_any(&self) -> &dyn std::any::Any;
+
+    /// Offer the ability to confer concrete type.
+    fn as_mut_any(&mut self) -> &mut dyn std::any::Any;
+
     /// Types the string parsed with DSL.
     ///
     /// Typing {+SHIFT}hello{-SHIFT} becomes HELLO.
@@ -433,8 +451,9 @@ pub trait KeyboardControllable {
     where
         Self: Sized,
     {
-        self.key_sequence_parse_try(sequence)
-            .expect("Could not parse sequence");
+        if let Err(..) = self.key_sequence_parse_try(sequence) {
+            println!("Could not parse sequence");
+        }
     }
     /// Same as key_sequence_parse except returns any errors
     fn key_sequence_parse_try(&mut self, sequence: &str) -> Result<(), dsl::ParseError>

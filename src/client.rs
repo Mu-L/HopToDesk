@@ -13,10 +13,10 @@ use std::{
     collections::HashMap,
     net::SocketAddr,
     ops::{Deref, Not},
+    str::FromStr,
     sync::{atomic::AtomicBool, mpsc, Arc, Mutex, RwLock},
     time::UNIX_EPOCH,
 };
-use uuid::Uuid;
 
 pub use file_trait::FileManager;
 use hbb_common::{
@@ -24,7 +24,7 @@ use hbb_common::{
     anyhow::{anyhow, Context},
     bail,
     config::{Config, PeerConfig, PeerInfoSerde, CONNECT_TIMEOUT, RENDEZVOUS_TIMEOUT},
-    log,
+    get_version_number, log,
     message_proto::{option_message::BoolOption, *},
     protobuf::Message as _,
     rand,
@@ -51,7 +51,10 @@ pub use super::lang::*;
 pub mod file_trait;
 pub mod helper;
 pub mod io_loop;
-use crate::server::video_service::{SCRAP_X11_REF_URL, SCRAP_X11_REQUIRED};
+use crate::{
+    common::{self, is_keyboard_mode_supported},
+    server::video_service::{SCRAP_X11_REF_URL, SCRAP_X11_REQUIRED},
+};
 pub static SERVER_KEYBOARD_ENABLED: AtomicBool = AtomicBool::new(true);
 pub static SERVER_FILE_TRANSFER_ENABLED: AtomicBool = AtomicBool::new(true);
 pub static SERVER_CLIPBOARD_ENABLED: AtomicBool = AtomicBool::new(true);
@@ -144,6 +147,84 @@ impl Drop for OboePlayer {
 }
 }
 
+#[derive(Clone)]
+struct Peer {
+    local_addr: SocketAddr,
+    peer_addr: SocketAddr,
+    peer_public_addr: SocketAddr,
+    peer_nat_type: NatType,
+    my_nat_type: i32,
+    id_pk: Vec<u8>,
+    listening_time_used: u64,
+}
+
+impl Peer {
+    fn from_peer_id(peer_id: &str) -> ResultType<Self> {
+        let local_addr = turn_client::get_local_ip()?;
+        let id_pk = Vec::new();
+        let mut peer_addr = Config::get_any_listen_addr();
+        let peer_public_addr = peer_addr;
+        let peer_nat_type = NatType::UNKNOWN_NAT;
+        if peer_addr.port() == 0 {
+            if let Ok(pa) = peer_id.parse() {
+                peer_addr = pa;
+            } else {
+                let peer_sock_addr = format!("{}:21118", peer_id);
+                if let Ok(pa) = peer_sock_addr.parse() {
+                    peer_addr = pa
+                } else {
+                    log::info!("cant connect to {} with addr {}", peer_id, peer_addr);
+                    bail!("Unable to connect to the remote partner without internet access.");
+                }
+            }
+        }
+
+        Ok(Self {
+            local_addr: SocketAddr::new(local_addr, 0),
+            peer_addr,
+            peer_public_addr,
+            peer_nat_type,
+            my_nat_type: NatType::UNKNOWN_NAT as i32,
+            id_pk,
+            listening_time_used: 0,
+        })
+    }
+
+    async fn connect_timeout(&self, peer_id: &str) -> u64 {
+        let direct_failures = PeerConfig::load(peer_id).direct_failures;
+        let mut connect_timeout = 0;
+        const MIN: u64 = 1000;
+        if self.peer_nat_type == NatType::SYMMETRIC {
+            connect_timeout = MIN;
+        } else {
+            if self.peer_nat_type == NatType::ASYMMETRIC {
+                let mut my_nat_type = self.my_nat_type;
+                if my_nat_type == NatType::UNKNOWN_NAT as i32 {
+                    my_nat_type = crate::get_nat_type(100).await;
+                }
+                if my_nat_type == NatType::ASYMMETRIC as i32 {
+                    connect_timeout = CONNECT_TIMEOUT;
+                    if direct_failures > 0 {
+                        connect_timeout = self.listening_time_used * 6;
+                    }
+                } else if my_nat_type == NatType::SYMMETRIC as i32 {
+                    connect_timeout = MIN;
+                }
+            }
+            if connect_timeout == 0 {
+                let n = if direct_failures > 0 { 3 } else { 6 };
+                connect_timeout = self.listening_time_used * (n as u64);
+            }
+            if connect_timeout < MIN {
+                connect_timeout = MIN;
+            }
+        }
+        log::info!("peer address: {}, timeout: {}", peer_id, connect_timeout);
+
+        connect_timeout
+    }
+}
+
 impl Client {
     pub async fn start(
         peer: &str,
@@ -173,7 +254,7 @@ impl Client {
 
     /// Start a new connection.
     async fn _start(
-        peer: &str,
+        peer_id: &str,
         conn_type: ConnType,
     ) -> ResultType<(
         Stream,
@@ -182,6 +263,87 @@ impl Client {
         String,
         String,
     )> {
+        let mut security_numbers = String::new();
+        let mut security_qr_code = String::new();
+
+        match Self::get_peer_info(peer_id).await {
+            Ok((peer, sender)) => {
+                let (mut conn, relay, direct) =
+                    Self::_connect_both(peer_id, &peer, sender, conn_type).await?;
+                (security_numbers, security_qr_code) =
+                    Self::secure_connection(peer_id, peer.id_pk, &mut conn).await?;
+
+                Ok((conn, relay, direct, security_numbers, security_qr_code))
+            }
+            Err(err) => {
+                log::info!(
+                    "get peer info failed with error {}, may be no internet access, try access directly.",
+                    err
+                );
+                let peer = Peer::from_peer_id(peer_id)?;
+                let mut conn = Self::connect_directly(peer_id, &peer).await?;
+                (security_numbers, security_qr_code) =
+                    Self::secure_connection(peer_id, peer.id_pk, &mut conn).await?;
+                Ok((conn, None, true, security_numbers, security_qr_code))
+            }
+        }
+    }
+
+    async fn _connect_both(
+        peer_id: &str,
+        peer: &Peer,
+        sender: soketto::Sender<Compat<TcpStream>>,
+        conn_type: ConnType,
+    ) -> ResultType<(FramedStream, Option<Arc<impl webrtc_util::Conn>>, bool)> {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(2);
+
+        {
+            let tx = tx.clone();
+            let peer_id = peer_id.to_owned();
+            let peer = peer.clone();
+            tokio::spawn(async move {
+                match Self::connect_directly(&peer_id, &peer).await {
+                    Ok(stream) => {
+                        tx.send(Ok((stream, None, true))).await;
+                    }
+                    Err(err) => {
+                        tx.send(Err(err)).await;
+                    }
+                }
+            });
+        }
+
+        {
+            let tx = tx.clone();
+            let peer_id = peer_id.to_owned();
+            let peer = peer.clone();
+            tokio::spawn(async move {
+                match Self::connect_over_turn(&peer_id, sender, peer.peer_public_addr).await {
+                    Ok((stream, relay)) => {
+                        tx.send(Ok((stream, Some(relay), true))).await;
+                    }
+                    Err(err) => {
+                        tx.send(Err(err)).await;
+                    }
+                };
+            });
+        }
+        for i in 0..2 {
+            if let Some(ret) = rx.recv().await {
+                match ret {
+                    Ok(ret) => return Ok(ret),
+                    Err(err) => {
+                        if i == 1 {
+                            return Err(err);
+                        }
+                    }
+                }
+            }
+        }
+        unreachable!()
+    }
+
+    async fn get_peer_info(peer: &str) -> ResultType<(Peer, soketto::Sender<Compat<TcpStream>>)> {
         let rendezvous_server = match crate::get_rendezvous_server(1_000).await {
             Some(server) => server,
             None => bail!("Failed to retrieve rendez-vous server address"),
@@ -217,7 +379,6 @@ impl Client {
                 .send_text(&rendezvous_messages::ConnectRequest::new(peer, &my_peer_id).to_json())
                 .await?;
             use hbb_common::protobuf::Enum;
-            let nat_type = NatType::from_i32(my_nat_type).unwrap_or(NatType::UNKNOWN_NAT);
             let mut receive_buff = Vec::new();
             match timeout(RENDEZVOUS_TIMEOUT, receiver.receive_data(&mut receive_buff)).await {
                 Ok(r) => match r {
@@ -268,116 +429,71 @@ impl Client {
             time_used,
             id_pk.len()
         );
-        Self::connect(
-            my_addr,
-            peer_addr,
-            peer,
-            id_pk,
+
+        Ok((
+            Peer {
+                local_addr: my_addr,
+                peer_addr,
+                peer_public_addr,
+                peer_nat_type,
+                my_nat_type,
+                id_pk,
+                listening_time_used: time_used,
+            },
             sender,
+        ))
+    }
+
+    async fn connect_over_turn(
+        peer_id: &str,
+        sender: soketto::Sender<Compat<TcpStream>>,
+        peer_public_addr: SocketAddr,
+    ) -> ResultType<(FramedStream, Arc<impl webrtc_util::Conn>)> {
+        let start = std::time::Instant::now();
+        log::info!("start connecting peer via turn servers");
+        let (relay, conn) = match turn_client::connect_over_turn_servers(
+            &peer_id,
             peer_public_addr,
-            peer_nat_type,
-            my_nat_type,
-            time_used,
+            sender,
         )
         .await
-    }
-
-    async fn connect(
-        local_addr: SocketAddr,
-        peer: SocketAddr,
-        peer_id: &str,
-        id_pk: Vec<u8>,
-        mut sender: soketto::Sender<Compat<TcpStream>>,
-        peer_public_addr: SocketAddr,
-        peer_nat_type: NatType,
-        my_nat_type: i32,
-        listening_time_used: u64,
-    ) -> ResultType<(
-        Stream,
-        Option<Arc<impl webrtc_util::Conn>>,
-        bool,
-        String,
-        String,
-    )> {
-        let direct_failures = PeerConfig::load(peer_id).direct_failures;
-        let mut connect_timeout = 0;
-        const MIN: u64 = 1000;
-        if peer_nat_type == NatType::SYMMETRIC {
-            connect_timeout = MIN;
-        } else {
-            if peer_nat_type == NatType::ASYMMETRIC {
-                let mut my_nat_type = my_nat_type;
-                if my_nat_type == NatType::UNKNOWN_NAT as i32 {
-                    my_nat_type = crate::get_nat_type(100).await;
-                }
-                if my_nat_type == NatType::ASYMMETRIC as i32 {
-                    connect_timeout = CONNECT_TIMEOUT;
-                    if direct_failures > 0 {
-                        connect_timeout = listening_time_used * 6;
-                    }
-                } else if my_nat_type == NatType::SYMMETRIC as i32 {
-                    connect_timeout = MIN;
-                }
-            }
-            if connect_timeout == 0 {
-                let n = if direct_failures > 0 { 3 } else { 6 };
-                connect_timeout = listening_time_used * (n as u64);
-            }
-            if connect_timeout < MIN {
-                connect_timeout = MIN;
-            }
-        }
-        log::info!("peer address: {}, timeout: {}", peer, connect_timeout);
-        let start = std::time::Instant::now();
-        let (relay, mut conn, direct) = Self::concurrent_direct_and_over_turn(
-            peer_id,
-            peer,
-            peer_public_addr,
-            local_addr,
-            connect_timeout,
-            sender,
-        )
-        .await?;
-		let time_used = start.elapsed().as_millis() as u64;
-        log::info!("{}ms used to establish connection", time_used);
-        let (security_numbers, security_qr_code) =
-            Self::secure_connection(peer_id, id_pk, &mut conn).await?;
-        //Self::secure_connection(peer_id, id_pk, &mut conn).await?;
-		Ok((conn, relay, direct, security_numbers, security_qr_code))
-    }
-
-    pub async fn concurrent_direct_and_over_turn(
-        peer_id: &str,
-        peer: SocketAddr,
-        peer_public_addr: SocketAddr,
-        local_addr: SocketAddr,
-        connect_timeout: u64,
-        mut sender: soketto::Sender<Compat<TcpStream>>,
-    ) -> ResultType<(Option<Arc<impl webrtc_util::Conn>>, FramedStream, bool)> {
-        // NOTICE: Socks5 is be used event in intranet. Which may be not a good way.
-        let (tx, mut rx) = tokio::sync::mpsc::channel(3);
         {
-            let tx = tx.clone();
-            tokio::spawn(async move {
-                log::info!("start connecting peer directly: {}", local_addr);
-                match socket_client::connect_tcp(peer, local_addr, connect_timeout).await {
-                    Ok(conn) => {
-                        tx.send(Ok((None, conn, true))).await;
-                        log::info!("connect successfully to {} directly!", local_addr);
-                    }
-                    Err(err) => {
-                        log::warn!(
-                            "attempt to connect to {} directly failed: {}",
-                            local_addr,
-                            err
-                        );
+            Ok((relay_conn, stream)) => {
+                log::info!("connect successfully to peer via TURN servers!");
+                Ok((relay_conn, stream))
+            }
+            Err(err) => {
+                log::warn!("attempt to connect via turn servers faield: {}", err,);
+                Err(err)
+            }
+        }?;
+        let time_used = start.elapsed().as_millis() as u64;
+        log::info!("{}ms used to establish connection", time_used);
+        //Self::secure_connection(peer_id, id_pk, &mut conn).await?;
+        Ok((conn, relay))
+    }
+
+    async fn connect_directly(peer_id: &str, peer: &Peer) -> ResultType<FramedStream> {
+        let connect_timeout = peer.connect_timeout(peer_id).await;
+        log::info!("start connecting peer directly: {}", peer.local_addr);
+        match socket_client::connect_tcp(peer.peer_addr, peer.local_addr, connect_timeout).await {
+            Ok(conn) => {
+                log::info!("connect successfully to {} directly!", peer.local_addr);
+                Ok(conn)
+            }
+            Err(err) => {
+                log::warn!(
+                    "attempt to connect to {} directly failed: {}",
+                    peer.local_addr,
+                    err
+                );
 
                 let any_addr = Config::get_any_listen_addr();
                 log::info!("start connecting peer directly: {}", any_addr);
-                match socket_client::connect_tcp(peer, any_addr, connect_timeout).await {
+                match socket_client::connect_tcp(peer.peer_addr, any_addr, connect_timeout).await {
                     Ok(stream) => {
-                        tx.send(Ok((None, stream, true))).await;
                         log::info!("connect successfully to {} directly!", any_addr);
+                        Ok(stream)
                     }
                     Err(err) => {
                         log::warn!(
@@ -385,46 +501,11 @@ impl Client {
                             any_addr,
                             err
                         );
-                        tx.send(Err(err)).await;
-                    }
-                };
-                    }
-                };
-            });
-        }
-
-        {
-            let tx = tx.clone();
-            let peer_id = peer_id.to_owned();
-            tokio::spawn(async move {
-                log::info!("start connecting peer via turn servers");
-                match turn_client::connect_over_turn_servers(&peer_id, peer_public_addr, sender)
-                    .await
-                {
-                    Ok((relay_conn, stream)) => {
-                        tx.send(Ok((Some(relay_conn), stream, false))).await;
-                        log::info!("connect successfully to peer via TURN servers!");
-                    }
-                    Err(err) => {
-                        log::warn!("attempt to connect via turn servers faield: {}", err,);
-                        tx.send(Err(err)).await;
-                    }
-                };
-            });
-        }
-        for i in 0..3 {
-            if let Some(ret) = rx.recv().await {
-                match ret {
-                    Ok(ret) => return Ok(ret),
-                    Err(err) => {
-                        if i == 2 {
-                            return Err(err);
-                        }
+                        Err(err)
                     }
                 }
             }
         }
-        unreachable!()
     }
 
     pub async fn secure_connection(
@@ -929,7 +1010,7 @@ impl LoginConfigHandler {
         self.restarting_remote_device = false;
         self.force_relay = !self.get_option("force-always-relay").is_empty();
     }
-    
+
     // XXX: fix conflicts between with config that introduces by Deref.
     pub fn set_reconnect_password(&mut self, password: Vec<u8>) {
         self.password = password
@@ -999,7 +1080,7 @@ impl LoginConfigHandler {
         config.keyboard_mode = value;
         self.save_config(config);
     }
-    
+
     /// Save scroll style to the current config.
     ///
     /// # Arguments
@@ -1332,11 +1413,16 @@ impl LoginConfigHandler {
     pub fn handle_login_error(&mut self, err: &str, interface: &impl Interface) -> bool {
         if err == "Wrong Password" {
             self.password = Default::default();
-interface.msgbox("re-input-password", err, "Do you want to enter again?", "");
+            interface.msgbox("re-input-password", err, "Do you want to enter again?", "");
             true
         } else if err == "2FA Not Authorized" {
             self.password = Default::default();
-            interface.msgbox("re-input-password-2fa", "Login Error", err, "Do you want to enter again and accept 2fa?");
+            interface.msgbox(
+                "re-input-password-2fa",
+                "Login Error",
+                err,
+                "Do you want to enter again and accept 2fa?",
+            );
             true
         } else if err == "No Password Access" {
             self.password = Default::default();
@@ -1403,12 +1489,18 @@ interface.msgbox("re-input-password", err, "Do you want to enter again?", "");
                 log::debug!("remove password of {}", self.id);
             }
         }
-        if config.keyboard_mode == "" {
-            if hbb_common::get_version_number(&pi.version) < hbb_common::get_version_number("1.2.0")
-            {
-                config.keyboard_mode = "legacy".to_string();
+        if config.keyboard_mode.is_empty() {
+            if is_keyboard_mode_supported(&KeyboardMode::Map, get_version_number(&pi.version)) {
+                config.keyboard_mode = KeyboardMode::Map.to_string();
             } else {
-                config.keyboard_mode = "map".to_string();
+                config.keyboard_mode = KeyboardMode::Legacy.to_string();
+            }
+        } else {
+            let keyboard_modes =
+                common::get_supported_keyboard_modes(get_version_number(&pi.version));
+            let current_mode = &KeyboardMode::from_str(&config.keyboard_mode).unwrap_or_default();
+            if !keyboard_modes.contains(current_mode) {
+                config.keyboard_mode = KeyboardMode::Legacy.to_string();
             }
         }
         self.conn_id = pi.conn_id;
@@ -1866,6 +1958,8 @@ pub enum Data {
     AddJob((i32, String, String, i32, bool, bool)),
     ResumeJob((i32, bool)),
     RecordScreen(bool, i32, i32, String),
+    ElevateDirect,
+    ElevateWithLogon(String, String),
 }
 
 /// Keycode for key events.
@@ -2054,4 +2148,3 @@ fn decode_id_pk(signed: &[u8], key: &sign::PublicKey) -> ResultType<(String, [u8
         bail!("Wrong public length");
     }
 }
-

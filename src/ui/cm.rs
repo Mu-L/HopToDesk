@@ -10,12 +10,7 @@ use crate::two_factor_auth::{ui, TFAManager};
 use crate::ipc::start_pa;
 use crate::ui_cm_interface::{start_ipc, ConnectionManager, InvokeUiCM};
 
-use hbb_common::{
-    allow_err,
-    config::Config,
-    log,
-};
-
+use hbb_common::{allow_err, config::Config, log};
 use sciter::{make_args, Element, Value, HELEMENT};
 use std::sync::Mutex;
 use std::{ops::Deref, sync::Arc};

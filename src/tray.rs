@@ -1,3 +1,4 @@
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use super::ui_interface::get_option_opt;
 #[cfg(target_os = "linux")]
 use hbb_common::log::{debug, error, info};
@@ -47,7 +48,7 @@ pub fn start_tray() {
         } else {
             *control_flow = ControlFlow::Wait;
         }
-        let stopped = is_service_stoped();
+        let stopped = is_service_stopped();
         let state = if stopped { 2 } else { 1 };
         let old = *old_state.lock().unwrap();
         if state != old {
@@ -115,7 +116,7 @@ pub fn start_tray() {
     }
     if let Some(mut appindicator) = get_default_app_indicator() {
         let mut menu = gtk::Menu::new();
-        let stoped = is_service_stoped();
+        let stoped = is_service_stopped();
         // start/stop service
         let label = if stoped {
             crate::client::translate("Start Service".to_owned())
@@ -143,7 +144,7 @@ pub fn start_tray() {
 fn update_tray_service_item(item: &gtk::MenuItem) {
     use gtk::traits::GtkMenuItemExt;
 
-    if is_service_stoped() {
+    if is_service_stopped() {
         debug!("Now try to start service");
         item.set_label(&crate::client::translate("Stop service".to_owned()));
         crate::ipc::set_option("stop-service", "");
@@ -185,7 +186,8 @@ fn get_default_app_indicator() -> Option<AppIndicator> {
 /// Check if service is stoped.
 /// Return [`true`] if service is stoped, [`false`] otherwise.
 #[inline]
-fn is_service_stoped() -> bool {
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+fn is_service_stopped() -> bool {
     if let Some(v) = get_option_opt("stop-service") {
         v == "Y"
     } else {
@@ -194,6 +196,10 @@ fn is_service_stoped() -> bool {
 }
 #[cfg(target_os = "macos")]
 pub fn make_tray() {
+    extern "C" {
+        fn BackingScaleFactor() -> f32;
+    }
+    let f = unsafe { BackingScaleFactor() };
     use tray_item::TrayItem;
     //let mode = dark_light::detect();
     let mut icon_path = "";

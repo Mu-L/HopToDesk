@@ -24,11 +24,14 @@ use hbb_common::{
     log,
     message_proto::*,
     protobuf::Enum,
+    protobuf::Message as _,
+    rendezvous_proto::*,
     socket_client, tokio, ResultType,
 };
 //#[cfg(any(target_os = "android", target_os = "ios", feature = "cli"))]
 use hbb_common::{config::RENDEZVOUS_PORT, futures::future::join_all};
 
+pub type NotifyMessageBox = fn(String, String, String, String) -> dyn Future<Output = ()>;
 
 pub const CLIPBOARD_NAME: &'static str = "clipboard";
 pub const CLIPBOARD_INTERVAL: u64 = 333;
@@ -661,7 +664,7 @@ pub async fn post_request(url: String, body: String, header: &str) -> ResultType
         if !res.is_empty() {
             return Ok(res);
         }
-        bail!(String::from_utf8_lossy(&output.stderr).to_string());
+        hbb_common::bail!(String::from_utf8_lossy(&output.stderr).to_string());
     }
 }
 
@@ -680,34 +683,55 @@ pub fn make_privacy_mode_msg(state: back_notification::PrivacyModeState) -> Mess
     msg_out.set_misc(misc);
     msg_out
 }
-/*
-pub fn make_fd_to_json(fd: FileDirectory) -> String {
-    use serde_json::json;
-    let mut fd_json = serde_json::Map::new();
-    fd_json.insert("id".into(), json!(fd.id));
-    fd_json.insert("path".into(), json!(fd.path));
 
-    let mut entries = vec![];
-    for entry in fd.entries {
-        let mut entry_map = serde_json::Map::new();
-        entry_map.insert("entry_type".into(), json!(entry.entry_type.value()));
-        entry_map.insert("name".into(), json!(entry.name));
-        entry_map.insert("size".into(), json!(entry.size));
-        entry_map.insert("modified_time".into(), json!(entry.modified_time));
-        entries.push(entry_map);
+
+pub fn is_keyboard_mode_supported(keyboard_mode: &KeyboardMode, version_number: i64) -> bool {
+    match keyboard_mode {
+        KeyboardMode::Legacy => true,
+        KeyboardMode::Map => version_number >= hbb_common::get_version_number("1.2.0"),
+        KeyboardMode::Translate => false,
+        KeyboardMode::Auto => false,
     }
-    fd_json.insert("entries".into(), json!(entries));
-    serde_json::to_string(&fd_json).unwrap_or("".into())
 }
-*/
+
+pub fn get_supported_keyboard_modes(version: i64) -> Vec<KeyboardMode> {
+    KeyboardMode::iter()
+        .filter(|&mode| is_keyboard_mode_supported(mode, version))
+        .map(|&mode| mode)
+        .collect::<Vec<_>>()
+}
 
 #[cfg(not(target_os = "linux"))]
 lazy_static::lazy_static! {
-    pub static ref IS_X11: Mutex<bool> = Mutex::new(false);
+    pub static ref IS_X11: bool = false;
 
 }
 
 #[cfg(target_os = "linux")]
 lazy_static::lazy_static! {
-    pub static ref IS_X11: Mutex<bool> = Mutex::new("x11" == hbb_common::platform::linux::get_display_server());
+    pub static ref IS_X11: bool = "x11" == hbb_common::platform::linux::get_display_server();
+}
+
+pub fn make_fd_to_json(id: i32, path: String, entries: &Vec<FileEntry>) -> String {
+    use serde_json::json;
+    let mut fd_json = serde_json::Map::new();
+    fd_json.insert("id".into(), json!(id));
+    fd_json.insert("path".into(), json!(path));
+
+    let mut entries_out = vec![];
+    for entry in entries {
+        let mut entry_map = serde_json::Map::new();
+        entry_map.insert("entry_type".into(), json!(entry.entry_type.value()));
+        entry_map.insert("name".into(), json!(entry.name));
+        entry_map.insert("size".into(), json!(entry.size));
+        entry_map.insert("modified_time".into(), json!(entry.modified_time));
+        entries_out.push(entry_map);
+    }
+    fd_json.insert("entries".into(), json!(entries_out));
+    serde_json::to_string(&fd_json).unwrap_or("".into())
+}
+
+#[cfg(test)]
+mod test_common {
+    use super::*;
 }

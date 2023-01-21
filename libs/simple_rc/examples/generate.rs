@@ -12,7 +12,7 @@ fn main() {
         generate_with_conf(&Config {
             outfile: "src/rc.rs".to_owned(),
             confs: vec![ConfigItem {
-                inc: "D:/projects/windows/RustDeskTempTopMostWindow/x64/Release/xxx".to_owned(),
+                inc: "D:/projects/windows/HopToDeskTempTopMostWindow/x64/Release/xxx".to_owned(),
                 // exc: vec!["*.dll".to_owned(), "*.exe".to_owned()],
                 exc: vec![],
                 suppressed_front: "D:/projects/windows".to_owned(),

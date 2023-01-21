@@ -8,7 +8,8 @@ use std::{
 use flutter_rust_bridge::{StreamSink, ZeroCopyBuffer};
 
 use hbb_common::{
-    bail, config::LocalConfig, message_proto::*, rendezvous_proto::ConnType, ResultType,
+    bail, config::LocalConfig, message_proto::*, rendezvous_proto::ConnType,
+    ResultType,
 };
 use serde_json::json;
 
@@ -27,7 +28,6 @@ lazy_static::lazy_static! {
     pub static ref GLOBAL_EVENT_STREAM: RwLock<HashMap<String, StreamSink<String>>> = Default::default(); // rust to dart event channel
 }
 
-/// FFI for rustdesk core's main entry.
 /// Return true if the app should continue running with UI(possibly Flutter), false if the app should exit.
 #[cfg(not(windows))]
 #[no_mangle]
@@ -155,7 +155,7 @@ impl InvokeUiSession for FlutterHandler {
     }
 
     /// unused in flutter, use switch_display or set_peer_info
-    fn set_display(&self, _x: i32, _y: i32, _w: i32, _h: i32, _cursor_embeded: bool) {}
+    fn set_display(&self, _x: i32, _y: i32, _w: i32, _h: i32, _cursor_embedded: bool) {}
 
     fn update_privacy_mode(&self) {
         self.push_event("update_privacy_mode", [].into());
@@ -297,7 +297,7 @@ impl InvokeUiSession for FlutterHandler {
             h.insert("y", d.y);
             h.insert("width", d.width);
             h.insert("height", d.height);
-            h.insert("cursor_embeded", if d.cursor_embeded { 1 } else { 0 });
+            h.insert("cursor_embedded", if d.cursor_embedded { 1 } else { 0 });
             displays.push(h);
         }
         let displays = serde_json::ser::to_string(&displays).unwrap_or("".to_owned());
@@ -347,7 +347,7 @@ impl InvokeUiSession for FlutterHandler {
                 ("y", &display.y.to_string()),
                 ("width", &display.width.to_string()),
                 ("height", &display.height.to_string()),
-                ("cursor_embeded", &{if display.cursor_embeded {1} else {0}}.to_string()),
+                ("cursor_embedded", &{if display.cursor_embedded {1} else {0}}.to_string()),
             ],
         );
     }

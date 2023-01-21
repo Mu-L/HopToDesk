@@ -1,8 +1,12 @@
 use lazy_static::lazy_static;
-use std::sync::{Arc};
+use log::info;
+use std::sync::Arc;
+use std::fs;
+use std::io::Read;
 use tokio::sync::Mutex;
 
 use crate::config::Config2;
+use crate::config::Config;
 
 const API_URI: &'static str = "https://api.hoptodesk.com/";
 
@@ -26,16 +30,26 @@ impl OnceAPI {
         if let Some(r) = &*r {
             return Ok(r.clone());
         }
-        let body = reqwest::get(
-            Config2::get()
-                .options
-                .get("custom-api-url")
-                .map(ToOwned::to_owned)
-                .unwrap_or_else(|| API_URI.to_owned()),
-        )
-        .await?
-        .text()
-        .await?;
+
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            if let Ok(mut file) = fs::File::open(&Config::path("api.json")) {
+                let mut body = String::new();
+                file.read_to_string(&mut body).ok();
+                let ret: serde_json::Value = serde_json::from_str(&body)?;
+                *r = Some(ret.clone());
+                info!("api file {}", "api.json");
+                return Ok(ret);
+            }
+        }
+
+        let api_uri = Config2::get()
+            .options
+            .get("custom-api-url")
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| API_URI.to_owned());
+        info!("api uri {}", api_uri);
+        let body = reqwest::get(api_uri).await?.text().await?;
         let ret: serde_json::Value = serde_json::from_str(&body)?;
         *r = Some(ret.clone());
         Ok(ret)

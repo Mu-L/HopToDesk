@@ -22,9 +22,10 @@ use hbb_common::{
     rendezvous_proto::*,
     tcp::FramedStream,
 };
-
+/*
 #[cfg(feature = "flutter")]
 use crate::hbbs_http::account;
+*/
 use crate::{common::SOFTWARE_UPDATE_URL, ipc};
 
 #[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
@@ -164,6 +165,7 @@ pub fn get_license() -> String {
 */
 
 #[inline]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 pub fn get_option_opt(key: &str) -> Option<String> {
     OPTIONS.lock().unwrap().get(key).map(|x| x.clone())
 }
@@ -205,6 +207,18 @@ pub fn set_local_flutter_config(key: String, value: String) {
     LocalConfig::set_flutter_config(key, value);
 }
 
+#[cfg(feature = "flutter")]
+#[inline]
+pub fn get_kb_layout_type() -> String {
+    LocalConfig::get_kb_layout_type()
+}
+
+#[cfg(feature = "flutter")]
+#[inline]
+pub fn set_kb_layout_type(kb_layout_type: String) {
+    LocalConfig::set_kb_layout_type(kb_layout_type);
+}
+
 #[inline]
 pub fn peer_has_password(id: String) -> bool {
     !PeerConfig::load(&id).password.is_empty()
@@ -237,7 +251,8 @@ pub fn set_peer_option(id: String, name: String, value: String) {
 /*
 #[inline]
 pub fn using_public_server() -> bool {
-    crate::get_custom_rendezvous_server(get_option_("custom-rendezvous-server")).is_empty()
+    option_env!("RENDEZVOUS_SERVER").is_none()
+        && crate::get_custom_rendezvous_server(get_option_("custom-rendezvous-server")).is_empty()
 }
 */
 
@@ -588,6 +603,14 @@ pub fn is_installed_daemon(_prompt: bool) -> bool {
 }
 
 #[inline]
+pub fn is_can_input_monitoring(_prompt: bool) -> bool {
+    #[cfg(target_os = "macos")]
+    return crate::platform::macos::is_can_input_monitoring(_prompt);
+    #[cfg(not(target_os = "macos"))]
+    return true;
+}
+
+#[inline]
 pub fn get_error() -> String {
     #[cfg(not(any(feature = "cli")))]
     #[cfg(target_os = "linux")]
@@ -698,6 +721,20 @@ pub fn discover() {
     std::thread::spawn(move || {
         allow_err!(crate::lan::discover());
     });
+}
+
+#[cfg(feature = "flutter")]
+pub fn peer_to_map(id: String, p: PeerConfig) -> HashMap<&'static str, String> {
+    HashMap::<&str, String>::from_iter([
+        ("id", id),
+        ("username", p.info.username.clone()),
+        ("hostname", p.info.hostname.clone()),
+        ("platform", p.info.platform.clone()),
+        (
+            "alias",
+            p.options.get("alias").unwrap_or(&"".to_owned()).to_owned(),
+        ),
+    ])
 }
 
 #[inline]
@@ -906,7 +943,7 @@ fn check_connect_status(reconnect: bool) -> mpsc::UnboundedSender<ipc::Data> {
     std::thread::spawn(move || check_connect_status_(reconnect, rx));
     tx
 }
-
+/*
 #[cfg(feature = "flutter")]
 pub fn account_auth(op: String, id: String, uuid: String) {
     account::OidcSession::account_auth(op, id, uuid);
@@ -921,6 +958,7 @@ pub fn account_auth_cancel() {
 pub fn account_auth_result() -> String {
     serde_json::to_string(&account::OidcSession::get_result()).unwrap_or_default()
 }
+*/
 
 // notice: avoiding create ipc connecton repeatly,
 // because windows named pipe has serious memory leak issue.

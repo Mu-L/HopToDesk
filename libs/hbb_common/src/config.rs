@@ -1,8 +1,3 @@
-use anyhow::Result;
-use directories_next::ProjectDirs;
-use rand::Rng;
-use serde_derive::{Deserialize, Serialize};
-use sodiumoxide::crypto::sign;
 use std::{
     collections::HashMap,
     fs,
@@ -12,6 +7,13 @@ use std::{
     time::SystemTime,
 };
 
+use anyhow::Result;
+use rand::Rng;
+use regex::Regex;
+use serde as de;
+use serde_derive::{Deserialize, Serialize};
+use sodiumoxide::base64;
+use sodiumoxide::crypto::sign;
 
 use crate::{
     log,
@@ -20,6 +22,7 @@ use crate::{
         encrypt_vec_or_original,
     },
 };
+
 pub const RENDEZVOUS_TIMEOUT: u64 = 12_000;
 pub const CONNECT_TIMEOUT: u64 = 18_000;
 pub const READ_TIMEOUT: u64 = 30_000;
@@ -56,24 +59,50 @@ lazy_static::lazy_static! {
     static ref KEY_PAIR: Arc<Mutex<Option<(Vec<u8>, Vec<u8>)>>> = Default::default();
     static ref HW_CODEC_CONFIG: Arc<RwLock<HwCodecConfig>> = Arc::new(RwLock::new(HwCodecConfig::load()));
 }
-#[cfg(target_os = "android")]
-lazy_static::lazy_static! {
-    pub static ref APP_DIR: Arc<RwLock<String>> = Arc::new(RwLock::new("/data/user/0/com.hoptodesk.hoptodesk/app_flutter".to_owned()));
-}
-#[cfg(target_os = "ios")]
+
 lazy_static::lazy_static! {
     pub static ref APP_DIR: Arc<RwLock<String>> = Default::default();
 }
+
 #[cfg(any(target_os = "android", target_os = "ios"))]
 lazy_static::lazy_static! {
     pub static ref APP_HOME_DIR: Arc<RwLock<String>> = Default::default();
 }
+
+// #[cfg(any(target_os = "android", target_os = "ios"))]
+lazy_static::lazy_static! {
+    pub static ref HELPER_URL: HashMap<&'static str, &'static str> = HashMap::from([
+        ("rustdesk docs home", ""),
+        ("rustdesk docs x11-required", ""),
+        ]);
+}
+
 const CHARS: &'static [char] = &[
     '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k',
     'm', 'n', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
 ];
 
 pub const RENDEZVOUS_PORT: i32 = 21116;
+
+macro_rules! serde_field_string {
+    ($default_func:ident, $de_func:ident, $default_expr:expr) => {
+        fn $default_func() -> String {
+            $default_expr
+        }
+
+        fn $de_func<'de, D>(deserializer: D) -> Result<String, D::Error>
+        where
+            D: de::Deserializer<'de>,
+        {
+            let s: &str = de::Deserialize::deserialize(deserializer)?;
+            Ok(if s.is_empty() {
+                Self::$default_func()
+            } else {
+                s.to_owned()
+            })
+        }
+    };
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum NetworkType {
@@ -84,7 +113,9 @@ pub enum NetworkType {
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Config {
     #[serde(default)]
-    pub id: String,
+    pub id: String, // use
+    #[serde(default)]
+    enc_id: String, // store
     #[serde(default)]
     password: String,
     #[serde(default)]
@@ -139,9 +170,20 @@ pub struct PeerConfig {
     pub size_ft: Size,
     #[serde(default)]
     pub size_pf: Size,
-    #[serde(default)]
-    pub view_style: String, // original (default), scale
-    #[serde(default)]
+    #[serde(
+        default = "PeerConfig::default_view_style",
+        deserialize_with = "PeerConfig::deserialize_view_style"
+    )]
+    pub view_style: String,
+    #[serde(
+        default = "PeerConfig::default_scroll_style",
+        deserialize_with = "PeerConfig::deserialize_scroll_style"
+    )]
+    pub scroll_style: String,
+    #[serde(
+        default = "PeerConfig::default_image_quality",
+        deserialize_with = "PeerConfig::deserialize_image_quality"
+    )]
     pub image_quality: String,
     #[serde(default)]
     pub custom_image_quality: Vec<i32>,
@@ -163,10 +205,15 @@ pub struct PeerConfig {
     pub enable_file_transfer: bool,
     #[serde(default)]
     pub show_quality_monitor: bool,
-
-    // the other scalar value must before this
     #[serde(default)]
+    pub keyboard_mode: String,
+
+    // The other scalar value must before this
+    #[serde(default, deserialize_with = "PeerConfig::deserialize_options")]
     pub options: HashMap<String, String>,
+    // Various data for flutter ui
+    #[serde(default)]
+    pub ui_flutter: HashMap<String, String>,
     #[serde(default)]
     pub info: PeerInfoSerde,
     #[serde(default)]
@@ -181,8 +228,6 @@ pub struct PeerInfoSerde {
     pub hostname: String,
     #[serde(default)]
     pub platform: String,
-    #[serde(default)]
-    pub mac_address: String,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq)]
@@ -291,7 +336,7 @@ impl Config {
         log::debug!("Configuration path: {}", file.display());
         let cfg = load_path(file);
         if suffix.is_empty() {
-            log::debug!("{:?}", cfg);
+            log::trace!("{:?}", cfg);
         }
         cfg
     }
@@ -302,6 +347,7 @@ impl Config {
             log::error!("Failed to store config: {}", err);
         }
     }
+
     fn load() -> Config {
         let mut config = Config::load_::<Config>("");
         let mut store = false;
@@ -309,7 +355,7 @@ impl Config {
         config.password = password;
         store |= store1;
         let mut id_valid = false;
-        let (id, encrypted, store2) = decrypt_str_or_original(&config.id, PASSWORD_ENC_VERSION);
+        let (id, encrypted, store2) = decrypt_str_or_original(&config.enc_id, PASSWORD_ENC_VERSION);
         if encrypted {
             config.id = id;
             id_valid = true;
@@ -320,13 +366,18 @@ impl Config {
                 .unwrap_or(crate::get_exe_time())
                 < crate::get_exe_time()
             {
-                id_valid = true;
-                store = true;
+                if !config.id.is_empty()
+                    && config.enc_id.is_empty()
+                    && !decrypt_str_or_original(&config.id, PASSWORD_ENC_VERSION).1
+                {
+                    id_valid = true;
+                    store = true;
+                }
             }
         }
         if !id_valid {
-            for _ in 0..3 {
-                if let Some(id) = Config::get_auto_id() {
+			for _ in 0..3 {
+				if let Some(id) = Config::get_auto_id() {
                     config.id = id;
                     store = true;
                     break;
@@ -341,21 +392,11 @@ impl Config {
         config
     }
 
-/*
-    fn load() -> Config {
-        let mut config = Config::load_::<Config>("");
-        let (password, _, store) = decrypt_str_or_original(&config.password, PASSWORD_ENC_VERSION);
-        config.password = password;
-        if store {
-            config.store();
-        }
-        config
-    }
-*/
     fn store(&self) {
         let mut config = self.clone();
         config.password = encrypt_str_or_original(&config.password, PASSWORD_ENC_VERSION);
-		config.id = encrypt_str_or_original(&config.id, PASSWORD_ENC_VERSION);
+        config.enc_id = encrypt_str_or_original(&config.id, PASSWORD_ENC_VERSION);
+        config.id = "".to_owned();
         Config::store_(&config, "");
     }
 
@@ -369,18 +410,21 @@ impl Config {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.id.is_empty() || self.key_pair.0.is_empty()
+        (self.id.is_empty() && self.enc_id.is_empty()) || self.key_pair.0.is_empty()
     }
 
     pub fn get_home() -> PathBuf {
         #[cfg(any(target_os = "android", target_os = "ios"))]
         return Self::path(APP_HOME_DIR.read().unwrap().as_str());
-        if let Some(path) = dirs_next::home_dir() {
-            patch(path)
-        } else if let Ok(path) = std::env::current_dir() {
-            path
-        } else {
-            std::env::temp_dir()
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            if let Some(path) = dirs_next::home_dir() {
+                patch(path)
+            } else if let Ok(path) = std::env::current_dir() {
+                path
+            } else {
+                std::env::temp_dir()
+            }
         }
     }
 
@@ -391,19 +435,24 @@ impl Config {
             path.push(p);
             return path;
         }
-        #[cfg(not(target_os = "macos"))]
-        let org = "";
-        #[cfg(target_os = "macos")]
-        let org = ORG.read().unwrap().clone();
-        // /var/root for root
-        if let Some(project) = ProjectDirs::from("", &org, &*APP_NAME.read().unwrap()) {
-            let mut path = patch(project.config_dir().to_path_buf());
-            path.push(p);
-            return path;
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            #[cfg(not(target_os = "macos"))]
+            let org = "";
+            #[cfg(target_os = "macos")]
+            let org = ORG.read().unwrap().clone();
+            // /var/root for root
+            if let Some(project) =
+                directories_next::ProjectDirs::from("", &org, &*APP_NAME.read().unwrap())
+            {
+                let mut path = patch(project.config_dir().to_path_buf());
+                path.push(p);
+                return path;
+            }
+            return "".into();
         }
-        return "".into();
     }
-
+    
     #[allow(unreachable_code)]
     pub fn log_path() -> PathBuf {
         #[cfg(target_os = "macos")]
@@ -610,22 +659,25 @@ impl Config {
                     .to_string(),
             );
         }
-        let mut id = 0u32;
+
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        if let Ok(Some(ma)) = mac_address::get_mac_address() {
-            for x in &ma.bytes()[2..] {
-                id = (id << 8) | (*x as u32);
+        {
+            let mut id = 0u32;
+			if let Ok(Some(ma)) = mac_address::get_mac_address() {
+				for x in &ma.bytes()[2..] {
+                    id = (id << 8) | (*x as u32);
+                }
+                id = id & 0x1FFFFFFF;
+	            if id < 100_000_000 {
+					id = rand::thread_rng().gen_range(100_000_000..200_000_000);
+	            }
+                Some(id.to_string())
+            } else {
+                None
             }
-            id = id & 0x1FFFFFFF;
-            if id < 1_000_000_000 {
-                id = rand::thread_rng().gen_range(100_000_000..200_000_000)
-            }
-            Some(id.to_string())
-        } else {
-            None
         }
     }
-
+    
     pub fn get_auto_password(length: usize) -> String {
         let mut rng = rand::thread_rng();
         (0..length)
@@ -831,7 +883,7 @@ const PEERS: &str = "peers";
 
 impl PeerConfig {
     pub fn load(id: &str) -> PeerConfig {
-        let _a = CONFIG.read().unwrap(); // for lock
+        let _lock = CONFIG.read().unwrap();
         match confy::load_path(&Self::path(id)) {
             Ok(config) => {
                 let mut config: PeerConfig = config;
@@ -863,7 +915,7 @@ impl PeerConfig {
     }
 
     pub fn store(&self, id: &str) {
-        let _a = CONFIG.read().unwrap(); // for lock
+        let _lock = CONFIG.read().unwrap();
         let mut config = self.clone();
         config.password = encrypt_vec_or_original(&config.password, PASSWORD_ENC_VERSION);
         config
@@ -884,7 +936,17 @@ impl PeerConfig {
     }
 
     fn path(id: &str) -> PathBuf {
-        let path: PathBuf = [PEERS, id].iter().collect();
+        let id_encoded: String;
+
+        //If the id contains invalid chars, encode it
+        let forbidden_paths = Regex::new(r".*[<>:/\\|\?\*].*").unwrap();
+        if forbidden_paths.is_match(id) {
+            id_encoded =
+                "base64_".to_string() + base64::encode(id, base64::Variant::Original).as_str();
+        } else {
+            id_encoded = id.to_string();
+        }
+        let path: PathBuf = [PEERS, id_encoded.as_str()].iter().collect();
         Config::with_extension(Config::path(path))
     }
 
@@ -907,11 +969,22 @@ impl PeerConfig {
                             .map(|p| p.to_str().unwrap_or(""))
                             .unwrap_or("")
                             .to_owned();
-                        let c = PeerConfig::load(&id);
+
+                        let id_decoded_string: String;
+                        if id.starts_with("base64_") && id.len() != 7 {
+                            let id_decoded = base64::decode(&id[7..], base64::Variant::Original)
+                                .unwrap_or(Vec::new());
+                            id_decoded_string =
+                                String::from_utf8_lossy(&id_decoded).as_ref().to_owned();
+                        } else {
+                            id_decoded_string = id;
+                        }
+
+                        let c = PeerConfig::load(&id_decoded_string);
                         if c.info.platform.is_empty() {
                             fs::remove_file(&p).ok();
                         }
-                        (id, t, c)
+                        (id_decoded_string, t, c)
                     })
                     .filter(|p| !p.2.info.platform.is_empty())
                     .collect();
@@ -921,6 +994,33 @@ impl PeerConfig {
         }
         Default::default()
     }
+
+    serde_field_string!(
+        default_view_style,
+        deserialize_view_style,
+        "original".to_owned()
+    );
+    serde_field_string!(
+        default_scroll_style,
+        deserialize_scroll_style,
+        "scrollauto".to_owned()
+    );
+    serde_field_string!(
+        default_image_quality,
+        deserialize_image_quality,
+        "balanced".to_owned()
+    );
+
+    fn deserialize_options<'de, D>(deserializer: D) -> Result<HashMap<String, String>, D::Error>
+    where
+        D: de::Deserializer<'de>,
+    {
+        let mut mp: HashMap<String, String> = de::Deserialize::deserialize(deserializer)?;
+        if !mp.contains_key("codec-preference") {
+            mp.insert("codec-preference".to_owned(), "auto".to_owned());
+        }
+        Ok(mp)
+    }
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
@@ -928,11 +1028,16 @@ pub struct LocalConfig {
     #[serde(default)]
     remote_id: String, // latest used one
     #[serde(default)]
+    kb_layout_type: String,
+    #[serde(default)]
     size: Size,
     #[serde(default)]
     pub fav: Vec<String>,
     #[serde(default)]
     options: HashMap<String, String>,
+    // Various data for flutter ui
+    #[serde(default)]
+    ui_flutter: HashMap<String, String>,
 }
 
 impl LocalConfig {
@@ -942,6 +1047,16 @@ impl LocalConfig {
 
     fn store(&self) {
         Config::store_(self, "_local");
+    }
+
+    pub fn get_kb_layout_type() -> String {
+        LOCAL_CONFIG.read().unwrap().kb_layout_type.clone()
+    }
+
+    pub fn set_kb_layout_type(kb_layout_type: String) {
+        let mut config = LOCAL_CONFIG.write().unwrap();
+        config.kb_layout_type = kb_layout_type;
+        config.store();
     }
 
     pub fn get_size() -> Size {
@@ -1004,17 +1119,43 @@ impl LocalConfig {
             config.store();
         }
     }
+
+    pub fn get_flutter_config(k: &str) -> String {
+        if let Some(v) = LOCAL_CONFIG.read().unwrap().ui_flutter.get(k) {
+            v.clone()
+        } else {
+            "".to_owned()
+        }
+    }
+
+    pub fn set_flutter_config(k: String, v: String) {
+        let mut config = LOCAL_CONFIG.write().unwrap();
+        let v2 = if v.is_empty() { None } else { Some(&v) };
+        if v2 != config.ui_flutter.get(&k) {
+            if v2.is_none() {
+                config.ui_flutter.remove(&k);
+            } else {
+                config.ui_flutter.insert(k, v);
+            }
+            config.store();
+        }
+    }
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct DiscoveryPeer {
+    #[serde(default)]
     pub id: String,
-    #[serde(with = "serde_with::rust::map_as_tuple_list")]
-    pub ip_mac: HashMap<String, String>,
+    #[serde(default)]
     pub username: String,
+    #[serde(default)]
     pub hostname: String,
+    #[serde(default)]
     pub platform: String,
+    #[serde(default)]
     pub online: bool,
+    #[serde(default)]
+    pub ip_mac: HashMap<String, String>,
 }
 
 impl DiscoveryPeer {
@@ -1030,7 +1171,7 @@ pub struct LanPeers {
 
 impl LanPeers {
     pub fn load() -> LanPeers {
-        let _a = CONFIG.read().unwrap(); // for lock
+        let _lock = CONFIG.read().unwrap();
         match confy::load_path(&Config::file_("_lan_peers")) {
             Ok(peers) => peers,
             Err(err) => {

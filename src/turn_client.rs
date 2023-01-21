@@ -1,23 +1,22 @@
 use hbb_common::{
-    bail, log,
+    bail, lazy_static, log,
     tcp::FramedStream,
-    tokio::{
-        self,
-        net::TcpStream,
-        sync::{mpsc},
-    },
+    tokio::{self, net::TcpStream, sync::mpsc},
     tokio_util::compat::Compat,
     ResultType,
-    lazy_static,
 };
-use std::{net::{SocketAddr, IpAddr, UdpSocket}, sync::Arc, time::{Instant, Duration}};
 use std::sync::Mutex;
+use std::{
+    net::{IpAddr, SocketAddr, UdpSocket},
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use turn::client::{tcp::TcpSplit, ClientConfig};
 use webrtc_util::conn::Conn;
 
 use crate::rendezvous_messages::{self, ToJson};
 
-lazy_static::lazy_static!{
+lazy_static::lazy_static! {
     static ref PUBLIC_IP: Arc<Mutex<Option<(IpAddr, SocketAddr, Instant)>>> = Default::default();
 }
 
@@ -132,7 +131,7 @@ pub async fn get_public_ip() -> Option<SocketAddr> {
                 // as the local ip haven't changed.
                 if cached_local_ip == local_ip {
                     log::info!("Got public ip from cache: {:?}", public_ip);
-                    return Some(public_ip)
+                    return Some(public_ip);
                 }
             }
         }
@@ -171,7 +170,7 @@ pub async fn get_public_ip() -> Option<SocketAddr> {
 }
 
 // Create an udp socket and get the local ip address.
-fn get_local_ip() -> ResultType<IpAddr> {
+pub fn get_local_ip() -> ResultType<IpAddr> {
     let socket = UdpSocket::bind("0.0.0.0:0")?;
     socket.connect("1.1.1.1:53")?;
     let addr = socket.local_addr()?;

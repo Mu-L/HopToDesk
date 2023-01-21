@@ -29,7 +29,7 @@ use hbb_common::{
 };
 #[cfg(any(target_os = "android", target_os = "ios"))]
 use scrap::android::call_main_service_mouse_input;
-use serde::Deserialize;
+//use serde::Deserialize;
 use serde_json::{json, value::Value};
 use sha2::{Digest, Sha256};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -43,6 +43,7 @@ pub type Sender = mpsc::UnboundedSender<(Instant, Arc<Message>)>;
 lazy_static::lazy_static! {
     static ref LOGIN_FAILURES: Arc::<Mutex<HashMap<String, (i32, i32, i32)>>> = Default::default();
     static ref SESSIONS: Arc::<Mutex<HashMap<String, Session>>> = Default::default();
+    static ref ALIVE_CONNS: Arc::<Mutex<Vec<i32>>> = Default::default();
 }
 pub static CLICK_TIME: AtomicI64 = AtomicI64::new(0);
 pub static MOUSE_MOVE_TIME: AtomicI64 = AtomicI64::new(0);
@@ -101,6 +102,7 @@ pub struct Connection {
     last_recv_time: Arc<Mutex<Instant>>,
     chat_unanswered: bool,
     close_manually: bool,
+    elevation_requested: bool,    
     security_numbers: String,
     security_qr_code: String,
 }
@@ -150,6 +152,7 @@ impl Connection {
             challenge: Config::get_auto_password(6),
             ..Default::default()
         };
+        ALIVE_CONNS.lock().unwrap().push(id);
         let (tx_from_cm_holder, mut rx_from_cm) = mpsc::unbounded_channel::<ipc::Data>();
         // holding tx_from_cm_holde to avoid cpu burning of rx_from_cm.recv when all sender closed
         let tx_from_cm = tx_from_cm_holder.clone();
@@ -196,6 +199,7 @@ impl Connection {
             last_recv_time: Arc::new(Mutex::new(Instant::now())),
             chat_unanswered: false,
             close_manually: false,
+            elevation_requested: false,            
             security_numbers,
             security_qr_code
         };
@@ -264,6 +268,8 @@ impl Connection {
         let mut last_uac = false;
         #[cfg(windows)]
         let mut last_foreground_window_elevated = false;
+        #[cfg(windows)]
+        let mut last_portable_service_running = false;
         #[cfg(windows)]
         let is_installed = crate::platform::is_installed();
         
@@ -345,7 +351,7 @@ impl Connection {
                             allow_err!(conn.stream.send_raw(bytes).await);
                         }
                         #[cfg(windows)]
-                        ipc::Data::ClipbaordFile(_clip) => {
+                        ipc::Data::ClipboardFile(_clip) => {
                             if conn.file_transfer_enabled() {
                                 allow_err!(conn.stream.send(&clip_2_msg(_clip)).await);
                             }
@@ -380,7 +386,8 @@ impl Connection {
                         }
                         #[cfg(windows)]
                         ipc::Data::DataPortableService(ipc::DataPortableService::RequestStart) => {
-                            if let Err(e) = crate::portable_service::client::start_portable_service() {
+                            use crate::portable_service::client;
+                            if let Err(e) = client::start_portable_service(client::StartPara::Direct) {
                                 log::error!("Failed to start portable service from cm:{:?}", e);
                             }
                         }
@@ -462,8 +469,18 @@ impl Connection {
                 _ = second_timer.tick() => {
                     #[cfg(windows)]
                     {
-                        if !is_installed {
-                            let portable_service_running = crate::portable_service::client::PORTABLE_SERVICE_RUNNING.lock().unwrap().clone();
+                        if !is_installed  && conn.file_transfer.is_none() && conn.port_forward_socket.is_none(){
+                            let portable_service_running = crate::portable_service::client::running();
+                            if portable_service_running != last_portable_service_running {
+                                last_portable_service_running = portable_service_running;
+                                if portable_service_running && conn.elevation_requested {
+                                    let mut misc = Misc::new();
+                                    misc.set_portable_service_running(portable_service_running);
+                                    let mut msg = Message::new();
+                                    msg.set_misc(misc);
+                                    conn.inner.send(msg.into());
+                                }
+                            }
                     let uac = crate::video_service::IS_UAC_RUNNING.lock().unwrap().clone();
                     if last_uac != uac {
                         last_uac = uac;
@@ -536,6 +553,7 @@ impl Connection {
             "action": "close",
         }));
         */
+        ALIVE_CONNS.lock().unwrap().retain(|&c| c != id);        
         log::info!("#{} connection loop exited", id);
     }
 
@@ -682,6 +700,15 @@ impl Connection {
         {
             self.send_login_error("Your ip is blocked by the peer")
                 .await;
+/*            
+            Self::post_alarm_audit(
+                AlarmAuditType::IpWhitelist, //"ip whitelist",
+                true,
+                json!({
+                            "ip":addr.ip(),
+                }),
+            );
+*/            
             sleep(1.).await;
             return false;
         }
@@ -721,29 +748,6 @@ impl Connection {
         });
     }
 
-    fn post_heartbeat(
-        server_audit_conn: String,
-        conn_id: i32,
-        tx_stop: mpsc::UnboundedSender<String>,
-    ) {
-        if server_audit_conn.is_empty() {
-            return;
-        }
-        let url = server_audit_conn.clone();
-        let mut v = Value::default();
-        v["id"] = json!(Config::get_id());
-        v["uuid"] = json!(base64::encode(hbb_common::get_uuid()));
-        v["conn_id"] = json!(conn_id);
-        tokio::spawn(async move {
-            if let Ok(rsp) = Self::post_audit_async(url, v).await {
-                if let Ok(rsp) = serde_json::from_str::<ConnAuditResponse>(&rsp) {
-                    if rsp.action == "disconnect" {
-                        tx_stop.send("web console".to_string()).ok();
-                    }
-                }
-            }
-        });
-    }
 
     fn post_file_audit(
         &self,
@@ -1057,7 +1061,7 @@ impl Connection {
         false
     }
 
-    fn is_of_recent_session(&mut self) -> bool {
+    fn is_recent_session(&mut self) -> bool {
         let session = SESSIONS
             .lock()
             .unwrap()
@@ -1194,7 +1198,7 @@ impl Connection {
             {
                 self.send_login_error("Connection not allowed").await;
                 return false;
-            } else if self.is_of_recent_session() {
+            } else if self.is_recent_session() {
                 self.try_start_cm(lr.my_id, lr.my_name, true);
                 self.send_logon_response().await;
                 if self.port_forward_socket.is_some() {
@@ -1346,7 +1350,7 @@ impl Connection {
                     if self.file_transfer_enabled() {
                         #[cfg(windows)]
                         if let Some(clip) = msg_2_clip(_clip) {
-                            self.send_to_cm(ipc::Data::ClipbaordFile(clip))
+                            self.send_to_cm(ipc::Data::ClipboardFile(clip))
                         }
                     }
                 }
@@ -1410,6 +1414,18 @@ impl Connection {
                                         .collect(),
                                     overwrite_detection: od,
                                 });
+/*
+                                self.post_file_audit(
+                                    FileAuditType::RemoteReceive,
+                                    &r.path,
+                                    r.files
+                                        .to_vec()
+                                        .drain(..)
+                                        .map(|f| (f.name, f.size as _))
+                                        .collect(),
+                                    json!({}),
+                                );
+*/                                
                             }
                             Some(file_action::Union::RemoveDir(d)) => {
                                 self.send_fs(ipc::FS::RemoveDir {
@@ -1513,6 +1529,51 @@ impl Connection {
                             }
                         }
                     }
+                    Some(misc::Union::ElevationRequest(r)) => match r.union {
+                        Some(elevation_request::Union::Direct(_)) => {
+                            #[cfg(windows)]
+                            {
+                                let mut err = "No need to elevate".to_string();
+                                if !crate::platform::is_installed()
+                                    && !crate::portable_service::client::running()
+                                {
+                                    use crate::portable_service::client;
+                                    err = client::start_portable_service(client::StartPara::Direct)
+                                        .err()
+                                        .map_or("".to_string(), |e| e.to_string());
+                                }
+                                self.elevation_requested = err.is_empty();
+                                let mut misc = Misc::new();
+                                misc.set_elevation_response(err);
+                                let mut msg = Message::new();
+                                msg.set_misc(misc);
+                                self.send(msg).await;
+                            }
+                        }
+                        Some(elevation_request::Union::Logon(r)) => {
+                            #[cfg(windows)]
+                            {
+                                let mut err = "No need to elevate".to_string();
+                                if !crate::platform::is_installed()
+                                    && !crate::portable_service::client::running()
+                                {
+                                    use crate::portable_service::client;
+                                    err = client::start_portable_service(client::StartPara::Logon(
+                                        r.username, r.password,
+                                    ))
+                                    .err()
+                                    .map_or("".to_string(), |e| e.to_string());
+                                }
+                                self.elevation_requested = err.is_empty();
+                                let mut misc = Misc::new();
+                                misc.set_elevation_response(err);
+                                let mut msg = Message::new();
+                                msg.set_misc(misc);
+                                self.send(msg).await;
+                            }
+                        }
+                        _ => {}
+                    },
                     _ => {}
                 },
                 _ => {}
@@ -1727,6 +1788,10 @@ impl Connection {
     async fn send(&mut self, msg: Message) {
         allow_err!(self.stream.send(&msg).await);
     }
+
+    pub fn alive_conns() -> Vec<i32> {
+        ALIVE_CONNS.lock().unwrap().clone()
+    }
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -1874,8 +1939,8 @@ mod privacy_mode {
     pub(super) fn turn_on_privacy(_conn_id: i32) -> ResultType<bool> {
         #[cfg(windows)]
         {
-            let plugin_exitst = crate::ui::win_privacy::turn_on_privacy(_conn_id)?;
-            Ok(plugin_exitst)
+            let plugin_exist = crate::ui::win_privacy::turn_on_privacy(_conn_id)?;
+            Ok(plugin_exist)
         }
         #[cfg(not(windows))]
         {
@@ -1884,15 +1949,8 @@ mod privacy_mode {
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct ConnAuditResponse {
-    #[allow(dead_code)]
-    ret: bool,
-    action: String,
-}
-
 pub enum AlarmAuditType {
-    IpWhiltelist = 0,
+    IpWhitelist = 0,
     ManyWrongPassword = 1,
     FrequentAttempt = 2,
 }

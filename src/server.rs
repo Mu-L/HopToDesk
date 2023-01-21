@@ -109,7 +109,13 @@ pub async fn accept(listener: TcpListener, server: ServerPtr, secure: bool) -> R
     if let Ok((stream, _)) = timeout(CONNECT_TIMEOUT, listener.accept()).await? {
         stream.set_nodelay(true).ok();
         let stream_addr = stream.local_addr()?;
-        create_tcp_connection(server, Stream::from(stream, stream_addr), local_addr, secure).await?;
+        create_tcp_connection(
+            server,
+            Stream::from(stream, stream_addr),
+            local_addr,
+            secure,
+        )
+        .await?;
     }
     Ok(())
 }
@@ -195,6 +201,7 @@ pub async fn create_tcp_connection(
                             );
                             log::info!("Security Code: {security_numbers}");
                         } else if pk.asymmetric_value.is_empty() {
+                            log::info!("pk might mismatch in client, fall back to non-secure");
                             Config::set_key_confirmed(false);
                             log::info!("Force to update pk");
                         } else {
@@ -213,9 +220,14 @@ pub async fn create_tcp_connection(
         }
     }
 
-    #[cfg(target_os = "macos")]{
+    #[cfg(target_os = "macos")]
+    {
         use std::process::Command;
-        Command::new("/usr/bin/caffeinate").arg("-u").arg("-t 5").spawn().ok();
+        Command::new("/usr/bin/caffeinate")
+            .arg("-u")
+            .arg("-t 5")
+            .spawn()
+            .ok();
         log::info!("wake up macos");
     }
     Connection::start(

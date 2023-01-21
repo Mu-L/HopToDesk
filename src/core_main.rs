@@ -95,7 +95,8 @@ pub fn core_main() -> Option<Vec<String>> {
         && !_is_elevate
         && !_is_run_as_system
     {
-        if let Err(e) = crate::portable_service::client::start_portable_service() {
+        use crate::portable_service::client;
+        if let Err(e) = client::start_portable_service(client::StartPara::Direct) {
             log::error!("Failed to start portable service:{:?}", e);
         }
     }
@@ -193,6 +194,7 @@ pub fn core_main() -> Option<Vec<String>> {
             #[cfg(target_os = "macos")]
             {
                 std::thread::spawn(move || crate::start_server(true));
+                crate::platform::macos::hide_dock();
                 crate::tray::make_tray();
                 return None;
             }
@@ -204,7 +206,7 @@ pub fn core_main() -> Option<Vec<String>> {
                 // As for GNOME, the tray cannot be shown in user's status bar.
                 // As for KDE, the tray can be shown without user's theme.
                 //if !crate::platform::is_root() {
-                    //crate::tray::start_tray();
+                //    crate::tray::start_tray();
                 //}
                 // prevent server exit when encountering errors from tray
                 hbb_common::allow_err!(handler.join());
@@ -242,6 +244,8 @@ pub fn core_main() -> Option<Vec<String>> {
             #[cfg(feature = "flutter")]
             crate::flutter::connection_manager::start_listen_ipc_thread();
             crate::ui_interface::start_option_status_sync();
+            #[cfg(target_os = "macos")]
+            crate::platform::macos::hide_dock();
         }
     }
     //_async_logger_holder.map(|x| x.flush());
@@ -316,7 +320,7 @@ fn core_main_invoke_new_connection(mut args: std::env::Args) -> Option<Vec<Strin
         let res = crate::platform::send_message_to_hnwd(
             "FLUTTER_RUNNER_WIN32_WINDOW",
             "HopToDesk",
-            (WM_USER + 2) as _, // refered from unilinks desktop pub
+            (WM_USER + 2) as _, // referred from unilinks desktop pub
             uni_links.as_str(),
             true,
         );

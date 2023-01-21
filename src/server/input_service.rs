@@ -302,7 +302,6 @@ fn is_pressed(key: &Key, en: &mut Enigo) -> bool {
 
 #[inline]
 fn get_modifier_state(key: Key, en: &mut Enigo) -> bool {
-    // https://github.com/rustdesk/rustdesk/issues/332
     // on Linux, if RightAlt is down, RightAlt status is false, Alt status is true
     // but on Windows, both are true
     let x = en.get_key_state(key.clone());
@@ -487,7 +486,7 @@ fn active_mouse_(conn: i32) -> bool {
         return false;
     }
 
-    let in_actived_dist = |a: i32, b: i32| -> bool { (a - b).abs() < MOUSE_ACTIVE_DISTANCE };
+    let in_active_dist = |a: i32, b: i32| -> bool { (a - b).abs() < MOUSE_ACTIVE_DISTANCE };
 
     // Check if input is in valid range
     match crate::get_cursor_pos() {
@@ -496,7 +495,7 @@ fn active_mouse_(conn: i32) -> bool {
                 let lock = LATEST_PEER_INPUT_CURSOR.lock().unwrap();
                 (lock.x, lock.y)
             };
-            let mut can_active = in_actived_dist(last_in_x, x) && in_actived_dist(last_in_y, y);
+            let mut can_active = in_active_dist(last_in_x, x) && in_active_dist(last_in_y, y);
             // The cursor may not have been moved to last input position if system is busy now.
             // While this is not a common case, we check it again after some time later.
             if !can_active {
@@ -505,7 +504,7 @@ fn active_mouse_(conn: i32) -> bool {
                 std::thread::sleep(std::time::Duration::from_micros(10));
                 // Sleep here can also somehow suppress delay accumulation.
                 if let Some((x2, y2)) = crate::get_cursor_pos() {
-                    can_active = in_actived_dist(last_in_x, x2) && in_actived_dist(last_in_y, y2);
+                    can_active = in_active_dist(last_in_x, x2) && in_active_dist(last_in_y, y2);
                 }
             }
             if !can_active {
@@ -882,7 +881,7 @@ fn map_keyboard_mode(evt: &KeyEvent) {
 
     // Wayland
     #[cfg(target_os = "linux")]
-    if !*IS_X11.lock().unwrap() {
+    if !*IS_X11 {
         let mut en = ENIGO.lock().unwrap();
         let code = evt.chr() as u16;
 

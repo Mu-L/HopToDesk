@@ -41,6 +41,7 @@ pub use tokio_socks::TargetAddr;
 pub mod password_security;
 pub use chrono;
 pub use directories_next;
+pub mod keyboard;
 
 #[cfg(feature = "quic")]
 pub type Stream = quic::Connection;
@@ -59,6 +60,21 @@ macro_rules! allow_err {
             log::debug!(
                 "{:?}, {}:{}:{}:{}",
                 err,
+                module_path!(),
+                file!(),
+                line!(),
+                column!()
+            );
+        } else {
+        }
+    };
+    
+    ($e:expr, $($arg:tt)*) => {
+        if let Err(err) = $e {
+            log::debug!(
+                "{:?}, {}, {}:{}:{}:{}",
+                err,
+                format_args!($($arg)*),
                 module_path!(),
                 file!(),
                 line!(),
@@ -162,19 +178,23 @@ pub fn get_version_from_url(url: &str) -> String {
 }
 
 pub fn gen_version() {
+    use std::io::prelude::*;
     let mut file = File::create("./src/version.rs").unwrap();
     for line in read_lines("Cargo.toml").unwrap() {
         if let Ok(line) = line {
             let ab: Vec<&str> = line.split("=").map(|x| x.trim()).collect();
             if ab.len() == 2 && ab[0] == "version" {
-                use std::io::prelude::*;
-                file.write_all(format!("pub const VERSION: &str = {};", ab[1]).as_bytes())
+                file.write_all(format!("pub const VERSION: &str = {};\n", ab[1]).as_bytes())
                     .ok();
-                file.sync_all().ok();
                 break;
             }
         }
     }
+    // generate build date
+    let build_date = format!("{}", chrono::Local::now().format("%Y-%m-%d %H:%M"));
+    file.write_all(format!("pub const BUILD_DATE: &str = \"{}\";", build_date).as_bytes())
+        .ok();
+    file.sync_all().ok();
 }
 
 fn read_lines<P>(filename: P) -> io::Result<io::Lines<io::BufReader<File>>>
@@ -247,4 +267,9 @@ mod tests {
         let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(192, 168, 16, 32), 21116));
         assert_eq!(addr, AddrMangle::decode(&AddrMangle::encode(addr)));
     }
+    #[test]
+    fn test_allow_err() {
+        allow_err!(Err("test err") as Result<(), &str>);
+        allow_err!(Err("test err with msg") as Result<(), &str>, "prompt {}", "failed");
+    }    
 }

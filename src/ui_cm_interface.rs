@@ -259,7 +259,7 @@ impl<T: InvokeUiCM> IpcTaskRunner<T> {
         if !pre_enabled && ContextSend::is_enabled() {
             allow_err!(
                 self.stream
-                    .send(&Data::ClipbaordFile(clipboard::ClipbaordFile::MonitorReady))
+                    .send(&Data::ClipboardFile(clipboard::ClipboardFile::MonitorReady))
                     .await
             );
         }
@@ -294,7 +294,7 @@ impl<T: InvokeUiCM> IpcTaskRunner<T> {
             rx_clip = rx_clip1.lock().await;
         } else {
             let rx_clip2;
-            (_tx_clip, rx_clip2) = unbounded_channel::<clipboard::ClipbaordFile>();
+            (_tx_clip, rx_clip2) = unbounded_channel::<clipboard::ClipboardFile>();
             rx_clip1 = Arc::new(TokioMutex::new(rx_clip2));
             rx_clip = rx_clip1.lock().await;
         }
@@ -360,7 +360,7 @@ impl<T: InvokeUiCM> IpcTaskRunner<T> {
                                     }
                                 }
                                 #[cfg(windows)]
-                                Data::ClipbaordFile(_clip) => {
+                                Data::ClipboardFile(_clip) => {
                                     #[cfg(windows)]
                                     {
                                         let conn_id = self.conn_id;
@@ -402,7 +402,7 @@ impl<T: InvokeUiCM> IpcTaskRunner<T> {
                 clip_file = rx_clip.recv() => match clip_file {
                     Some(_clip) => {
                         #[cfg(windows)]
-                        allow_err!(self.tx.send(Data::ClipbaordFile(_clip)));
+                        allow_err!(self.tx.send(Data::ClipboardFile(_clip)));
                     }
                     None => {
                         //
@@ -792,11 +792,7 @@ fn cm_inner_send(id: i32, data: Data) {
 pub fn can_elevate() -> bool {
     #[cfg(windows)]
     {
-        return !crate::platform::is_installed()
-            && !crate::portable_service::client::PORTABLE_SERVICE_RUNNING
-                .lock()
-                .unwrap()
-                .clone();
+		return !crate::platform::is_installed() && !crate::portable_service::client::running();
     }
     #[cfg(not(windows))]
     return false;

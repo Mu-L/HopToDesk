@@ -2,8 +2,12 @@ use crate::config::Config;
 use sodiumoxide::base64;
 use std::sync::{Arc, RwLock};
 
+use sodiumoxide::crypto::{box_, secretbox};
+use x25519_dalek::StaticSecret;
+
 lazy_static::lazy_static! {
     pub static ref TEMPORARY_PASSWORD:Arc<RwLock<String>> = Arc::new(RwLock::new(Config::get_auto_password(temporary_password_length())));
+	pub static ref PASSWORD_NOT_REMEMBERED: Arc<RwLock<String>> = Arc::new(RwLock::new("".to_owned()));
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -11,6 +15,23 @@ enum VerificationMethod {
     OnlyUseTemporaryPassword,
     OnlyUsePermanentPassword,
     UseBothPasswords,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApproveMode {
+    Both,
+    Password,
+    Click,
+}
+
+// Should only be called in server
+pub fn update_file_transfer_password(v: String) {
+    *PASSWORD_NOT_REMEMBERED.write().unwrap() = v.clone();
+}
+
+// Should only be called in server
+pub fn file_transfer_password() -> String {
+    PASSWORD_NOT_REMEMBERED.write().unwrap().clone()
 }
 
 // Should only be called in server
@@ -56,6 +77,23 @@ pub fn permanent_enabled() -> bool {
 pub fn has_valid_password() -> bool {
     temporary_enabled() && !temporary_password().is_empty()
         || permanent_enabled() && !Config::get_permanent_password().is_empty()
+}
+
+pub fn approve_mode() -> ApproveMode {
+    let mode = Config::get_option("approve-mode");
+    if mode == "password" {
+        ApproveMode::Password
+    } else if mode == "click" {
+        ApproveMode::Click
+    } else {
+        ApproveMode::Both
+    }
+}
+
+pub fn hide_cm() -> bool {
+    approve_mode() == ApproveMode::Password
+        && verification_method() == VerificationMethod::OnlyUsePermanentPassword
+        && !Config::get_option("allow-hide-cm").is_empty()
 }
 
 const VERSION_LEN: usize = 2;
@@ -141,7 +179,6 @@ fn decrypt(v: &[u8]) -> Result<Vec<u8>, ()> {
 }
 
 fn symmetric_crypt(data: &[u8], encrypt: bool) -> Result<Vec<u8>, ()> {
-    use sodiumoxide::crypto::secretbox;
     use std::convert::TryInto;
 
     let mut keybuf = crate::get_uuid();
@@ -154,6 +191,24 @@ fn symmetric_crypt(data: &[u8], encrypt: bool) -> Result<Vec<u8>, ()> {
     } else {
         secretbox::open(data, &nonce, &key)
     }
+}
+
+pub fn compute_security_code(
+    own_private_key: &box_::SecretKey,
+    peer_public_key: &box_::PublicKey,
+) -> String {
+    let private_key = StaticSecret::from(own_private_key.0);
+    let public_key = x25519_dalek::PublicKey::from(peer_public_key.0);
+
+    let shared_secret = private_key.diffie_hellman(&public_key);
+    let secret_vec: [u8; 32] = shared_secret.to_bytes();
+    let mut result = String::new();
+
+    for i in 0..16 {
+        let v: u16 = ((secret_vec[i * 2] as u16) << 8) | (secret_vec[i * 2 + 1] as u16);
+        result.push_str(&format!("{:0>5} ", v));
+    }
+    result
 }
 
 mod test {

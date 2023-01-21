@@ -30,6 +30,19 @@ pub mod utils {
         QrCode::new(link).unwrap()
     }
 
+pub fn qr_code_to_raw_img(qr: QrCode) -> String {
+    let tmp_dir = std::env::temp_dir();
+    let path = tmp_dir.join("secret_qr.png");
+
+    let image = qr.render::<Rgba<u8>>().build();
+    image.save(&path).unwrap();
+
+    let base64 = image_base64::to_base64(path.to_str().unwrap());
+
+    base64
+}
+
+/*
     pub fn qr_code_to_raw_img(qr: QrCode) -> String {
         let tmp_dir = tempfile::tempdir().unwrap();
         let path = tmp_dir.path().join("secret_qr.png");
@@ -43,7 +56,7 @@ pub mod utils {
 
         base64
     }
-
+*/
     pub fn get_secret() -> String {
         Config::get_option("2fa-secret")
     }

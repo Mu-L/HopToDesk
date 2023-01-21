@@ -330,7 +330,7 @@ class SessionList: Reactor.Component {
                     <li #rdp>RDP<EditRdpPort /></li>
                     <li #wol>{translate('WOL')}</li>					
                     <div .separator />
-                    <li #rename>{translate('Rename')}</li>
+                    {this.type != "lan" && <li #rename>{translate('Rename')}</li>}
                     {this.type != "fav" && this.type != "lan" && <li #remove>{translate('Remove')}</li>}
                     {is_win && <li #shortcut>{translate('Create Desktop Shortcut')}</li>}
                     <li #forget-password>{translate('Forget Password')}</li>

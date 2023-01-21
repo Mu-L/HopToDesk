@@ -33,9 +33,6 @@ use crate::{
     turn_client,
 };
 
-lazy_static::lazy_static! {
-    static ref SOLVING_PK_MISMATCH: Arc<Mutex<String>> = Default::default();
-}
 static SHOULD_EXIT: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone)]
@@ -134,8 +131,8 @@ impl RendezvousMediator {
         loop {
             select! {
                 _ = timer.tick() => {
-                              if SHOULD_EXIT.load(Ordering::SeqCst) {
-                                    break;
+                    if SHOULD_EXIT.load(Ordering::SeqCst) {
+                        break;
                     }
                     let now = Instant::now();
                     let now_utc = chrono::Utc::now();

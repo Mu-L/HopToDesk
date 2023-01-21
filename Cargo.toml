@@ -1,14 +1,16 @@
 [package]
 name = "hoptodesk"
-version = "1.32.4"
+version = "1.32.9"
 authors = ["hoptodesk <info@hoptodesk.com>"]
 edition = "2021"
 build= "build.rs"
 description = "A remote control software."
 default-run = "hoptodesk"
+
 [lib]
 name = "libhoptodesk"
 crate-type = ["cdylib", "staticlib", "rlib"]
+
 
 [features]
 inline = []
@@ -17,9 +19,11 @@ hbbs = []
 cli = []
 with_rc = ["simple_rc"]
 appimage = []
+flatpak = []
 use_samplerate = ["samplerate"]
 use_rubato = ["rubato"]
 use_dasp = ["dasp"]
+flutter = ["flutter_rust_bridge"]
 default = ["use_dasp"]
 hwcodec = ["scrap/hwcodec"]
 mediacodec = ["scrap/mediacodec"]
@@ -41,7 +45,7 @@ libc = "0.2"
 parity-tokio-ipc = { git = "https://github.com/open-trade/parity-tokio-ipc" }
 flexi_logger = { version = "0.22", features = ["async", "use_chrono_for_offset"] }
 runas = "0.2"
-magnum-opus = { git = "https://github.com/SoLongAndThanksForAllThePizza/magnum-opus" }
+magnum-opus = { git = "https://github.com/rustdesk/magnum-opus" }
 dasp = { version = "0.11", features = ["signal", "interpolate-linear", "interpolate"], optional = true }
 rubato = { version = "0.12", optional = true }
 samplerate = { version = "0.2", optional = true }
@@ -53,23 +57,21 @@ base64 = "0.13"
 sysinfo = "0.24"
 num_cpus = "1.13"
 bytes = { version = "1.2", features = ["serde"] }
-default-net = "0.11.0"
+default-net = { git = "https://github.com/Kingtous/default-net" }
 wol-rs = "0.9.1"
 flutter_rust_bridge = { git = "https://github.com/SoLongAndThanksForAllThePizza/flutter_rust_bridge", optional = true }
-reqwest = { version = "0.11", features = ["blocking", "json"] }
 soketto = "0.7"
 turn = { path = "libs/turn" }
 webrtc-util = "0.5"
-wake-on-lan = "0.2.0"
 futures = "0.3"
 qrcode = "0.12.0"
 image = "^0.23"
 image-base64 = "^0.1"
-tempfile = "3.3.0"
 md5 = "0.7.0"
 errno = "0.2.8"
-rdev = { git = "https://github.com/janus/rdev" }
-#url = { version = "2.1", features = ["serde"] }
+rdev = { git = "https://github.com/fufesou/rdev" }
+url = { version = "2.1", features = ["serde"] }
+reqwest = { version = "0.11", features = ["blocking", "json", "rustls-tls"], default-features=false }
 chrono = "0.4.23"
 cidr-utils = "0.5.9"
 
@@ -111,7 +113,6 @@ cocoa = "0.24"
 dispatch = "0.2"
 core-foundation = "0.9"
 core-graphics = "0.22"
-notify = "4.0.17"
 include_dir = "0.7.2"
 tray-item = "0.7" # looks better than trayicon
 
@@ -139,7 +140,7 @@ flutter_rust_bridge = { git = "https://github.com/SoLongAndThanksForAllThePizza/
 members = ["libs/scrap", "libs/hbb_common", "libs/enigo", "libs/clipboard", "libs/virtual_display", "libs/turn", "libs/simple_rc"]
 
 [package.metadata.winres]
-LegalCopyright = "Changes copyright © 2022 Begonia Holdings.  Copyright © 2022 Purslane, Inc."
+LegalCopyright = "Changes copyright © 2023 Begonia Holdings.  Copyright © 2022 Purslane, Inc."
 # this FileDescription overrides package.description
 FileDescription = "HopToDesk"
 
@@ -161,7 +162,7 @@ hound = "3.5"
 name = "HopToDesk"
 identifier = "com.hoptodesk.hoptodesk"
 icon = ["res/32x32.png", "res/128x128.png", "res/128x128@2x.png"]
-deb_depends = ["libgtk-3-0", "libxcb-randr0", "libxdo3", "libxfixes3", "libxcb-shape0", "libxcb-xfixes0", "libasound2", "libsystemd0", "curl", "pipewire"]
+deb_depends = ["libgtk-3-0", "libxcb-randr0", "libxdo3", "libxfixes3", "libxcb-shape0", "libxcb-xfixes0", "libasound2", "libsystemd0", "curl", "libvdpau1", "libva2"]
 osx_frameworks = ["libsciter"]
 osx_minimum_system_version = "10.14"
 resources = ["res/mac-tray.png"]

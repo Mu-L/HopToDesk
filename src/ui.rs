@@ -142,12 +142,8 @@ pub fn start(args: &mut [String]) {
         let args: Vec<String> = iter.map(|x| x.clone()).collect();
         frame.set_title(&id);
         frame.register_behavior("native-remote", move || {
-            let handler = remote::SciterSession::new(
-                cmd.clone(),
-                id.clone(),
-                pass.clone(),
-                args.clone(),
-            );
+            let handler =
+                remote::SciterSession::new(cmd.clone(), id.clone(), pass.clone(), args.clone());
             #[cfg(not(feature = "flutter"))]
             crate::keyboard::set_cur_session(handler.inner());
             
@@ -251,24 +247,9 @@ impl UI {
         show_run_without_install()
     }
     /*
-        fn has_rendezvous_service(&self) -> bool {
-            has_rendezvous_service()
-        }
-
         fn get_license(&self) -> String {
             get_license()
         }
-    fn get_option_(&self, key: &str) -> String {
-        /*
-        if let Some(v) = self.2.lock().unwrap().get(key) {
-            v.to_owned()
-        } else {
-            "".to_owned()
-        }
-        */
-        //TODO: fix the above
-        "".to_owned()
-    }
     */
     fn get_option(&self, key: String) -> String {
         get_option(key)
@@ -607,6 +588,10 @@ impl UI {
     }
 
     /*
+    fn get_api_server(&self) -> String {
+        get_api_server()
+    }
+
      fn has_hwcodec(&self) -> bool {
          has_hwcodec()
      }
@@ -615,6 +600,10 @@ impl UI {
         get_langs()
     }
 
+    fn default_video_save_directory(&self) -> String {
+        default_video_save_directory()
+    }
+    
     fn get_custom_api_url(&self) -> String {
         if let Ok(Some(v)) = ipc::get_config("custom-api-url") {
             v
@@ -625,9 +614,6 @@ impl UI {
 
     fn set_custom_api_url(&self, url: String) {
         ipc::set_config("custom-api-url", url);
-    }
-    fn default_video_save_directory(&self) -> String {
-        default_video_save_directory()
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -692,7 +678,6 @@ impl sciter::EventHandler for UI {
         fn peer_has_password(String);
         fn forget_password(String);
         fn set_peer_option(String, String, String);
-        //fn has_rendezvous_service();
         //fn get_license();
         fn test_if_valid_server(String);
         fn get_sound_inputs();
@@ -818,103 +803,6 @@ fn get_sound_inputs() -> Vec<String> {
         .collect()
 }
 
-//const INVALID_FORMAT: &'static str = "Invalid format";
-//const UNKNOWN_ERROR: &'static str = "Unknown error";
-
-/*
-#[tokio::main(flavor = "current_thread")]
-async fn change_id(id: String, old_id: String) -> &'static str {
-    if !hbb_common::is_valid_custom_id(&id) {
-        return INVALID_FORMAT;
-    }
-    let uuid = machine_uid::get().unwrap_or("".to_owned());
-    if uuid.is_empty() {
-        return UNKNOWN_ERROR;
-    }
-    let rendezvous_servers = crate::ipc::get_rendezvous_servers(1_000).await;
-    let mut futs = Vec::new();
-    let err: Arc<Mutex<&str>> = Default::default();
-    for rendezvous_server in rendezvous_servers {
-        let err = err.clone();
-        let id = id.to_owned();
-        let uuid = uuid.clone();
-        let old_id = old_id.clone();
-        futs.push(tokio::spawn(async move {
-            let tmp = check_id(rendezvous_server, old_id, id, uuid).await;
-            if !tmp.is_empty() {
-                *err.lock().unwrap() = tmp;
-            }
-        }));
-    }
-    join_all(futs).await;
-    let err = *err.lock().unwrap();
-    if err.is_empty() {
-        crate::ipc::set_config_async("id", id.to_owned()).await.ok();
-    }
-    err
-}
-
-
-async fn check_id(
-    rendezvous_server: String,
-    old_id: String,
-    id: String,
-    uuid: String,
-) -> &'static str {
-    let any_addr = Config::get_any_listen_addr();
-    if let Ok(mut socket) = FramedStream::new(
-        crate::check_port(rendezvous_server, RENDEZVOUS_PORT),
-        any_addr,
-        RENDEZVOUS_TIMEOUT,
-    )
-    .await
-    {
-        let mut msg_out = Message::new();
-        msg_out.set_register_pk(RegisterPk {
-            old_id,
-            id,
-            uuid: uuid.into(),
-            ..Default::default()
-        });
-        let mut ok = false;
-        if socket.send(&msg_out).await.is_ok() {
-            if let Some(Ok(bytes)) = socket.next_timeout(3_000).await {
-                if let Ok(msg_in) = RendezvousMessage::parse_from_bytes(&bytes) {
-                    match msg_in.union {
-                        Some(rendezvous_message::Union::RegisterPkResponse(rpr)) => {
-                            match rpr.result.enum_value_or_default() {
-                                register_pk_response::Result::OK => {
-                                    ok = true;
-                                }
-                                register_pk_response::Result::ID_EXISTS => {
-                                    return "Not available";
-                                }
-                                register_pk_response::Result::TOO_FREQUENT => {
-                                    return "Too frequent";
-                                }
-                                register_pk_response::Result::NOT_SUPPORT => {
-                                    return "server_not_support";
-                                }
-                                register_pk_response::Result::INVALID_ID_FORMAT => {
-                                    return INVALID_FORMAT;
-                                }
-                                _ => {}
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-        if !ok {
-            return UNKNOWN_ERROR;
-        }
-    } else {
-        return "Failed to connect to rendezvous server";
-    }
-    ""
-}
-*/
 // sacrifice some memory
 pub fn value_crash_workaround(values: &[Value]) -> Arc<Vec<Value>> {
     let persist = Arc::new(values.to_vec());

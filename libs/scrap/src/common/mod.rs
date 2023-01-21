@@ -12,6 +12,7 @@ cfg_if! {
         mod x11;
         pub use self::linux::*;
         pub use self::x11::Frame;
+        pub use self::wayland::set_map_err;
             } else {
                 mod x11;
                 pub use self::x11::*;
@@ -43,8 +44,8 @@ pub mod record;
 mod vpx;
 
 #[inline]
-pub fn would_block_if_equal(old: &mut Vec<u128>, b: &[u8]) -> std::io::Result<()> {
-    let b = unsafe { std::slice::from_raw_parts::<u128>(b.as_ptr() as _, b.len() / 16) };
+pub fn would_block_if_equal(old: &mut Vec<u8>, b: &[u8]) -> std::io::Result<()> {
+    // does this really help?
     if b == &old[..] {
         return Err(std::io::ErrorKind::WouldBlock.into());
     }
@@ -52,7 +53,6 @@ pub fn would_block_if_equal(old: &mut Vec<u128>, b: &[u8]) -> std::io::Result<()
     old.copy_from_slice(b);
     Ok(())
 }
-
 
 #[cfg(not(target_os = "ios"))]
 pub trait TraitCapturer {
@@ -69,4 +69,20 @@ pub trait TraitCapturer {
 #[inline]
 pub fn is_x11() -> bool {
     "x11" == hbb_common::platform::linux::get_display_server()
+}
+
+#[cfg(x11)]
+#[inline]
+pub fn is_cursor_embedded() -> bool {
+    if is_x11() {
+        x11::IS_CURSOR_EMBEDDED
+    } else {
+        wayland::IS_CURSOR_EMBEDDED
+    }
+}
+
+#[cfg(not(x11))]
+#[inline]
+pub fn is_cursor_embedded() -> bool {
+    false
 }

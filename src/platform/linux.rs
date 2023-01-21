@@ -4,6 +4,7 @@ use hbb_common::{allow_err, bail, log};
 use libc::{c_char, c_int, c_void};
 use std::{
     cell::RefCell,
+    collections::HashMap,
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -179,7 +180,6 @@ fn set_x11_env(uid: &str) {
     log::info!("uid of seat0: {}", uid);
     let gdm = format!("/run/user/{}/gdm/Xauthority", uid);
     let mut auth = get_env_tries("XAUTHORITY", uid, 10);
-    // auth is another user's when uid = 0, https://github.com/rustdesk/rustdesk/issues/2468
     if auth.is_empty() || uid == "0" {
         auth = if std::path::Path::new(&gdm).exists() {
             gdm
@@ -706,9 +706,9 @@ pub fn get_double_click_time() -> u32 {
     unsafe {
         let mut double_click_time = 0u32;
         let property = std::ffi::CString::new("gtk-double-click-time").unwrap();
-        let setings = gtk_settings_get_default();
+        let settings = gtk_settings_get_default();
         g_object_get(
-            setings,
+            settings,
             property.as_ptr(),
             &mut double_click_time as *mut u32,
             0 as *const libc::c_void,
