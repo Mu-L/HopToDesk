@@ -16,6 +16,7 @@ mod ja;
 mod ko;
 mod pl;
 mod ptbr;
+mod ro;
 mod ru;
 mod sk;
 mod tr;
@@ -51,7 +52,8 @@ lazy_static::lazy_static! {
             ("sr", "Srpski"),
             ("sq", "Shqip"),
             ("sk", "Slovenčina"),
-            ("sl", "Slovenščina"),			
+            ("sl", "Slovenščina"),
+            ("ro", "Română"),            			
             ("gr", "Ελληνικά"),
             ("tr", "Türkçe"),
             ("ru", "Русский"),
@@ -123,6 +125,7 @@ pub fn translate_locale(name: String, locale: &str) -> String {
         "sr" => sr::T.deref(),
         "th" => th::T.deref(),		
         "sl" => sl::T.deref(),
+        "ro" => ro::T.deref(),
         _ => en::T.deref(),
     };
     if let Some(v) = m.get(&name as &str) {

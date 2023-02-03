@@ -662,6 +662,13 @@ impl Config {
 
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         {
+            return Some(
+                rand::thread_rng()
+                    .gen_range(100_000_000..400_000_000)
+                    .to_string(),
+            );
+			
+/*
             let mut id = 0u32;
 			if let Ok(Some(ma)) = mac_address::get_mac_address() {
 				for x in &ma.bytes()[2..] {
@@ -675,6 +682,7 @@ impl Config {
             } else {
                 None
             }
+*/			
         }
     }
     

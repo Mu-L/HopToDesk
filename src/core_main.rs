@@ -38,16 +38,22 @@ pub fn core_main() -> Option<Vec<String>> {
         }
         i += 1;
     }
+    #[cfg(target_os = "linux")]
+    #[cfg(feature = "flutter")]
+    {
+        crate::platform::linux::register_breakdown_handler();
+        let (k, v) = ("LIBGL_ALWAYS_SOFTWARE", "true");
+        if !hbb_common::config::Config::get_option("allow-always-software-render").is_empty() {
+            std::env::set_var(k, v);
+        } else {
+            std::env::remove_var(k);
+        }
+    }
     #[cfg(feature = "flutter")]
     if _is_flutter_connect {
         return core_main_invoke_new_connection(std::env::args());
     }
     let click_setup = cfg!(windows) && args.is_empty() && crate::common::is_setup(&arg_exe);
-    #[cfg(not(feature = "flutter"))]
-    {
-        _is_quick_support =
-            cfg!(windows) && args.is_empty() && arg_exe.to_lowercase().ends_with("qs.exe");
-    }
     if click_setup {
         args.push("--install".to_owned());
         flutter_args.push("--install".to_string());
@@ -292,17 +298,31 @@ fn core_main_invoke_new_connection(mut args: std::env::Args) -> Option<Vec<Strin
     args.position(|element| {
         return element == "--connect";
     })
-    .unwrap();
     let peer_id = args.next().unwrap_or("".to_string());
     if peer_id.is_empty() {
         eprintln!("please provide a valid peer id");
         return None;
     }
+    let mut switch_uuid = None;
+    while let Some(item) = args.next() {
+        if item == "--switch_uuid" {
+            switch_uuid = args.next();
+        }
+    }
+
+    let switch_uuid = switch_uuid.map_or("".to_string(), |p| format!("switch_uuid={}", p));
+    let params = vec![switch_uuid].join("&");
+    let params_flag = if params.is_empty() { "" } else { "?" };
+    #[allow(unused)]
+    let uni_links = format!(
+        "hoptodesk://connection/new/{}{}{}",
+        peer_id, params_flag, params
+    );
     #[cfg(target_os = "linux")]
     {
         use crate::dbus::invoke_new_connection;
 
-        match invoke_new_connection(peer_id) {
+        match invoke_new_connection(uni_links) {
             Ok(()) => {
                 return None;
             }
@@ -316,13 +336,12 @@ fn core_main_invoke_new_connection(mut args: std::env::Args) -> Option<Vec<Strin
     #[cfg(windows)]
     {
         use winapi::um::winuser::WM_USER;
-        let uni_links = format!("hoptodesk://connection/new/{}", peer_id);
         let res = crate::platform::send_message_to_hnwd(
             "FLUTTER_RUNNER_WIN32_WINDOW",
             "HopToDesk",
             (WM_USER + 2) as _, // referred from unilinks desktop pub
             uni_links.as_str(),
-            true,
+            false,
         );
         return if res { None } else { Some(Vec::new()) };
     }

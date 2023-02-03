@@ -50,6 +50,7 @@ pub struct Client {
     pub file: bool,
     pub restart: bool,
     pub recording: bool,
+    pub from_switch: bool,
     #[serde(skip)]
     tx: UnboundedSender<Data>,
 }
@@ -122,6 +123,7 @@ impl<T: InvokeUiCM> ConnectionManager<T> {
         file: bool,
         restart: bool,
         recording: bool,
+        from_switch: bool,
         tx: mpsc::UnboundedSender<Data>,
         security_numbers: String,
         security_qr_code: String
@@ -140,6 +142,7 @@ impl<T: InvokeUiCM> ConnectionManager<T> {
             file,
             restart,
             recording,
+            from_switch,
             tx,
         };
         CLIENTS
@@ -247,6 +250,14 @@ pub fn get_clients_length() -> usize {
     clients.len()
 }
 
+#[inline]
+#[cfg(feature = "flutter")]
+pub fn switch_back(id: i32) {
+    if let Some(client) = CLIENTS.read().unwrap().get(&id) {
+        allow_err!(client.tx.send(Data::SwitchSidesBack));
+    };
+}
+
 impl<T: InvokeUiCM> IpcTaskRunner<T> {
     #[cfg(windows)]
     async fn enable_cliprdr_file_context(&mut self, conn_id: i32, enabled: bool) {
@@ -314,9 +325,9 @@ impl<T: InvokeUiCM> IpcTaskRunner<T> {
                         }
                         Ok(Some(data)) => {
                             match data {
-                                Data::Login{id, is_file_transfer, port_forward, peer_id, name, authorized, keyboard, clipboard, audio, file, file_transfer_enabled: _file_transfer_enabled, restart, recording, security_numbers, security_qr_code} => {
+                                Data::Login{id, is_file_transfer, port_forward, peer_id, name, authorized, keyboard, clipboard, audio, file, file_transfer_enabled: _file_transfer_enabled, restart, recording, from_switch, security_numbers, security_qr_code} => {
                                     log::debug!("conn_id: {}", id);
-                                    self.cm.add_connection(id, is_file_transfer, port_forward, peer_id, name, authorized, keyboard, clipboard, audio, file, restart, recording, self.tx.clone(), security_numbers, security_qr_code);
+                                    self.cm.add_connection(id, is_file_transfer, port_forward, peer_id, name, authorized, keyboard, clipboard, audio, file, restart, recording, from_switch, self.tx.clone(), security_numbers, security_qr_code);
                                     self.authorized = authorized;
                                     self.conn_id = id;
                                     #[cfg(windows)]
@@ -507,6 +518,7 @@ pub async fn start_listen<T: InvokeUiCM>(
                 file_transfer_enabled,
                 restart,
                 recording,
+                from_switch,                
                 security_numbers,
                 security_qr_code,
             }) => {
@@ -524,6 +536,7 @@ pub async fn start_listen<T: InvokeUiCM>(
                     file,
                     restart,
                     recording,
+                    from_switch,
                     tx.clone(),
                     security_numbers,
                     security_qr_code,
@@ -791,9 +804,8 @@ fn cm_inner_send(id: i32, data: Data) {
 
 pub fn can_elevate() -> bool {
     #[cfg(windows)]
-    {
-		return !crate::platform::is_installed() && !crate::portable_service::client::running();
-    }
+    return !crate::platform::is_installed();
+
     #[cfg(not(windows))]
     return false;
 }

@@ -48,7 +48,7 @@ pub const SCRAP_UBUNTU_HIGHER_REQUIRED: &str = "Wayland requires Ubuntu 21.04 or
 pub const SCRAP_OTHER_VERSION_OR_X11_REQUIRED: &str =
     "Wayland requires higher version of linux distro. Please try X11 desktop or change your OS.";
 pub const SCRAP_X11_REQUIRED: &str = "x11 expected";
-pub const SCRAP_X11_REF_URL: &str = "https://rustdesk.com/docs/en/manual/linux/#x11-required";
+pub const SCRAP_X11_REF_URL: &str = "";
 
 pub const NAME: &'static str = "video";
 
@@ -925,15 +925,17 @@ fn start_uac_elevation_check() {
     START.call_once(|| {
         if !crate::platform::is_installed()
             && !crate::platform::is_root()
-            && !crate::platform::is_elevated(None).map_or(false, |b| b)
+            && !crate::portable_service::client::running()
         {
             std::thread::spawn(|| loop {
                 std::thread::sleep(std::time::Duration::from_secs(1));
                 if let Ok(uac) = crate::ui::win_privacy::is_process_consent_running() {
                     *IS_UAC_RUNNING.lock().unwrap() = uac;
                 }
-                if let Ok(elevated) = crate::platform::is_foreground_window_elevated() {
-                    *IS_FOREGROUND_WINDOW_ELEVATED.lock().unwrap() = elevated;
+                if !crate::platform::is_elevated(None).unwrap_or(false) {
+                    if let Ok(elevated) = crate::platform::is_foreground_window_elevated() {
+                        *IS_FOREGROUND_WINDOW_ELEVATED.lock().unwrap() = elevated;
+                    }
                 }
             });
         }

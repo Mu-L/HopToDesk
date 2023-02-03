@@ -3,12 +3,12 @@ use super::{CursorData, ResultType};
 use crate::ipc;
 use hbb_common::{
     allow_err, bail,
-    config::{self, Config},
+    config::{Config},
     log, sleep, timeout, tokio,
 };
 use std::io::prelude::*;
 use std::{
-    ffi::{CString, OsString},
+    ffi::OsString,
     fs, io, mem,
     path::PathBuf,
     sync::{Arc, Mutex},
@@ -48,6 +48,7 @@ use winreg::RegKey;
 
 pub fn get_cursor_pos() -> Option<(i32, i32)> {
     unsafe {
+        #[allow(invalid_value)]
         let mut out = mem::MaybeUninit::uninit().assume_init();
         if GetCursorPos(&mut out) == FALSE {
             return None;
@@ -60,6 +61,7 @@ pub fn reset_input_cache() {}
 
 pub fn get_cursor() -> ResultType<Option<u64>> {
     unsafe {
+        #[allow(invalid_value)]
         let mut ci: CURSORINFO = mem::MaybeUninit::uninit().assume_init();
         ci.cbSize = std::mem::size_of::<CURSORINFO>() as _;
         if crate::portable_service::client::get_cursor_info(&mut ci) == FALSE {
@@ -78,6 +80,7 @@ struct IconInfo(ICONINFO);
 impl IconInfo {
     fn new(icon: HICON) -> ResultType<Self> {
         unsafe {
+            #[allow(invalid_value)]
             let mut ii = mem::MaybeUninit::uninit().assume_init();
             if GetIconInfo(icon, &mut ii) == FALSE {
                 Err(io::Error::last_os_error().into())
@@ -718,9 +721,8 @@ pub fn set_share_rdp(enable: bool) {
 }
 
 pub fn get_active_username() -> String {
-    let name = crate::username();
-    if name != "SYSTEM" {
-        return name;
+    if !is_root() {
+        return crate::username();
     }
     extern "C" {
         fn get_active_user(path: *mut u16, n: u32, rdp: BOOL) -> u32;
@@ -756,7 +758,8 @@ pub fn is_prelogin() -> bool {
 }
 
 pub fn is_root() -> bool {
-    crate::username() == "SYSTEM"
+    // https://stackoverflow.com/questions/4023586/correct-way-to-find-out-if-a-service-is-running-as-the-system-user
+    unsafe { is_local_system() == TRUE }
 }
 
 pub fn lock_screen() {
@@ -1732,4 +1735,14 @@ pub fn create_process_with_logon(user: &str, pwd: &str, exe: &str, arg: &str) ->
         }
     }
     return Ok(());
+}
+
+pub fn set_path_permission(dir: &PathBuf, permission: &str) -> ResultType<()> {
+    std::process::Command::new("icacls")
+        .arg(dir.as_os_str())
+        .arg("/grant")
+        .arg(format!("Everyone:(OI)(CI){}", permission))
+        .arg("/T")
+        .spawn()?;
+    Ok(())
 }

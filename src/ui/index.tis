@@ -398,7 +398,8 @@ class MyIdMenu: Reactor.Component {
                 //stdout.println("2FA enabled");
                 var data = me.enable_2fa();
 
-				msgbox("custom nocancel", translate("2FA QR code"), "<center>" + translate("Scan this QR code with a camera on a secondary device such as a phone to set it up as your 2FA authenticator.") + "<br/><img src='" + data.img_base64 + "'/><br/>" + translate("You will need to confirm the 2FA on the secondary device with you when trying to connect to this desktop.") + "</center>");
+				//msgbox("custom nocancel", translate("2FA QR code"), "<center>" + translate("Scan this QR code with a camera on a secondary device such as a phone to set it up as your 2FA authenticator.") + "<br/><img src='" + data.img_base64 + "'/><br/>" + translate("You will need to confirm the 2FA on the secondary device with you when trying to connect to this desktop.") + "</center>");
+				msgbox("custom nocancel", translate("2FA QR code"), "<center>" + translate("Scan this QR code with a camera on a secondary device such as a phone to set it up as your 2FA authenticator.") + "<br/>" + data.img_base64 + "<br/>" + translate("You will need to confirm the 2FA on the secondary device with you when trying to connect to this desktop.") + "</center>");
 
             } else {
                 //stdout.println("2FA disabled");

@@ -15,9 +15,16 @@ use hbb_common::{
     tokio::{self},
 };
 
+/*
 use crate::common::get_app_name;
 use crate::ui_interface::*;
 use crate::{ipc, two_factor_auth};
+use hbb_common::get_version_number;
+*/
+
+#[cfg(not(any(feature = "flutter", feature = "cli")))]
+use crate::ui_session_interface::Session;
+use crate::{common::get_app_name, ipc, two_factor_auth, ui_interface::*};
 use hbb_common::get_version_number;
 
 mod cm;
@@ -29,7 +36,7 @@ pub mod remote;
 #[cfg(target_os = "windows")]
 pub mod win_privacy;
 
-type Message = RendezvousMessage;
+//type Message = RendezvousMessage;
 
 pub type Children = Arc<Mutex<(bool, HashMap<(String, String), Child>)>>;
 #[allow(dead_code)]
@@ -40,6 +47,10 @@ lazy_static::lazy_static! {
     static ref STUPID_VALUES: Mutex<Vec<Arc<Vec<Value>>>> = Default::default();
 }
 
+#[cfg(not(any(feature = "flutter", feature = "cli")))]
+lazy_static::lazy_static! {
+    pub static ref CUR_SESSION: Arc<Mutex<Option<Session<remote::SciterHandler>>>> = Default::default();
+}
 struct UIHostHandler;
 
 pub fn start(args: &mut [String]) {
@@ -144,9 +155,10 @@ pub fn start(args: &mut [String]) {
         frame.register_behavior("native-remote", move || {
             let handler =
                 remote::SciterSession::new(cmd.clone(), id.clone(), pass.clone(), args.clone());
-            #[cfg(not(feature = "flutter"))]
-            crate::keyboard::set_cur_session(handler.inner());
-            
+            #[cfg(not(any(feature = "flutter", feature = "cli")))]
+            {
+                *CUR_SESSION.lock().unwrap() = Some(handler.inner());
+            }
             Box::new(handler)
         });
         page = "remote.html";
@@ -613,7 +625,12 @@ impl UI {
     }
 
     fn set_custom_api_url(&self, url: String) {
-        ipc::set_config("custom-api-url", url);
+        //ipc::set_config("custom-api-url", url);
+		match ipc::set_config("custom-api-url", url) {
+			Ok(()) => {},
+			Err(e) => log::info!("Could not set custom API URL {e}"),
+		}
+		
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]

@@ -289,7 +289,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Help", "راهنما"),
         ("Failed", "ناموفق"),
         ("Succeeded", "موفقیت آمیز"),
-        ("Someone turns on privacy mode, exit", "اگر شخصی حالت حریم خصوصی را روشن کرد، خارج شوید"),
+        ("Someone turned on privacy mode, exiting.", "اگر شخصی حالت حریم خصوصی را روشن کرد، خارج شوید"),
         ("Unsupported", "پشتیبانی نشده"),
         ("Peer denied", "توسط میزبان راه دور رد شد"),
         ("Please install plugins", "لطفا افزونه ها را نصب کنید"),

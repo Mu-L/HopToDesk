@@ -84,8 +84,9 @@ pub fn session_add_sync(
     id: String,
     is_file_transfer: bool,
     is_port_forward: bool,
+    switch_uuid: String,
 ) -> SyncReturn<String> {
-    if let Err(e) = session_add(&id, is_file_transfer, is_port_forward) {
+    if let Err(e) = session_add(&id, is_file_transfer, is_port_forward, &switch_uuid) {
         SyncReturn(format!("Failed to add session with id {}, {}", &id, e))
     } else {
         SyncReturn("".to_owned())
@@ -244,8 +245,14 @@ pub fn session_get_keyboard_mode(id: String) -> Option<String> {
 }
 
 pub fn session_set_keyboard_mode(id: String, value: String) {
+    let mut _mode_updated = false;
     if let Some(session) = SESSIONS.write().unwrap().get_mut(&id) {
         session.save_keyboard_mode(value);
+        _mode_updated = true;
+    }
+    #[cfg(windows)]
+    if _mode_updated {
+        crate::keyboard::update_grab_get_key_name();
     }
 }
 
@@ -319,7 +326,6 @@ pub fn session_enter_or_leave(id: String, enter: bool) {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     if let Some(session) = SESSIONS.read().unwrap().get(&id) {
         if enter {
-            crate::keyboard::set_cur_session(session.clone());
             session.enter();
         } else {
             session.leave();
@@ -502,11 +508,21 @@ pub fn session_elevate_with_logon(id: String, username: String, password: String
     }
 }
 
+pub fn session_switch_sides(id: String) {
+    if let Some(session) = SESSIONS.read().unwrap().get(&id) {
+        session.switch_sides();
+    }
+}
+
 pub fn main_get_sound_inputs() -> Vec<String> {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     return get_sound_inputs();
     #[cfg(any(target_os = "android", target_os = "ios"))]
     vec![String::from("")]
+}
+
+pub fn main_get_hostname() -> SyncReturn<String> {
+    SyncReturn(crate::common::hostname())
 }
 
 pub fn main_change_id(new_id: String) {
@@ -1092,6 +1108,9 @@ pub fn cm_elevate_portable(conn_id: i32) {
     crate::ui_cm_interface::elevate_portable(conn_id);
 }
 
+pub fn cm_switch_back(conn_id: i32) {
+    crate::ui_cm_interface::switch_back(conn_id);
+}
 pub fn main_get_icon() -> String {
     #[cfg(not(any(target_os = "android", target_os = "ios", feature = "cli")))]
     return ui_interface::get_icon();
@@ -1198,7 +1217,9 @@ pub fn main_update_me() -> SyncReturn<bool> {
 }
 
 pub fn set_cur_session_id(id: String) {
-    super::flutter::set_cur_session_id(id)
+    super::flutter::set_cur_session_id(id);
+    #[cfg(windows)]
+    crate::keyboard::update_grab_get_key_name();
 }
 
 pub fn install_show_run_without_install() -> SyncReturn<bool> {
@@ -1244,6 +1265,12 @@ pub fn main_current_is_wayland() -> SyncReturn<bool> {
 
 pub fn main_is_login_wayland() -> SyncReturn<bool> {
     SyncReturn(is_login_wayland())
+}
+
+pub fn main_hide_docker() -> SyncReturn<bool> {
+    #[cfg(target_os = "macos")]
+    crate::platform::macos::hide_dock();
+    SyncReturn(true)
 }
 
 #[cfg(target_os = "android")]

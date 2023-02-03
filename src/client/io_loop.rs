@@ -1104,6 +1104,10 @@ impl<T: InvokeUiSession> Remote<T> {
                             );
                         }
                     }
+                    Some(misc::Union::SwitchBack(_)) => {
+                        #[cfg(feature = "flutter")]
+                        self.handler.switch_back(&self.handler.id);
+                    }
                     _ => {}
                 },
                 Some(message::Union::TestDelay(t)) => {

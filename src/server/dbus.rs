@@ -5,10 +5,10 @@
 /// [Flutter]: handle uni links for linux
 use dbus::blocking::Connection;
 use dbus_crossroads::{Crossroads, IfaceBuilder};
-use hbb_common::{log};
-use std::{error::Error, fmt, time::Duration};
+use hbb_common::log;
 #[cfg(feature = "flutter")]
 use std::collections::HashMap;
+use std::{error::Error, fmt, time::Duration};
 
 const DBUS_NAME: &str = "org.hoptodesk.hoptodesk";
 const DBUS_PREFIX: &str = "/dbus";

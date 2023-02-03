@@ -9,8 +9,9 @@ pub mod utils {
     use crate::two_factor_auth::api_access;
     use hbb_common::config::Config;
     use hbb_common::rand::random;
-    use image::{Rgba};
+    //use image::{Rgba};
     use qrcode::QrCode;
+	use qrcode::render::svg;
     use sha2::{Digest, Sha256, Sha512};
 
     pub fn random_alphanum(length: usize) -> String {
@@ -31,6 +32,19 @@ pub mod utils {
     }
 
 pub fn qr_code_to_raw_img(qr: QrCode) -> String {
+    
+	let svg_string = qr.render::<svg::Color>().build();
+	
+	/*let svg_string = qr.render()
+                      .min_dimensions(200, 200)
+                      .dark_color(SvgColor::new(0, 0, 0))
+                      .light_color(SvgColor::new(255, 255, 255))
+                      .build();*/
+    svg_string
+	
+	//base64::encode(&svg_string)
+	
+/*
     let tmp_dir = std::env::temp_dir();
     let path = tmp_dir.join("secret_qr.png");
 
@@ -40,6 +54,7 @@ pub fn qr_code_to_raw_img(qr: QrCode) -> String {
     let base64 = image_base64::to_base64(path.to_str().unwrap());
 
     base64
+*/	
 }
 
 /*

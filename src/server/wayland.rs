@@ -1,6 +1,6 @@
 use super::*;
 use hbb_common::{allow_err, platform::linux::DISTRO};
-use scrap::{set_map_err, Capturer, Display, Frame, TraitCapturer};
+use scrap::{is_cursor_embedded, set_map_err, Capturer, Display, Frame, TraitCapturer};
 use std::io;
 
 use super::video_service::{
@@ -13,6 +13,10 @@ lazy_static::lazy_static! {
 }
 
 pub fn set_wayland_scrap_map_err() {
+    set_map_err(map_err_scrap);
+}
+
+pub fn init() {
     set_map_err(map_err_scrap);
 }
 
@@ -129,7 +133,7 @@ pub(super) async fn check_init() -> ResultType<()> {
                 let num = all.len();
                 let (primary, mut displays) = super::video_service::get_displays_2(&all);
                 for display in displays.iter_mut() {
-                    display.cursor_embedded = true;
+                    display.cursor_embedded = is_cursor_embedded();
                 }
 
                 let mut rects: Vec<((i32, i32), usize, usize)> = Vec::new();

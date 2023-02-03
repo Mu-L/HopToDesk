@@ -304,7 +304,11 @@ impl Client {
             tokio::spawn(async move {
                 match Self::connect_directly(&peer_id, &peer).await {
                     Ok(stream) => {
-                        tx.send(Ok((stream, None, true))).await;
+						match tx.send(Ok((stream, None, true))).await {
+							Ok(()) => {},
+							Err(e) => log::info!("Error while connecting to TURN server {e}"),
+						}
+                        //tx.send(Ok((stream, None, true))).await;
                     }
                     Err(err) => {
                         tx.send(Err(err)).await;
@@ -407,7 +411,7 @@ impl Client {
                         bail!("Received binary message from signal server")
                     }
                 },
-                Err(e) => log::info!("timed out connection to signal server"),
+                Err(_) => log::info!("timed out connection to signal server"),
             }
         }
         if peer_addr.port() == 0 {
@@ -1925,9 +1929,6 @@ pub trait Interface: Send + Clone + 'static + Sized {
     fn handle_login_error(&mut self, err: &str) -> bool;
     fn handle_peer_info(&mut self, pi: PeerInfo);
     fn set_force_relay(&mut self, direct: bool, received: bool);
-    fn is_file_transfer(&self) -> bool;
-    fn is_port_forward(&self) -> bool;
-    fn is_rdp(&self) -> bool;
     fn on_error(&self, err: &str) {
         self.msgbox("error", "Error", err, "");
     }
@@ -1935,6 +1936,8 @@ pub trait Interface: Send + Clone + 'static + Sized {
     async fn handle_hash(&mut self, pass: &str, hash: Hash, peer: &mut Stream);
     async fn handle_login_from_ui(&mut self, password: String, remember: bool, peer: &mut Stream);
     async fn handle_test_delay(&mut self, t: TestDelay, peer: &mut Stream);
+    fn get_login_config_handler(&self) -> Arc<RwLock<LoginConfigHandler>>;
+
 }
 
 #[derive(Clone)]

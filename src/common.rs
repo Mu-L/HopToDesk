@@ -466,6 +466,14 @@ pub fn username() -> String {
 }
 
 #[inline]
+pub fn hostname() -> String {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    return whoami::hostname();
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    return DEVICE_NAME.lock().unwrap().clone();
+}
+
+#[inline]
 pub fn check_port<T: std::string::ToString>(host: T, port: i32) -> String {
     let host = host.to_string();
     if !host.contains(":") {

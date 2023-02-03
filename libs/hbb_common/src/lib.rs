@@ -178,22 +178,27 @@ pub fn get_version_from_url(url: &str) -> String {
 }
 
 pub fn gen_version() {
+    println!("cargo:rerun-if-changed=Cargo.toml");
     use std::io::prelude::*;
     let mut file = File::create("./src/version.rs").unwrap();
-    for line in read_lines("Cargo.toml").unwrap() {
-        if let Ok(line) = line {
-            let ab: Vec<&str> = line.split("=").map(|x| x.trim()).collect();
-            if ab.len() == 2 && ab[0] == "version" {
-                file.write_all(format!("pub const VERSION: &str = {};\n", ab[1]).as_bytes())
-                    .ok();
-                break;
-            }
+    for line in read_lines("Cargo.toml").unwrap().flatten() {
+        let ab: Vec<&str> = line.split('=').map(|x| x.trim()).collect();
+        if ab.len() == 2 && ab[0] == "version" {
+            file.write_all(format!("pub const VERSION: &str = {};\n", ab[1]).as_bytes())
+                .ok();
+            break;
         }
     }
     // generate build date
     let build_date = format!("{}", chrono::Local::now().format("%Y-%m-%d %H:%M"));
-    file.write_all(format!("pub const BUILD_DATE: &str = \"{}\";", build_date).as_bytes())
-        .ok();
+    file.write_all(
+        format!(
+            "#[allow(dead_code)]\npub const BUILD_DATE: &str = \"{}\";",
+            build_date
+        )
+        .as_bytes(),
+    )
+    .ok();
     file.sync_all().ok();
 }
 
@@ -213,20 +218,20 @@ pub fn is_valid_custom_id(id: &str) -> bool {
 
 pub fn get_version_number(v: &str) -> i64 {
     let mut n = 0;
-    for x in v.split(".") {
+    for x in v.split('.') {
         n = n * 1000 + x.parse::<i64>().unwrap_or(0);
     }
     n
 }
 
 pub fn get_modified_time(path: &std::path::Path) -> SystemTime {
-    std::fs::metadata(&path)
+    std::fs::metadata(path)
         .map(|m| m.modified().unwrap_or(UNIX_EPOCH))
         .unwrap_or(UNIX_EPOCH)
 }
 
 pub fn get_created_time(path: &std::path::Path) -> SystemTime {
-    std::fs::metadata(&path)
+    std::fs::metadata(path)
         .map(|m| m.created().unwrap_or(UNIX_EPOCH))
         .unwrap_or(UNIX_EPOCH)
 }

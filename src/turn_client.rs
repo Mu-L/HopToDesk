@@ -70,7 +70,12 @@ pub async fn connect_over_turn_servers(
                                 .await
                             {
                                 Ok(stream) => {
-                                    tx.send(Some((conn, stream))).await;
+                                    //tx.send(Some((conn, stream))).await;
+									match tx.send(Some((conn, stream))).await {
+										Ok(()) => {},
+										Err(_) => {},
+									}
+
                                     log::info!(
                                         "[turn] connection has been established by TURN server {}",
                                         turn_server
@@ -84,7 +89,12 @@ pub async fn connect_over_turn_servers(
                     };
                 }
 
-                tx.send(None).await;
+				match tx.send(None).await {
+					Ok(()) => {},
+					Err(_) => {},
+				}
+
+                //tx.send(None).await;
             });
         }
         for _ in 0..srv_len {
@@ -147,12 +157,21 @@ pub async fn get_public_ip() -> Option<SocketAddr> {
             let turn_addr = config.addr.clone();
             if let Ok(turn_client) = TurnClient::new(config).await {
                 if let Ok(addr) = turn_client.get_public_ip().await {
-                    tx.send(Some(addr)).await;
+                    //tx.send(Some(addr)).await;
+					match tx.send(Some(addr)).await {
+						Ok(()) => {},
+						Err(_) => {},
+					}
+
                     log::info!("got public ip: {} via {}", addr, turn_addr);
                     return;
                 }
             }
-            tx.send(None).await;
+			match tx.send(None).await {
+				Ok(()) => {},
+				Err(_) => {},
+			}
+            //tx.send(None).await;
         });
     }
     for _ in 0..len {
