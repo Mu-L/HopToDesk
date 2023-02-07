@@ -459,28 +459,31 @@ class MyIdMenu: Reactor.Component {
 								handler.set_custom_api_url(resurl);
 							}
 							if (resurl == "") return valid_url();
-							view.request({
-								type: #get,
-								url: resurl,
-								success: (s, _) => {
-									let text_res = s.toString();
-									let json;
-									try {
-										json = JSON.parse(text_res);
-									} catch (e) {
-										return msgbox("custom-error", "Custom Network Error", "The custom network URL provided was not valid, please try again.<br/>`" + e + "`", () => {});
-									}
-									if (json instanceof Object && json.turnservers && json.rendezvous) {
-										let host = json.rendezvous.host;
-										//if (host.split('.').length != 4 || host.split('.').map(n => n.toNumber()).filter(n => n > 255 || n < 0).length > 0) {msgbox("custom-error", "Custom Network Error", "Server `" + host + "` is an invalid IPv4 address.");return;}
-										let port = json.rendezvous.port.toInteger();
-										if (port == undefined || port < 0 || port > 65536) return msgbox("custom-error", "Custom Network Error", "Port `" + json.rendezvous.port + "` is an invalid port.");
-										valid_url();
-									} else msgbox("custom-error", "Custom Network Error", "The custom network URL provided did not return a correct response: (`" + text_res + "`).");
-								},
-								error: (e, s) => {
-									msgbox("custom-error", "Custom Network Error", "The custom network URL provided was not valid, please try again.<br/>Status " + s + ": `" + e + "`", () => {});
+
+							httpGetRequest(resurl, #get, {}, function(data) {
+								if (data.error) {
+									msgbox("custom-error", "Custom Network Error", "The custom network URL provided was not valid, please try again.<br/>" + data.error, () => {});
+									return;
 								}
+
+								let jsontemp = JSON.stringify(data);
+								let text_res = jsontemp.toString();
+								let json;
+								try {
+									json = JSON.parse(text_res);
+								} catch (e) {
+									return msgbox("custom-error", "Custom Network Error", "The custom network URL provided was not valid, please try again.<br/>`" + text_res + "`", () => {});
+								}
+								
+								if (data instanceof Object && data.turnservers && data.rendezvous) {
+									stdout.println("SUCCESS 1" + JSON.stringify(data));
+									let host = data.rendezvous.host;
+									let port = data.rendezvous.port.toInteger();
+									if (port == undefined || port < 0 || port > 65536) return msgbox("custom-error", "Custom Network Error", "Port `" + data.rendezvous.port + "` is an invalid port.");
+									valid_url();
+								} else msgbox("custom-error", "Custom Network Error", "The custom network URL provided did not return a correct response: (`" + text_res + "`).");
+							}, function(err, status) {
+								msgbox("custom-error", "Custom Network Error", "The custom network URL provided was not valid, please try again.<br/>Status " + status + ": `" + err + "`", () => {});
 							});
 						}
 

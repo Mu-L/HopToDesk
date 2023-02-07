@@ -31,7 +31,7 @@ mod cm;
 #[cfg(feature = "inline")]
 pub mod inline;
 #[cfg(target_os = "macos")]
-mod macos;
+pub mod macos;
 pub mod remote;
 #[cfg(target_os = "windows")]
 pub mod win_privacy;
@@ -244,7 +244,7 @@ impl UI {
     }
 
     fn install_me(&mut self, _options: String, _path: String) {
-        install_me(_options, _path, false, false);
+        install_me(_options, _path, false, false, false);
     }
 
     fn update_me(&self, _path: String) {
@@ -280,7 +280,7 @@ impl UI {
     }
 
     fn forget_password(&self, id: String) {
-        forget_password(id);
+        forget_password(id)
     }
 
     fn get_peer_option(&self, id: String, name: String) -> String {
@@ -288,13 +288,13 @@ impl UI {
     }
 
     fn set_peer_option(&self, id: String, name: String, value: String) {
-        set_peer_option(id, name, value);
+        set_peer_option(id, name, value)
     }
-
-    //fn using_public_server(&self) -> bool {
-    //     using_public_server()
-    // }
-
+/*
+    fn using_public_server(&self) -> bool {
+        using_public_server()
+    }
+*/
     fn get_options(&self) -> Value {
         let hashmap: HashMap<String, String> = serde_json::from_str(&get_options()).unwrap();
         let mut m = Value::map();
@@ -583,6 +583,10 @@ impl UI {
         post_request(url, body, header)
     }
 
+    fn get_request(&self, url: String, header: String) {
+        get_request(url, header)
+    }
+	
     fn is_ok_change_id(&self) -> bool {
         is_ok_change_id()
     }
@@ -713,6 +717,7 @@ impl sciter::EventHandler for UI {
         //fn change_id(String);
         fn get_async_job_status();
         fn post_request(String, String, String);
+		fn get_request(String, String);
         fn is_ok_change_id();
         fn create_shortcut(String);
         fn discover();

@@ -84,11 +84,11 @@ pub fn goto_install() {
 }
 
 #[inline]
-pub fn install_me(_options: String, _path: String, _silent: bool, _debug: bool) {
+pub fn install_me(_options: String, _path: String, _silent: bool, _debug: bool, _nostartup: bool) {
     #[cfg(windows)]
     std::thread::spawn(move || {
         allow_err!(crate::platform::windows::install_me(
-            &_options, _path, _silent, _debug, false
+            &_options, _path, _silent, _debug, _nostartup
         ));
         std::process::exit(0);
     });
@@ -139,13 +139,6 @@ pub fn show_run_without_install() -> bool {
 }
 
 /*
-#[inline]
-pub fn has_rendezvous_service() -> bool {
-    #[cfg(all(windows, feature = "hbbs"))]
-    return crate::platform::is_win_server() && crate::platform::windows::get_license().is_some();
-    return false;
-}
-
 #[inline]
 pub fn get_license() -> String {
     #[cfg(windows)]
@@ -440,11 +433,6 @@ pub fn closing(x: i32, y: i32, w: i32, h: i32) {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     crate::server::input_service::fix_key_down_timeout_at_exit();
     LocalConfig::set_size(x, y, w, h);
-	#[cfg(target_os = "windows")]
-	{
-		let (_, _, _, exe) = crate::platform::get_install_info();
-		std::process::Command::new(&exe).arg("--tray").spawn().ok();
-	}	
 }
 
 #[inline]
@@ -781,7 +769,7 @@ pub fn change_id(id: String) {
     *ASYNC_JOB_STATUS.lock().unwrap() = " ".to_owned();
     let old_id = get_id();
     std::thread::spawn(move || {
-        *ASYNC_JOB_STATUS.lock().unwrap() = change_id_(id, old_id).to_owned();
+        *ASYNC_JOB_STATUS.lock().unwrap() = change_id_shared(id, old_id).to_owned();
     });
 }
 
@@ -790,6 +778,17 @@ pub fn post_request(url: String, body: String, header: String) {
     *ASYNC_JOB_STATUS.lock().unwrap() = " ".to_owned();
     std::thread::spawn(move || {
         *ASYNC_JOB_STATUS.lock().unwrap() = match crate::post_request_sync(url, body, &header) {
+            Err(err) => err.to_string(),
+            Ok(text) => text,
+        };
+    });
+}
+
+#[inline]
+pub fn get_request(url: String, header: String) {
+    *ASYNC_JOB_STATUS.lock().unwrap() = " ".to_owned();
+    std::thread::spawn(move || {
+        *ASYNC_JOB_STATUS.lock().unwrap() = match crate::get_request_sync(url, &header) {
             Err(err) => err.to_string(),
             Ok(text) => text,
         };
@@ -961,6 +960,18 @@ pub fn account_auth_result() -> String {
 }
 */
 
+#[cfg(feature = "flutter")]
+pub fn set_user_default_option(key: String, value: String) {
+    use hbb_common::config::UserDefaultConfig;
+    UserDefaultConfig::load().set(key, value);
+}
+
+#[cfg(feature = "flutter")]
+pub fn get_user_default_option(key: String) -> String {
+    use hbb_common::config::UserDefaultConfig;
+    UserDefaultConfig::load().get(&key)
+}
+
 // notice: avoiding create ipc connecton repeatly,
 // because windows named pipe has serious memory leak issue.
 #[tokio::main(flavor = "current_thread")]
@@ -1049,7 +1060,7 @@ const UNKNOWN_ERROR: &'static str = "Unknown error";
 
 #[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
 #[tokio::main(flavor = "current_thread")]
-async fn change_id_(id: String, old_id: String) -> &'static str {
+pub async fn change_id_shared(id: String, old_id: String) -> &'static str {
     if !hbb_common::is_valid_custom_id(&id) {
         return INVALID_FORMAT;
     }

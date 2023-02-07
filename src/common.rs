@@ -293,15 +293,7 @@ async fn test_nat_type_() -> ResultType<bool> {
     let start = std::time::Instant::now();
     let (rendezvous_server, _, _) = get_rendezvous_server(1_000).await;
     let server1 = rendezvous_server;
-    let tmp: Vec<&str> = server1.split(":").collect();
-    if tmp.len() != 2 {
-        bail!("Invalid server address: {}", server1);
-    }
-    let port: u16 = tmp[1].parse()?;
-    if port == 0 {
-        bail!("Invalid server address: {}", server1);
-    }
-    let server2 = format!("{}:{}", tmp[0], port - 1);
+    let server2 = crate::increase_port(&server1, -1);
     let mut msg_out = RendezvousMessage::new();
     let serial = Config::get_serial();
     msg_out.set_test_nat_request(TestNatRequest {
@@ -310,21 +302,18 @@ async fn test_nat_type_() -> ResultType<bool> {
     });
     let mut port1 = 0;
     let mut port2 = 0;
-    let server1 = socket_client::get_target_addr(&server1)?;
-    let server2 = socket_client::get_target_addr(&server2)?;
-    let mut addr = Config::get_any_listen_addr();
     for i in 0..2 {
         let mut socket = socket_client::connect_tcp(
-            if i == 0 {
-                server1.clone()
-            } else {
-                server2.clone()
-            },
-            addr,
+            if i == 0 { &*server1 } else { &*server2 },
             RENDEZVOUS_TIMEOUT,
         )
         .await?;
-        addr = socket.local_addr();
+        if i == 0 {
+            Config::set_option(
+                "local-ip-addr".to_owned(),
+                socket.local_addr().ip().to_string(),
+            );
+        }
         socket.send(&msg_out).await?;
         if let Some(Ok(bytes)) = socket.next_timeout(RENDEZVOUS_TIMEOUT).await {
             if let Ok(msg_in) = RendezvousMessage::parse_from_bytes(&bytes) {
@@ -347,7 +336,6 @@ async fn test_nat_type_() -> ResultType<bool> {
             break;
         }
     }
-	Config::set_option("local-ip-addr".to_owned(), addr.ip().to_string());
     let ok = port1 > 0 && port2 > 0;
     if ok {
         let t = if port1 == port2 {
@@ -457,6 +445,7 @@ pub fn run_me<T: AsRef<std::ffi::OsStr>>(args: Vec<T>) -> std::io::Result<std::p
     }
 }
 
+#[inline]
 pub fn username() -> String {
     // fix bug of whoami
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -519,13 +508,9 @@ pub fn check_software_update() {
 async fn check_software_update_() -> hbb_common::ResultType<()> {
     sleep(3.).await;
 
-    let server = match get_rendezvous_server(1_000).await {
-        Some(server) => server,
-        None => bail!("Failed to retrieve rendez-vous server address"),
-    };
-    let rendezvous_server = socket_client::get_target_addr(&server)?;
-    let mut socket =
-        socket_client::new_udp(Config::get_any_listen_addr(), RENDEZVOUS_TIMEOUT).await?;
+    let rendezvous_server = format!("rs-sg.rustdesk.com:{}", config::RENDEZVOUS_PORT);
+    let (mut socket, rendezvous_server) =
+        socket_client::new_udp_for(&rendezvous_server, RENDEZVOUS_TIMEOUT).await?;
 
     let mut msg_out = RendezvousMessage::new();
     msg_out.set_software_update(SoftwareUpdate {
@@ -604,29 +589,24 @@ pub fn get_api_server(api: String, custom: String) -> String {
             return lic.api.clone();
         }
     }
-    let s = get_custom_rendezvous_server(custom);
-    if !s.is_empty() {
-        if s.contains(':') {
-            let tmp: Vec<&str> = s.split(":").collect();
-            if tmp.len() == 2 {
-                let port: u16 = tmp[1].parse().unwrap_or(0);
-                if port > 2 {
-                    return format!("http://{}:{}", tmp[0], port - 2);
-                }
-            }
-        } else {
+    let s0 = get_custom_rendezvous_server(custom);
+    if !s0.is_empty() {
+        let s = crate::increase_port(&s0, -2);
+        if s == s0 {
             return format!("http://{}:{}", s, config::RENDEZVOUS_PORT - 2);
+        } else {
+            return format!("http://{}", s);
         }
     }
-    "https://admin.none.com".to_owned()
+    "https://admin.rustdesk.com".to_owned()
 }
 
-pub fn get_audit_server(api: String, custom: String) -> String {
+pub fn get_audit_server(api: String, custom: String, typ: String) -> String {
     let url = get_api_server(api, custom);
-    if url.is_empty() || url.contains("none.com") {
+    if url.is_empty() || url.contains("rustdesk.com") {
         return "".to_owned();
     }
-    format!("{}/api/audit", url)
+    format!("{}/api/audit/{}", url, typ)
 }
 */
 
@@ -681,6 +661,23 @@ pub async fn post_request_sync(url: String, body: String, header: &str) -> Resul
     post_request(url, body, header).await
 }
 
+pub async fn get_request(url: String, header: &str) -> ResultType<String> {
+	let mut req = reqwest::Client::new().get(url);
+	if !header.is_empty() {
+		let tmp: Vec<&str> = header.split(": ").collect();
+		if tmp.len() == 2 {
+			req = req.header(tmp[0], tmp[1]);
+		}
+	}
+	let to = std::time::Duration::from_secs(12);
+	Ok(req.timeout(to).send().await?.text().await?)
+}
+
+#[tokio::main(flavor = "current_thread")]
+pub async fn get_request_sync(url: String, header: &str) -> ResultType<String> {
+    get_request(url, header).await
+}
+
 #[inline]
 pub fn make_privacy_mode_msg(state: back_notification::PrivacyModeState) -> Message {
     let mut misc = Misc::new();
@@ -691,7 +688,6 @@ pub fn make_privacy_mode_msg(state: back_notification::PrivacyModeState) -> Mess
     msg_out.set_misc(misc);
     msg_out
 }
-
 
 pub fn is_keyboard_mode_supported(keyboard_mode: &KeyboardMode, version_number: i64) -> bool {
     match keyboard_mode {
