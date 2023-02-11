@@ -48,17 +48,6 @@ lazy_static::lazy_static! {
     pub static ref SENDER : Mutex<mpsc::UnboundedSender<ipc::Data>> = Mutex::new(check_connect_status(true));
 }
 
-#[inline]
-pub fn recent_sessions_updated() -> bool {
-    let mut children = CHILDREN.lock().unwrap();
-    if children.0 {
-        children.0 = false;
-        true
-    } else {
-        false
-    }
-}
-
 #[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
 #[inline]
 pub fn get_id() -> String {
@@ -522,12 +511,6 @@ pub fn get_recent_sessions() -> Vec<(String, SystemTime, PeerConfig)> {
 }
 
 #[inline]
-#[cfg(not(any(target_os = "android", target_os = "ios", feature = "cli")))]
-pub fn get_icon() -> String {
-    crate::get_icon()
-}
-
-#[inline]
 pub fn remove_peer(id: String) {
     PeerConfig::remove(&id);
 }
@@ -671,36 +654,9 @@ pub fn get_app_name() -> String {
     crate::get_app_name()
 }
 
-#[inline]
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub fn get_software_ext() -> String {
-    #[cfg(windows)]
-    let p = "exe";
-    #[cfg(target_os = "macos")]
-    let p = "dmg";
-    #[cfg(target_os = "linux")]
-    let p = "deb";
-    p.to_owned()
-}
-
-#[inline]
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub fn get_software_store_path() -> String {
-    let mut p = std::env::temp_dir();
-    let name = SOFTWARE_UPDATE_URL
-        .lock()
-        .unwrap()
-        .split("/")
-        .last()
-        .map(|x| x.to_owned())
-        .unwrap_or(crate::get_app_name());
-    p.push(name);
-    format!("{}.{}", p.to_string_lossy(), get_software_ext())
-}
-
+#[cfg(windows)]
 #[inline]
 pub fn create_shortcut(_id: String) {
-    #[cfg(windows)]
     crate::platform::windows::create_shortcut(&_id).ok();
 }
 
@@ -747,22 +703,6 @@ pub fn get_uuid() -> String {
     base64::encode(hbb_common::get_uuid())
 }
 
-#[inline]
-#[cfg(not(any(target_os = "android", target_os = "ios", feature = "cli")))]
-pub fn open_url(url: String) {
-    #[cfg(windows)]
-    let p = "explorer";
-    #[cfg(target_os = "macos")]
-    let p = "open";
-    #[cfg(target_os = "linux")]
-    let p = if std::path::Path::new("/usr/bin/firefox").exists() {
-        "firefox"
-    } else {
-        "xdg-open"
-    };
-    allow_err!(std::process::Command::new(p).arg(url).spawn());
-}
-
 #[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
 #[inline]
 pub fn change_id(id: String) {
@@ -778,17 +718,6 @@ pub fn post_request(url: String, body: String, header: String) {
     *ASYNC_JOB_STATUS.lock().unwrap() = " ".to_owned();
     std::thread::spawn(move || {
         *ASYNC_JOB_STATUS.lock().unwrap() = match crate::post_request_sync(url, body, &header) {
-            Err(err) => err.to_string(),
-            Ok(text) => text,
-        };
-    });
-}
-
-#[inline]
-pub fn get_request(url: String, header: String) {
-    *ASYNC_JOB_STATUS.lock().unwrap() = " ".to_owned();
-    std::thread::spawn(move || {
-        *ASYNC_JOB_STATUS.lock().unwrap() = match crate::get_request_sync(url, &header) {
             Err(err) => err.to_string(),
             Ok(text) => text,
         };
@@ -874,14 +803,6 @@ pub fn has_hwcodec() -> bool {
     return false;
     #[cfg(any(feature = "hwcodec", feature = "mediacodec"))]
     return true;
-}
-
-#[inline]
-pub fn is_release() -> bool {
-    #[cfg(not(debug_assertions))]
-    return true;
-    #[cfg(debug_assertions)]
-    return false;
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]

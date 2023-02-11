@@ -278,6 +278,8 @@ async fn handle_received_peers(mut rx: UnboundedReceiver<config::DiscoveryPeer>)
                     peers.insert(0, peer);
                     if last_write_time.elapsed().as_millis() > 300 {
                         config::LanPeers::store(&peers);
+                        #[cfg(feature = "flutter")]
+                        crate::flutter_ffi::main_load_lan_peers();
                         last_write_time = Instant::now();
                     }
                 }
@@ -289,5 +291,7 @@ async fn handle_received_peers(mut rx: UnboundedReceiver<config::DiscoveryPeer>)
     }
 
     config::LanPeers::store(&peers);
+    #[cfg(feature = "flutter")]
+    crate::flutter_ffi::main_load_lan_peers();
     Ok(())
 }

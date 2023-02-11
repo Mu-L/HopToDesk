@@ -16,12 +16,10 @@ use hbb_common::{allow_err, message_proto::*};
 use hbb_common::{fs, get_version_number, log, Stream};
 use rdev::{Event, EventType::*};
 use std::collections::HashMap;
-
 use std::ops::{Deref, DerefMut};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-
 use uuid::Uuid;
 pub static IS_IN: AtomicBool = AtomicBool::new(false);
 
@@ -202,7 +200,7 @@ impl<T: InvokeUiSession> Session<T> {
         self.send(Data::Message(msg));
     }
 
-    pub fn get_audit_server(&self) -> String {
+    pub fn get_audit_server(&self, typ: String) -> String {
         if self.lc.read().unwrap().conn_id <= 0
             || LocalConfig::get_option("access_token").is_empty()
         {
@@ -220,7 +218,7 @@ impl<T: InvokeUiSession> Session<T> {
     }
  
     pub fn send_note(&self, note: String) {
-        let url = self.get_audit_server();
+        let url = self.get_audit_server("conn".to_string());
         let id = self.id.clone();
         let conn_id = self.lc.read().unwrap().conn_id;
         std::thread::spawn(move || {
@@ -361,11 +359,24 @@ impl<T: InvokeUiSession> Session<T> {
     }
 
     pub fn enter(&self) {
+        #[cfg(target_os = "windows")]
+        {
+            match &self.lc.read().unwrap().keyboard_mode as _ {
+                "legacy" => rdev::set_get_key_unicode(true),
+                "translate" => rdev::set_get_key_unicode(true),
+                _ => {}
+            }
+        }
+
         IS_IN.store(true, Ordering::SeqCst);
         keyboard::client::change_grab_status(GrabState::Run);
     }
 
     pub fn leave(&self) {
+        #[cfg(target_os = "windows")]
+        {
+            rdev::set_get_key_unicode(false);
+        }
         IS_IN.store(false, Ordering::SeqCst);
         keyboard::client::change_grab_status(GrabState::Wait);
     }
@@ -403,7 +414,7 @@ impl<T: InvokeUiSession> Session<T> {
 
     pub fn handle_flutter_key_event(
         &self,
-        name: &str,
+        _name: &str,
         keycode: i32,
         scancode: i32,
         lock_modes: i32,
@@ -428,7 +439,7 @@ impl<T: InvokeUiSession> Session<T> {
         };
         let event = Event {
             time: std::time::SystemTime::now(),
-            name: Option::Some(name.to_owned()),
+            unicode: None,
             code: keycode as _,
             scan_code: scancode as _,
             event_type: event_type,
@@ -661,6 +672,14 @@ impl<T: InvokeUiSession> Session<T> {
             }
         }
     }
+
+    pub fn request_voice_call(&self) {
+        self.send(Data::NewVoiceCall);
+    }
+    
+    pub fn close_voice_call(&self) {
+        self.send(Data::CloseVoiceCall);
+    }
 }
 
 pub trait InvokeUiSession: Send + Sync + Clone + 'static + Sized + Default {
@@ -701,6 +720,10 @@ pub trait InvokeUiSession: Send + Sync + Clone + 'static + Sized + Default {
     fn clipboard(&self, content: String);
     fn cancel_msgbox(&self, tag: &str);
     fn switch_back(&self, id: &str);
+    fn on_voice_call_started(&self);
+    fn on_voice_call_closed(&self, reason: &str);
+    fn on_voice_call_waiting(&self);
+    fn on_voice_call_incoming(&self);
 }
 
 impl<T: InvokeUiSession> Deref for Session<T> {
@@ -858,6 +881,11 @@ pub async fn io_loop<T: InvokeUiSession>(handler: Session<T>) {
     if key.is_empty() {
         //key = crate::platform::get_license_key();
     }
+/*
+    if key.is_empty() && !option_env!("RENDEZVOUS_SERVER").unwrap_or("").is_empty() {
+        key = RS_PUB_KEY.to_owned();
+    }
+*/    
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     if handler.is_port_forward() {
         if handler.is_rdp() {

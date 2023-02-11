@@ -1,4 +1,6 @@
-use hbb_common::log;
+use std::future::Future;
+
+use hbb_common::{log, ResultType};
 
 /// shared by flutter and sciter main function
 ///
@@ -136,7 +138,7 @@ pub fn core_main() -> Option<Vec<String>> {
                 hbb_common::allow_err!(platform::update_me());
                 return None;
             } else if args[0] == "--reinstall" {
-                hbb_common::allow_err!(platform::uninstall_me());
+                 hbb_common::allow_err!(platform::uninstall_me());
                 hbb_common::allow_err!(platform::install_me(
                     "desktopicon startmenu",
                     "".to_owned(),
@@ -186,34 +188,24 @@ pub fn core_main() -> Option<Vec<String>> {
                 std::fs::remove_file(&args[1]).ok();
                 return None;
             }
+        } else if args[0] == "--tray" {
+            crate::tray::start_tray();
+            return None;
         } else if args[0] == "--service" {
             log::info!("start --service");
             crate::start_os_service();
             return None;
         } else if args[0] == "--server" {
             log::info!("start --server with user {}", crate::username());
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
             {
                 crate::start_server(true);
                 return None;
             }
             #[cfg(target_os = "macos")]
             {
-                std::thread::spawn(move || crate::start_server(true));
-                crate::platform::macos::hide_dock();
-                crate::tray::make_tray();
-                return None;
-            }
-            #[cfg(target_os = "linux")]
-            {
                 let handler = std::thread::spawn(move || crate::start_server(true));
-                // Show the tray in linux only when current user is a normal user
-                // [Note]
-                // As for GNOME, the tray cannot be shown in user's status bar.
-                // As for KDE, the tray can be shown without user's theme.
-                //if !crate::platform::is_root() {
-                //    crate::tray::start_tray();
-                //}
+                crate::tray::start_tray();
                 // prevent server exit when encountering errors from tray
                 hbb_common::allow_err!(handler.join());
             }
@@ -247,11 +239,7 @@ pub fn core_main() -> Option<Vec<String>> {
         } else if args[0] == "--cm" {
             // call connection manager to establish connections
             // meanwhile, return true to call flutter window to show control panel
-            #[cfg(feature = "flutter")]
-            crate::flutter::connection_manager::start_listen_ipc_thread();
             crate::ui_interface::start_option_status_sync();
-            #[cfg(target_os = "macos")]
-            crate::platform::macos::hide_dock();
         }
     }
     //_async_logger_holder.map(|x| x.flush());
@@ -297,7 +285,7 @@ fn import_config(path: &str) {
 fn core_main_invoke_new_connection(mut args: std::env::Args) -> Option<Vec<String>> {
     args.position(|element| {
         return element == "--connect";
-    })
+    })?;
     let peer_id = args.next().unwrap_or("".to_string());
     if peer_id.is_empty() {
         eprintln!("please provide a valid peer id");
@@ -309,15 +297,20 @@ fn core_main_invoke_new_connection(mut args: std::env::Args) -> Option<Vec<Strin
             switch_uuid = args.next();
         }
     }
+    let mut param_array = vec![];
+    if switch_uuid.is_some() {
+        let switch_uuid = switch_uuid.map_or("".to_string(), |p| format!("switch_uuid={}", p));
+        param_array.push(switch_uuid);
+    }
 
-    let switch_uuid = switch_uuid.map_or("".to_string(), |p| format!("switch_uuid={}", p));
-    let params = vec![switch_uuid].join("&");
+    let params = param_array.join("&");
     let params_flag = if params.is_empty() { "" } else { "?" };
     #[allow(unused)]
     let uni_links = format!(
         "hoptodesk://connection/new/{}{}{}",
         peer_id, params_flag, params
     );
+
     #[cfg(target_os = "linux")]
     {
         use crate::dbus::invoke_new_connection;
@@ -346,5 +339,11 @@ fn core_main_invoke_new_connection(mut args: std::env::Args) -> Option<Vec<Strin
         return if res { None } else { Some(Vec::new()) };
     }
     #[cfg(target_os = "macos")]
-    return Some(Vec::new());
+    {
+        return if let Err(_) = crate::ipc::send_url_scheme(uni_links) {
+            Some(Vec::new())
+        } else {
+            None
+        };
+    }
 }

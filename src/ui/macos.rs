@@ -1,9 +1,12 @@
+use std::{ffi::c_void, rc::Rc};
+
 #[cfg(target_os = "macos")]
 use cocoa::{
     appkit::{NSApp, NSApplication, NSApplicationActivationPolicy::*, NSMenu, NSMenuItem},
     base::{id, nil, YES},
     foundation::{NSAutoreleasePool, NSString},
 };
+use objc::runtime::Class;
 use objc::{
     class,
     declare::ClassDecl,
@@ -12,7 +15,8 @@ use objc::{
     sel, sel_impl,
 };
 use sciter::{make_args, Host};
-use std::{ffi::c_void, rc::Rc};
+
+use hbb_common::log;
 
 static APP_HANDLER_IVAR: &str = "GoDeskAppHandler";
 
@@ -98,12 +102,24 @@ unsafe fn set_delegate(handler: Option<Box<dyn AppHandler>>) {
         sel!(handleMenuItem:),
         handle_menu_item as extern "C" fn(&mut Object, Sel, id),
     );
+    decl.add_method(
+        sel!(handleEvent:withReplyEvent:),
+        handle_apple_event as extern "C" fn(&Object, Sel, u64, u64),
+    );
     let decl = decl.register();
     let delegate: id = msg_send![decl, alloc];
     let () = msg_send![delegate, init];
     let state = DelegateState { handler };
     let handler_ptr = Box::into_raw(Box::new(state));
     (*delegate).set_ivar(APP_HANDLER_IVAR, handler_ptr as *mut c_void);
+    // Set the url scheme handler
+    let cls = Class::get("NSAppleEventManager").unwrap();
+    let manager: *mut Object = msg_send![cls, sharedAppleEventManager];
+    let _: () = msg_send![manager,
+                              setEventHandler: delegate
+                              andSelector: sel!(handleEvent:withReplyEvent:)
+                              forEventClass: fruitbasket::kInternetEventClass
+                              andEventID: fruitbasket::kAEGetURL];
     let () = msg_send![NSApp(), setDelegate: delegate];
 }
 
@@ -125,10 +141,7 @@ extern "C" fn application_should_handle_open_untitled_file(
         if !LAUNCHED {
             return YES;
         }
-        hbb_common::log::debug!("icon clicked on finder");
-        if std::env::args().nth(1) == Some("--server".to_owned()) {
-            crate::platform::macos::check_main_window();
-        }
+        crate::platform::macos::handle_application_should_open_untitled_file();
         let inner: *mut c_void = *this.get_ivar(APP_HANDLER_IVAR);
         let inner = &mut *(inner as *mut DelegateState);
         (*inner).command(AWAKE);
@@ -167,6 +180,13 @@ extern "C" fn handle_menu_item(this: &mut Object, _: Sel, item: id) {
     }
 }
 
+extern "C" fn handle_apple_event(_this: &Object, _cmd: Sel, event: u64, _reply: u64) {
+    let event = event as *mut Object;
+    let url = fruitbasket::parse_url_event(event);
+    log::debug!("an event was received: {}", url);
+    std::thread::spawn(move || crate::handle_url_scheme(url));
+}
+
 unsafe fn make_menu_item(title: &str, key: &str, tag: u32) -> *mut Object {
     let title = NSString::alloc(nil).init_str(title);
     let action = sel!(handleMenuItem:);
@@ -192,7 +212,7 @@ pub fn make_menubar(host: Rc<Host>, is_index: bool) {
             app_menu.addItem_(new_item);
         } else {
             // When app launched without argument, is the main panel.
-            let about_item = make_menu_item("About", "a", SHOW_ABOUT_TAG);
+            let about_item = make_menu_item("About", "", SHOW_ABOUT_TAG);
             app_menu.addItem_(about_item);
             let separator = NSMenuItem::separatorItem(nil).autorelease();
             app_menu.addItem_(separator);
@@ -226,11 +246,4 @@ pub fn show_dock() {
     unsafe {
         NSApp().setActivationPolicy_(NSApplicationActivationPolicyRegular);
     }
-}
-
-pub fn make_tray() {
-    unsafe {
-        set_delegate(None);
-    }
-    crate::tray::make_tray();
 }

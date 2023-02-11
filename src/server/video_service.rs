@@ -48,7 +48,7 @@ pub const SCRAP_UBUNTU_HIGHER_REQUIRED: &str = "Wayland requires Ubuntu 21.04 or
 pub const SCRAP_OTHER_VERSION_OR_X11_REQUIRED: &str =
     "Wayland requires higher version of linux distro. Please try X11 desktop or change your OS.";
 pub const SCRAP_X11_REQUIRED: &str = "x11 expected";
-pub const SCRAP_X11_REF_URL: &str = "";
+pub const SCRAP_X11_REF_URL: &str = "https://rustdesk.com/docs/en/manual/linux/#x11-required";
 
 pub const NAME: &'static str = "video";
 
@@ -207,7 +207,7 @@ fn create_capturer(
     if privacy_mode_id > 0 {
         #[cfg(windows)]
         {
-            use crate::ui::win_privacy::*;
+            use crate::win_privacy::*;
 
             match scrap::CapturerMag::new(
                 display.origin(),
@@ -308,11 +308,11 @@ pub fn test_create_capturer(privacy_mode_id: i32, timeout_millis: u64) -> bool {
 fn check_uac_switch(privacy_mode_id: i32, capturer_privacy_mode_id: i32) -> ResultType<()> {
     if capturer_privacy_mode_id != 0 {
         if privacy_mode_id != capturer_privacy_mode_id {
-            if !crate::ui::win_privacy::is_process_consent_running()? {
+            if !crate::win_privacy::is_process_consent_running()? {
                 bail!("consent.exe is running");
             }
         }
-        if crate::ui::win_privacy::is_process_consent_running()? {
+        if crate::win_privacy::is_process_consent_running()? {
             bail!("consent.exe is running");
         }
     }
@@ -372,7 +372,7 @@ fn get_capturer(use_yuv: bool, portable_service_running: bool) -> ResultType<Cap
     let mut capturer_privacy_mode_id = privacy_mode_id;
     #[cfg(windows)]
     if capturer_privacy_mode_id != 0 {
-        if crate::ui::win_privacy::is_process_consent_running()? {
+        if crate::win_privacy::is_process_consent_running()? {
             capturer_privacy_mode_id = 0;
         }
     }
@@ -480,22 +480,7 @@ fn run(sp: GenericService) -> ResultType<()> {
     #[cfg(windows)]
     log::info!("gdi: {}", c.is_gdi());
     let codec_name = Encoder::current_hw_encoder_name();
-    #[cfg(not(target_os = "ios"))]
-    let recorder = if !Config::get_option("allow-auto-record-incoming").is_empty() {
-        Recorder::new(RecorderContext {
-            id: "local".to_owned(),
-            default_dir: crate::ui_interface::default_video_save_directory(),
-            filename: "".to_owned(),
-            width: c.width,
-            height: c.height,
-            codec_id: scrap::record::RecordCodecID::VP9,
-        })
-        .map_or(Default::default(), |r| Arc::new(Mutex::new(Some(r))))
-    } else {
-        Default::default()
-    };
-    #[cfg(target_os = "ios")]
-    let recorder: Arc<Mutex<Option<Recorder>>> = Default::default();
+    let recorder = get_recorder(c.width, c.height, &codec_name);
     #[cfg(windows)]
     start_uac_elevation_check();
 
@@ -513,7 +498,7 @@ fn run(sp: GenericService) -> ResultType<()> {
                 video_qos.target_bitrate,
                 video_qos.fps
             );
-            encoder.set_bitrate(video_qos.target_bitrate).unwrap();
+            allow_err!(encoder.set_bitrate(video_qos.target_bitrate));
             spf = video_qos.spf();
         }
         drop(video_qos);
@@ -607,7 +592,6 @@ fn run(sp: GenericService) -> ResultType<()> {
                     }
                     try_gdi += 1;
                 }
-
                 #[cfg(target_os = "linux")]
                 {
                     would_block_count += 1;
@@ -671,6 +655,56 @@ fn run(sp: GenericService) -> ResultType<()> {
     }
 
     Ok(())
+}
+
+fn get_recorder(
+    width: usize,
+    height: usize,
+    codec_name: &Option<String>,
+) -> Arc<Mutex<Option<Recorder>>> {
+    #[cfg(not(target_os = "ios"))]
+    let recorder = if !Config::get_option("allow-auto-record-incoming").is_empty() {
+        //use crate::hbbs_http::record_upload;
+        use scrap::record::RecordCodecID::*;
+/*
+        let tx = if record_upload::is_enable() {
+            let (tx, rx) = std::sync::mpsc::channel();
+            record_upload::run(rx);
+            Some(tx)
+        } else {
+            None
+        };
+*/
+		let tx = None;
+        
+        let codec_id = match codec_name {
+            Some(name) => {
+                if name.contains("264") {
+                    H264
+                } else {
+                    H265
+                }
+            }
+            None => VP9,
+        };
+        Recorder::new(RecorderContext {
+            server: true,
+            id: Config::get_id(),
+            default_dir: crate::ui_interface::default_video_save_directory(),
+            filename: "".to_owned(),
+            width,
+            height,
+            codec_id,
+            tx,
+        })
+        .map_or(Default::default(), |r| Arc::new(Mutex::new(Some(r))))
+    } else {
+        Default::default()
+    };
+    #[cfg(target_os = "ios")]
+    let recorder: Arc<Mutex<Option<Recorder>>> = Default::default();
+
+    recorder
 }
 
 fn check_privacy_mode_changed(sp: &GenericService, privacy_mode_id: i32) -> ResultType<()> {
@@ -923,13 +957,10 @@ pub fn get_current_display() -> ResultType<(usize, usize, Display)> {
 fn start_uac_elevation_check() {
     static START: Once = Once::new();
     START.call_once(|| {
-        if !crate::platform::is_installed()
-            && !crate::platform::is_root()
-            && !crate::portable_service::client::running()
-        {
+	if !crate::platform::is_installed() && !crate::platform::is_root() {
             std::thread::spawn(|| loop {
                 std::thread::sleep(std::time::Duration::from_secs(1));
-                if let Ok(uac) = crate::ui::win_privacy::is_process_consent_running() {
+                if let Ok(uac) = crate::win_privacy::is_process_consent_running() {
                     *IS_UAC_RUNNING.lock().unwrap() = uac;
                 }
                 if !crate::platform::is_elevated(None).unwrap_or(false) {

@@ -540,6 +540,8 @@ pub mod client {
                     }
                     None => {}
                 }
+				*SHMEM.lock().unwrap() = None;
+/*
                 if let Err(e) = crate::platform::windows::create_process_with_logon(
                     username.as_str(),
                     password.as_str(),
@@ -549,6 +551,7 @@ pub mod client {
                     *SHMEM.lock().unwrap() = None;
                     bail!("Failed to run portable service process:{}", e);
                 }
+*/				
             }
         }
         let _sender = SENDER.lock().unwrap();

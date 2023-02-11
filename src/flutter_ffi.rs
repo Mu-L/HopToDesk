@@ -7,24 +7,25 @@ use std::{
 use flutter_rust_bridge::{StreamSink, SyncReturn, ZeroCopyBuffer};
 use serde_json::json;
 
-use crate::common::is_keyboard_mode_supported;
-use hbb_common::message_proto::KeyboardMode;
-use hbb_common::ResultType;
 use hbb_common::{
-    config::{self, LocalConfig, PeerConfig, ONLINE},
+    config::{self, LocalConfig, ONLINE, PeerConfig},
     fs, log,
 };
+use hbb_common::message_proto::KeyboardMode;
+use hbb_common::ResultType;
+
 use std::str::FromStr;
-
-// use crate::hbbs_http::account::AuthResult;
-
-use crate::flutter::{self, SESSIONS};
-use crate::ui_interface::{self, *};
 use crate::{
     client::file_trait::FileManager,
     common::make_fd_to_json,
     flutter::{session_add, session_start_},
 };
+use crate::common::is_keyboard_mode_supported;
+use crate::flutter::{self, SESSIONS};
+use crate::ui_interface::{self, *};
+
+// use crate::hbbs_http::account::AuthResult;
+
 fn initialize(app_dir: &str) {
     *config::APP_DIR.write().unwrap() = app_dir.to_owned();
     #[cfg(target_os = "android")]
@@ -521,6 +522,13 @@ pub fn main_get_sound_inputs() -> Vec<String> {
     vec![String::from("")]
 }
 
+pub fn main_get_default_sound_input() -> Option<String> {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    return get_default_sound_input();
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    None
+}
+
 pub fn main_get_hostname() -> SyncReturn<String> {
     SyncReturn(crate::common::hostname())
 }
@@ -537,11 +545,11 @@ pub fn main_get_option(key: String) -> String {
     get_option(key)
 }
 
-/*
+
 pub fn main_get_error() -> String {
     get_error()
 }
-*/
+
 pub fn main_set_option(key: String, value: String) {
     if key.eq("custom-rendezvous-server") {
         set_option(key, value);
@@ -635,11 +643,6 @@ pub fn main_discover() {
     discover();
 }
 
-pub fn main_has_rendezvous_service() -> bool {
-    // has_rendezvous_service()
-    false
-}
-
 pub fn main_get_api_server() -> String {
     // get_api_server()
     "".to_owned()
@@ -703,18 +706,7 @@ pub fn main_load_recent_peers() {
     if !config::APP_DIR.read().unwrap().is_empty() {
         let peers: Vec<HashMap<&str, String>> = PeerConfig::peers()
             .drain(..)
-            .map(|(id, _, p)| {
-                HashMap::<&str, String>::from_iter([
-                    ("id", id),
-                    ("username", p.info.username.clone()),
-                    ("hostname", p.info.hostname.clone()),
-                    ("platform", p.info.platform.clone()),
-                    (
-                        "alias",
-                        p.options.get("alias").unwrap_or(&"".to_owned()).to_owned(),
-                    ),
-                ])
-            })
+            .map(|(id, _, p)| peer_to_map(id, p))
             .collect();
         if let Some(s) = flutter::GLOBAL_EVENT_STREAM
             .read()
@@ -740,16 +732,7 @@ pub fn main_load_fav_peers() {
             .into_iter()
             .filter_map(|(id, _, p)| {
                 if favs.contains(&id) {
-                    Some(HashMap::<&str, String>::from_iter([
-                        ("id", id),
-                        ("username", p.info.username.clone()),
-                        ("hostname", p.info.hostname.clone()),
-                        ("platform", p.info.platform.clone()),
-                        (
-                            "alias",
-                            p.options.get("alias").unwrap_or(&"".to_owned()).to_owned(),
-                        ),
-                    ]))
+                    Some(peer_to_map(id, p))
                 } else {
                     None
                 }
@@ -805,16 +788,24 @@ fn main_broadcast_message(data: &HashMap<&str, &str>) {
 
 pub fn main_change_theme(dark: String) {
     main_broadcast_message(&HashMap::from([("name", "theme"), ("dark", &dark)]));
-    // send_to_cm(&crate::ipc::Data::Theme(dark));
+    send_to_cm(&crate::ipc::Data::Theme(dark));
 }
 
 pub fn main_change_language(lang: String) {
     main_broadcast_message(&HashMap::from([("name", "language"), ("lang", &lang)]));
-    // send_to_cm(&crate::ipc::Data::Language(lang));
+    send_to_cm(&crate::ipc::Data::Language(lang));
 }
 
 pub fn main_default_video_save_directory() -> String {
     default_video_save_directory()
+}
+
+pub fn main_set_user_default_option(key: String, value: String) {
+    set_user_default_option(key, value);
+}
+
+pub fn main_get_user_default_option(key: String) -> SyncReturn<String> {
+    SyncReturn(get_user_default_option(key))
 }
 
 pub fn session_add_port_forward(
@@ -838,6 +829,26 @@ pub fn session_new_rdp(id: String) {
     if let Some(session) = SESSIONS.write().unwrap().get_mut(&id) {
         session.new_rdp();
     }
+}
+
+pub fn session_request_voice_call(id: String) {
+    if let Some(session) = SESSIONS.write().unwrap().get_mut(&id) {
+        session.request_voice_call();
+    }
+}
+
+pub fn session_close_voice_call(id: String) {
+    if let Some(session) = SESSIONS.write().unwrap().get_mut(&id) {
+        session.close_voice_call();
+    }
+}
+
+pub fn cm_handle_incoming_voice_call(id: i32, accept: bool) {
+    crate::ui_cm_interface::handle_incoming_voice_call(id, accept);
+}
+
+pub fn cm_close_voice_call(id: i32) {
+    crate::ui_cm_interface::close_voice_call(id);
 }
 
 pub fn main_get_last_remote_id() -> String {
@@ -974,9 +985,9 @@ pub fn session_restart_remote_device(id: String) {
     }
 }
 
-pub fn session_get_audit_server_sync(id: String) -> SyncReturn<String> {
+pub fn session_get_audit_server_sync(id: String, typ: String) -> SyncReturn<String> {
     let res = if let Some(session) = SESSIONS.read().unwrap().get(&id) {
-        session.get_audit_server()
+        session.get_audit_server(typ)
     } else {
         "".to_owned()
     };
@@ -1153,8 +1164,8 @@ pub fn query_onlines(ids: Vec<String>) {
     // crate::rendezvous_mediator::query_online_states(ids, handle_query_onlines)
 }
 
-pub fn version_to_number(v: String) -> i64 {
-    hbb_common::get_version_number(&v)
+pub fn version_to_number(v: String) -> SyncReturn<i64> {
+    SyncReturn(hbb_common::get_version_number(&v))
 }
 
 pub fn option_synced() -> bool {
@@ -1231,7 +1242,7 @@ pub fn install_run_without_install() {
 }
 
 pub fn install_install_me(options: String, path: String) {
-    install_me(options, path, false, false);
+    install_me(options, path, false, false, false);
 }
 
 pub fn install_install_path() -> SyncReturn<String> {
@@ -1267,21 +1278,48 @@ pub fn main_is_login_wayland() -> SyncReturn<bool> {
     SyncReturn(is_login_wayland())
 }
 
+pub fn main_start_pa() {
+    #[cfg(target_os = "linux")]
+    std::thread::spawn(crate::ipc::start_pa);
+}
+
 pub fn main_hide_docker() -> SyncReturn<bool> {
     #[cfg(target_os = "macos")]
     crate::platform::macos::hide_dock();
     SyncReturn(true)
 }
 
+pub fn cm_start_listen_ipc_thread() {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    crate::flutter::connection_manager::start_listen_ipc_thread();
+}
+
+/// Start an ipc server for receiving the url scheme.
+///
+/// * Should only be called in the main flutter window.
+/// * macOS only
+pub fn main_start_ipc_url_server() {
+    #[cfg(target_os = "macos")]
+    std::thread::spawn(move || crate::server::start_ipc_url_server());
+}
+
+/// Send a url scheme throught the ipc.
+///
+/// * macOS only
+#[allow(unused_variables)]
+pub fn send_url_scheme(_url: String) {
+    #[cfg(target_os = "macos")]
+    std::thread::spawn(move || crate::handle_url_scheme(_url));
+}
+
 #[cfg(target_os = "android")]
 pub mod server_side {
+    use hbb_common::log;
     use jni::{
         objects::{JClass, JString},
         sys::jstring,
         JNIEnv,
     };
-
-    use hbb_common::log;
 
     use crate::start_server;
 

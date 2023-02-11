@@ -10,7 +10,7 @@ use crate::two_factor_auth::{ui, TFAManager};
 use crate::ipc::start_pa;
 use crate::ui_cm_interface::{start_ipc, ConnectionManager, InvokeUiCM};
 
-use hbb_common::{allow_err, config::Config, log};
+use hbb_common::{allow_err, log};
 use sciter::{make_args, Element, Value, HELEMENT};
 use std::sync::Mutex;
 use std::{ops::Deref, sync::Arc};
@@ -69,6 +69,17 @@ impl InvokeUiCM for SciterHandler {
     fn show_elevation(&self, show: bool) {
         self.call("showElevation", &make_args!(show));
     }
+
+    fn update_voice_call_state(&self, client: &crate::ui_cm_interface::Client) {
+        self.call(
+            "updateVoiceCallState",
+            &make_args!(
+                client.id,
+                client.in_voice_call,
+                client.incoming_voice_call
+            ),
+        );
+    }
 }
 
 impl SciterHandler {
@@ -103,7 +114,7 @@ impl SciterConnectionManager {
     }
 
     fn get_icon(&mut self) -> String {
-        crate::get_icon()
+        super::get_icon()
     }
 
     fn check_click_time(&mut self, id: i32) {
@@ -174,14 +185,6 @@ impl SciterConnectionManager {
         });
     }
 
-    fn get_config_option(&self, key: String) -> String {
-        Config::get_option(&key)
-    }
-
-    fn set_config_option(&self, key: String, value: String) {
-        Config::set_option(key, value);
-    }
-
     fn can_elevate(&self) -> bool {
         crate::ui_cm_interface::can_elevate()
     }
@@ -217,7 +220,5 @@ impl sciter::EventHandler for SciterConnectionManager {
         fn is_2fa_enabled();
         fn get_2fa_answer(Value);
         fn add_2fa_callback(Value, Value);
-        fn get_config_option(String);
-        fn set_config_option(String, String);
     }
 }

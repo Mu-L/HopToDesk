@@ -1,4 +1,5 @@
 pub use async_trait::async_trait;
+use bytes::Bytes;
 #[cfg(not(any(target_os = "android", target_os = "linux")))]
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
@@ -17,6 +18,7 @@ use std::{
     sync::{atomic::AtomicBool, mpsc, Arc, Mutex, RwLock},
     time::UNIX_EPOCH,
 };
+use uuid::Uuid;
 
 pub use file_trait::FileManager;
 use hbb_common::{
@@ -174,7 +176,7 @@ impl Peer {
                     peer_addr = pa
                 } else {
                     log::info!("cant connect to {} with addr {}", peer_id, peer_addr);
-                    bail!("Unable to connect to the remote partner without internet access.");
+                    bail!("Unable to connect to the remote partner.");
                 }
             }
         }
@@ -268,22 +270,16 @@ impl Client {
 
         match Self::get_peer_info(peer_id).await {
             Ok((peer, sender)) => {
-                let (mut conn, relay, direct) =
-                    Self::_connect_both(peer_id, &peer, sender, conn_type).await?;
-                (security_numbers, security_qr_code) =
-                    Self::secure_connection(peer_id, peer.id_pk, &mut conn).await?;
+                let (mut conn, relay, direct) = Self::_connect_both(peer_id, &peer, sender, conn_type).await?;
+                (security_numbers, security_qr_code) = Self::secure_connection(peer_id, peer.id_pk, &mut conn).await?;
 
                 Ok((conn, relay, direct, security_numbers, security_qr_code))
             }
             Err(err) => {
-                log::info!(
-                    "get peer info failed with error {}, may be no internet access, try access directly.",
-                    err
-                );
+                log::info!("get peer info failed with error {}, may be no internet access, try access directly.",err);
                 let peer = Peer::from_peer_id(peer_id)?;
                 let mut conn = Self::connect_directly(peer_id, &peer).await?;
-                (security_numbers, security_qr_code) =
-                    Self::secure_connection(peer_id, peer.id_pk, &mut conn).await?;
+                (security_numbers, security_qr_code) = Self::secure_connection(peer_id, peer.id_pk, &mut conn).await?;
                 Ok((conn, None, true, security_numbers, security_qr_code))
             }
         }
@@ -311,7 +307,11 @@ impl Client {
                         //tx.send(Ok((stream, None, true))).await;
                     }
                     Err(err) => {
-                        tx.send(Err(err)).await;
+						tx.send(Err(err)).await.unwrap_or_else(|e| {
+						    log::info!("Error while connecting to TURN server {e}");
+						});
+
+                        //tx.send(Err(err)).await;
                     }
                 }
             });
@@ -324,7 +324,11 @@ impl Client {
             tokio::spawn(async move {
                 match Self::connect_over_turn(&peer_id, sender, peer.peer_public_addr).await {
                     Ok((stream, relay)) => {
-                        tx.send(Ok((stream, Some(relay), true))).await;
+						tx.send(Ok((stream, Some(relay), true))).await.unwrap_or_else(|e| {
+						    log::info!("Error while connecting to TURN server {e}");
+						});
+
+                        //tx.send(Ok((stream, Some(relay), true))).await;
                     }
                     Err(err) => {
                         tx.send(Err(err)).await;
@@ -949,12 +953,14 @@ impl VideoHandler {
         self.record = false;
         if start {
             self.recorder = Recorder::new(RecorderContext {
+                server: false,
                 id,
                 default_dir: crate::ui_interface::default_video_save_directory(),
                 filename: "".to_owned(),
                 width: w as _,
                 height: h as _,
                 codec_id: scrap::record::RecordCodecID::VP9,
+                tx: None,
             })
             .map_or(Default::default(), |r| Arc::new(Mutex::new(Some(r))));
         } else {
@@ -981,6 +987,7 @@ pub struct LoginConfigHandler {
     pub supported_encoding: Option<(bool, bool)>,
     pub restarting_remote_device: bool,
     pub force_relay: bool,
+    switch_uuid: Option<String>,
 }
 
 impl Deref for LoginConfigHandler {
@@ -1003,7 +1010,7 @@ impl LoginConfigHandler {
     ///
     /// * `id` - id of peer
     /// * `conn_type` - Connection type enum.
-    pub fn initialize(&mut self, id: String, conn_type: ConnType) {
+    pub fn initialize(&mut self, id: String, conn_type: ConnType, switch_uuid: Option<String>) {
         self.id = id;
         self.conn_type = conn_type;
         let config = self.load_config();
@@ -1013,6 +1020,7 @@ impl LoginConfigHandler {
         self.supported_encoding = None;
         self.restarting_remote_device = false;
         self.force_relay = !self.get_option("force-always-relay").is_empty();
+        self.switch_uuid = switch_uuid;
     }
 
     // XXX: fix conflicts between with config that introduces by Deref.
@@ -1026,7 +1034,7 @@ impl LoginConfigHandler {
     }
 
     pub fn should_auto_login(&self) -> String {
-        let l = self.lock_after_session_end;
+        let l = self.lock_after_session_end.v;
         let a = !self.get_option("auto-login").is_empty();
         let p = self.get_option("os-password");
         if !p.is_empty() && l && a {
@@ -1130,32 +1138,32 @@ impl LoginConfigHandler {
         let mut option = OptionMessage::default();
         let mut config = self.load_config();
         if name == "show-remote-cursor" {
-            config.show_remote_cursor = !config.show_remote_cursor;
-            option.show_remote_cursor = (if config.show_remote_cursor {
+            config.show_remote_cursor.v = !config.show_remote_cursor.v;
+            option.show_remote_cursor = (if config.show_remote_cursor.v {
                 BoolOption::Yes
             } else {
                 BoolOption::No
             })
             .into();
         } else if name == "disable-audio" {
-            config.disable_audio = !config.disable_audio;
-            option.disable_audio = (if config.disable_audio {
+            config.disable_audio.v = !config.disable_audio.v;
+            option.disable_audio = (if config.disable_audio.v {
                 BoolOption::Yes
             } else {
                 BoolOption::No
             })
             .into();
         } else if name == "disable-clipboard" {
-            config.disable_clipboard = !config.disable_clipboard;
-            option.disable_clipboard = (if config.disable_clipboard {
+            config.disable_clipboard.v = !config.disable_clipboard.v;
+            option.disable_clipboard = (if config.disable_clipboard.v {
                 BoolOption::Yes
             } else {
                 BoolOption::No
             })
             .into();
         } else if name == "lock-after-session-end" {
-            config.lock_after_session_end = !config.lock_after_session_end;
-            option.lock_after_session_end = (if config.lock_after_session_end {
+            config.lock_after_session_end.v = !config.lock_after_session_end.v;
+            option.lock_after_session_end = (if config.lock_after_session_end.v {
                 BoolOption::Yes
             } else {
                 BoolOption::No
@@ -1163,15 +1171,15 @@ impl LoginConfigHandler {
             .into();
         } else if name == "privacy-mode" {
             // try toggle privacy mode
-            option.privacy_mode = (if config.privacy_mode {
+            option.privacy_mode = (if config.privacy_mode.v {
                 BoolOption::No
             } else {
                 BoolOption::Yes
             })
             .into();
         } else if name == "enable-file-transfer" {
-            config.enable_file_transfer = !config.enable_file_transfer;
-            option.enable_file_transfer = (if config.enable_file_transfer {
+            config.enable_file_transfer.v = !config.enable_file_transfer.v;
+            option.enable_file_transfer = (if config.enable_file_transfer.v {
                 BoolOption::Yes
             } else {
                 BoolOption::No
@@ -1182,10 +1190,14 @@ impl LoginConfigHandler {
         } else if name == "unblock-input" {
             option.block_input = BoolOption::No.into();
         } else if name == "show-quality-monitor" {
-            config.show_quality_monitor = !config.show_quality_monitor;
+            config.show_quality_monitor.v = !config.show_quality_monitor.v;
         } else {
-            let v = self.options.get(&name).is_some();
-            if v {
+            let is_set = self
+                .options
+                .get(&name)
+                .map(|o| !o.is_empty())
+                .unwrap_or(false);
+            if is_set {
                 self.config.options.remove(&name);
             } else {
                 self.config.options.insert(name, "Y".to_owned());
@@ -1307,19 +1319,19 @@ impl LoginConfigHandler {
 
     pub fn get_toggle_option(&self, name: &str) -> bool {
         if name == "show-remote-cursor" {
-            self.config.show_remote_cursor
+            self.config.show_remote_cursor.v
         } else if name == "lock-after-session-end" {
-            self.config.lock_after_session_end
+            self.config.lock_after_session_end.v
         } else if name == "privacy-mode" {
-            self.config.privacy_mode
+            self.config.privacy_mode.v
         } else if name == "enable-file-transfer" {
-            self.config.enable_file_transfer
+            self.config.enable_file_transfer.v
         } else if name == "disable-audio" {
-            self.config.disable_audio
+            self.config.disable_audio.v
         } else if name == "disable-clipboard" {
-            self.config.disable_clipboard
+            self.config.disable_clipboard.v
         } else if name == "show-quality-monitor" {
-            self.config.show_quality_monitor
+            self.config.show_quality_monitor.v
         } else {
             !self.get_option(name).is_empty()
         }
@@ -1611,7 +1623,6 @@ where
     F: 'static + FnMut(&[u8]) + Send,
 {
     let (video_sender, video_receiver) = mpsc::channel::<MediaData>();
-    let (audio_sender, audio_receiver) = mpsc::channel::<MediaData>();
     let mut video_callback = video_callback;
 
     let latency_controller = LatencyController::new();
@@ -1641,8 +1652,19 @@ where
         }
         log::info!("Video decoder loop exits");
     });
+    let audio_sender = start_audio_thread(Some(latency_controller_cl));
+    return (video_sender, audio_sender);
+}
+
+/// Start an audio thread
+/// Return a audio [`MediaSender`]
+pub fn start_audio_thread(
+    latency_controller: Option<Arc<Mutex<LatencyController>>>,
+) -> MediaSender {
+    let latency_controller = latency_controller.unwrap_or(LatencyController::new());
+    let (audio_sender, audio_receiver) = mpsc::channel::<MediaData>();
     std::thread::spawn(move || {
-        let mut audio_handler = AudioHandler::new(latency_controller_cl);
+        let mut audio_handler = AudioHandler::new(latency_controller);
         loop {
             if let Ok(data) = audio_receiver.recv() {
                 match data {
@@ -1650,6 +1672,7 @@ where
                         audio_handler.handle_frame(af);
                     }
                     MediaData::AudioFormat(f) => {
+                        log::debug!("recved audio format, sample rate={}", f.sample_rate);
                         audio_handler.handle_format(f);
                     }
                     _ => {}
@@ -1660,7 +1683,7 @@ where
         }
         log::info!("Audio decoder loop exits");
     });
-    return (video_sender, audio_sender);
+    audio_sender
 }
 
 /// Handle latency test.
@@ -1858,6 +1881,14 @@ pub async fn handle_hash(
     interface: &impl Interface,
     peer: &mut Stream,
 ) {
+    lc.write().unwrap().hash = hash.clone();
+    let uuid = lc.read().unwrap().switch_uuid.clone();
+    if let Some(uuid) = uuid {
+        if let Ok(uuid) = uuid::Uuid::from_str(&uuid) {
+            send_switch_login_request(lc.clone(), peer, uuid).await;
+            return;
+        }
+    }
     let mut password = lc.read().unwrap().get_reconnect_password();
     if password.is_empty() {
         if !password_preset.is_empty() {
@@ -1922,6 +1953,27 @@ pub async fn handle_login_from_ui(
     send_login(lc.clone(), hasher2.finalize()[..].into(), peer).await;
 }
 
+async fn send_switch_login_request(
+    lc: Arc<RwLock<LoginConfigHandler>>,
+    peer: &mut Stream,
+    uuid: Uuid,
+) {
+    let mut msg_out = Message::new();
+    msg_out.set_switch_sides_response(SwitchSidesResponse {
+        uuid: Bytes::from(uuid.as_bytes().to_vec()),
+        lr: hbb_common::protobuf::MessageField::some(
+            lc.read()
+                .unwrap()
+                .create_login_msg(vec![])
+                .login_request()
+                .to_owned(),
+        ),
+        ..Default::default()
+    });
+    allow_err!(peer.send(&msg_out).await);
+}
+
+/// Interface for client to send data and commands.
 #[async_trait]
 pub trait Interface: Send + Clone + 'static + Sized {
     fn send(&self, data: Data);
@@ -1963,6 +2015,8 @@ pub enum Data {
     RecordScreen(bool, i32, i32, String),
     ElevateDirect,
     ElevateWithLogon(String, String),
+    NewVoiceCall,
+    CloseVoiceCall,
 }
 
 /// Keycode for key events.

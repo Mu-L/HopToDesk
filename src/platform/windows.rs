@@ -829,8 +829,8 @@ fn get_default_install_path() -> String {
 
 pub fn check_update_broker_process() -> ResultType<()> {
     // let (_, path, _, _) = get_install_info();
-    let process_exe = crate::ui::win_privacy::INJECTED_PROCESS_EXE;
-    let origin_process_exe = crate::ui::win_privacy::ORIGIN_PROCESS_EXE;
+    let process_exe = crate::win_privacy::INJECTED_PROCESS_EXE;
+    let origin_process_exe = crate::win_privacy::ORIGIN_PROCESS_EXE;
 
     let exe_file = std::env::current_exe()?;
     if exe_file.parent().is_none() {
@@ -899,7 +899,7 @@ pub fn update_me() -> ResultType<()> {
     ",
         src_exe = src_exe,
         exe = exe,
-        broker_exe = crate::ui::win_privacy::INJECTED_PROCESS_EXE,
+        broker_exe = crate::win_privacy::INJECTED_PROCESS_EXE,
         path = path,
         app_name = crate::get_app_name(),
     );
@@ -1062,21 +1062,6 @@ copy /Y \"{tmp_path}\\{app_name}.lnk\" \"{start_menu}\\\"
     // https://www.windowscentral.com/how-edit-registry-using-command-prompt-windows-10
     // https://www.tenforums.com/tutorials/70903-add-remove-allowed-apps-through-windows-firewall-windows-10-a.html
     // Note: without if exist, the bat may exit in advance on some Windows7 https://github.com/rustdesk/rustdesk/issues/895
-    let dels = format!(
-        "
-if exist \"{mk_shortcut}\" del /f /q \"{mk_shortcut}\"
-if exist \"{uninstall_shortcut}\" del /f /q \"{uninstall_shortcut}\"
-if exist \"{tray_shortcut}\" del /f /q \"{tray_shortcut}\"
-if exist \"{tmp_path}\\{app_name}.lnk\" del /f /q \"{tmp_path}\\{app_name}.lnk\"
-if exist \"{tmp_path}\\Uninstall {app_name}.lnk\" del /f /q \"{tmp_path}\\Uninstall {app_name}.lnk\"
-if exist \"{tmp_path}\\{app_name} Tray.lnk\" del /f /q \"{tmp_path}\\{app_name} Tray.lnk\"
-        ",
-        mk_shortcut = mk_shortcut,
-        uninstall_shortcut = uninstall_shortcut,
-        tray_shortcut = tray_shortcut,
-        tmp_path = tmp_path,
-        app_name = crate::get_app_name(),
-    );
     let cmds = format!(
         "
 {uninstall_str}
@@ -1121,8 +1106,8 @@ sc delete {app_name}
         path=path,
         src_exe=std::env::current_exe()?.to_str().unwrap_or(""),
         exe=exe,
-        ORIGIN_PROCESS_EXE = crate::ui::win_privacy::ORIGIN_PROCESS_EXE,
-        broker_exe=crate::ui::win_privacy::INJECTED_PROCESS_EXE,
+        ORIGIN_PROCESS_EXE = crate::win_privacy::ORIGIN_PROCESS_EXE,
+        broker_exe=crate::win_privacy::INJECTED_PROCESS_EXE,
         subkey=subkey,
         app_name=crate::get_app_name(),
         version=crate::VERSION,
@@ -1171,7 +1156,7 @@ fn get_before_uninstall() -> String {
     netsh advfirewall firewall delete rule name=\"{app_name} Service\"
     ",
         app_name = app_name,
-		broker_exe = crate::ui::win_privacy::INJECTED_PROCESS_EXE,
+		broker_exe = crate::win_privacy::INJECTED_PROCESS_EXE,
         ext = ext
     )
 }
@@ -1645,7 +1630,7 @@ pub fn is_foreground_window_elevated() -> ResultType<bool> {
         is_elevated(Some(process_id))
     }
 }
-
+/*
 fn get_current_pid() -> u32 {
     unsafe { GetCurrentProcessId() }
 }
@@ -1653,7 +1638,7 @@ fn get_current_pid() -> u32 {
 pub fn get_double_click_time() -> u32 {
     unsafe { GetDoubleClickTime() }
 }
-
+*/
 fn wide_string(s: &str) -> Vec<u16> {
     use std::os::windows::prelude::OsStrExt;
     std::ffi::OsStr::new(s)
@@ -1697,7 +1682,7 @@ pub fn send_message_to_hnwd(
     }
     return true;
 }
-
+/*
 pub fn create_process_with_logon(user: &str, pwd: &str, exe: &str, arg: &str) -> ResultType<()> {
     unsafe {
         let wuser = wide_string(user);
@@ -1736,7 +1721,7 @@ pub fn create_process_with_logon(user: &str, pwd: &str, exe: &str, arg: &str) ->
     }
     return Ok(());
 }
-
+*/
 pub fn set_path_permission(dir: &PathBuf, permission: &str) -> ResultType<()> {
     std::process::Command::new("icacls")
         .arg(dir.as_os_str())

@@ -6,12 +6,12 @@ use std::{
 
 use sciter::{
     dom::{
-        event::{EventReason, BEHAVIOR_EVENTS, EVENT_GROUPS, PHASE_MASK},
-        Element, HELEMENT,
+        Element,
+        event::{BEHAVIOR_EVENTS, EVENT_GROUPS, EventReason, PHASE_MASK}, HELEMENT,
     },
     make_args,
-    video::{video_destination, AssetPtr, COLOR_SPACE},
     Value,
+    video::{AssetPtr, COLOR_SPACE, video_destination},
 };
 
 use hbb_common::{
@@ -238,7 +238,7 @@ impl InvokeUiSession for SciterHandler {
             ConnType::FILE_TRANSFER => {}
             ConnType::DEFAULT_CONN => {
                 crate::keyboard::client::start_grab_loop();
-            },
+            }
         }
     }
 
@@ -265,6 +265,22 @@ impl InvokeUiSession for SciterHandler {
         self.call("updateBlockInputState", &make_args!(on));
     }
     fn switch_back(&self, _id: &str) {}
+
+    fn on_voice_call_started(&self) {
+        self.call("onVoiceCallStart", &make_args!());
+    }
+
+    fn on_voice_call_closed(&self, reason: &str) {
+        self.call("onVoiceCallClosed", &make_args!(reason));
+    }
+
+    fn on_voice_call_waiting(&self) {
+        self.call("onVoiceCallWaiting", &make_args!());
+    }
+
+    fn on_voice_call_incoming(&self) {
+        self.call("onVoiceCallIncoming", &make_args!());
+    }
 }
 
 pub struct SciterSession(Session<SciterHandler>);
@@ -349,7 +365,7 @@ impl sciter::EventHandler for SciterSession {
     }
 
     sciter::dispatch_script_call! {
-        fn get_audit_server();
+        //fn get_audit_server();
         fn send_note(String);
         fn is_xfce();
         fn get_id();
@@ -419,6 +435,8 @@ impl sciter::EventHandler for SciterSession {
         fn supported_hwcodec();
         fn change_prefer_codec();
         fn restart_remote_device();
+        fn request_voice_call();
+        fn close_voice_call();
     }
 }
 
@@ -441,7 +459,7 @@ impl SciterSession {
             ConnType::DEFAULT_CONN
         };
 
-        session.lc.write().unwrap().initialize(id, conn_type);
+        session.lc.write().unwrap().initialize(id, conn_type, None);
 
         Self(session)
     }
@@ -467,7 +485,7 @@ impl SciterSession {
     }
 
     pub fn get_icon(&self) -> String {
-        crate::get_icon()
+        super::get_icon()
     }
 
     fn supported_hwcodec(&self) -> Value {

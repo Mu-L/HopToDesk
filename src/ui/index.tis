@@ -374,7 +374,7 @@ class MyIdMenu: Reactor.Component {
 				<div .link .custom-event url='https://www.hoptodesk.com/privacy'>Privacy Statement</div> \
 			<br><br>
 			<div .link .custom-event url='https://www.gnu.org/licenses/agpl-3.0.en.html'><span style='text-decoration: none'>This software is licensed under&nbsp;</span>AGPL 3.0</div> \
-			<div .link .custom-event url='https://www.hoptodesk.com/source.zip'><span style='text-decoration: none'>Source code is available&nbsp;</span>here</div><br>
+			<div .link .custom-event url='https://gitlab.com/hoptodesk/hoptodesk/'><span style='text-decoration: none'>Source code is available&nbsp;</span>here</div><br>
 			</div><br>
 			<div style='font-size: 9px; color: #888; text-decoration: none;' .link .custom-event url='http://sciter.com/'>This Application (or Component) uses Sciter Engine, copyright Terra Informatica Software, Inc.</div>
 			<div style='font-size: 9px; color: #888; text-decoration: none;'>Copyright &copy; HopToDesk. Originally forked from RustDesk.</div>			\

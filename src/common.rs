@@ -18,19 +18,19 @@ pub use arboard::Clipboard as ClipboardContext;
 use hbb_common::compress::decompress;
 use hbb_common::{
     allow_err,
-    anyhow::bail,
     compress::compress as compress_func,
     config::{self, Config, COMPRESS_LEVEL, RENDEZVOUS_TIMEOUT},
     log,
     message_proto::*,
     protobuf::Enum,
-    protobuf::Message as _,
+//    protobuf::Message as _,
     rendezvous_proto::*,
     socket_client, tokio, ResultType,
 };
 //#[cfg(any(target_os = "android", target_os = "ios", feature = "cli"))]
 use hbb_common::{config::RENDEZVOUS_PORT, futures::future::join_all};
 
+use crate::ui_interface::{get_option, set_option};
 pub type NotifyMessageBox = fn(String, String, String, String) -> dyn Future<Output = ()>;
 
 pub const CLIPBOARD_NAME: &'static str = "clipboard";
@@ -103,6 +103,55 @@ pub fn check_clipboard(
             }
         }
     }
+    None
+}
+
+
+/// Set sound input device.
+pub fn set_sound_input(device: String) {
+    let prior_device = get_option("audio-input".to_owned());
+    if prior_device != device {
+        log::info!("switch to audio input device {}", device);
+        std::thread::spawn(move || {
+            set_option("audio-input".to_owned(), device);
+        });
+    } else {
+        log::info!("audio input is already set to {}", device);
+    }
+}
+
+/// Get system's default sound input device name.
+#[inline]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub fn get_default_sound_input() -> Option<String> {
+    #[cfg(not(target_os = "linux"))]
+    {
+        use cpal::traits::{DeviceTrait, HostTrait};
+        let host = cpal::default_host();
+        let dev = host.default_input_device();
+        return if let Some(dev) = dev {
+            match dev.name() {
+                Ok(name) => Some(name),
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let input = crate::platform::linux::get_default_pa_source();
+        return if let Some(input) = input {
+            Some(input.1)
+        } else {
+            None
+        };
+    }
+}
+
+#[inline]
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub fn get_default_sound_input() -> Option<String> {
     None
 }
 
@@ -533,11 +582,6 @@ async fn check_software_update_() -> hbb_common::ResultType<()> {
 }
 */
 
-#[cfg(not(any(target_os = "android", target_os = "ios", feature = "cli")))]
-pub fn get_icon() -> String {
-    hbb_common::config::ICON.to_owned()
-}
-
 pub fn get_app_name() -> String {
     hbb_common::config::APP_NAME.read().unwrap().clone()
 }
@@ -661,23 +705,6 @@ pub async fn post_request_sync(url: String, body: String, header: &str) -> Resul
     post_request(url, body, header).await
 }
 
-pub async fn get_request(url: String, header: &str) -> ResultType<String> {
-	let mut req = reqwest::Client::new().get(url);
-	if !header.is_empty() {
-		let tmp: Vec<&str> = header.split(": ").collect();
-		if tmp.len() == 2 {
-			req = req.header(tmp[0], tmp[1]);
-		}
-	}
-	let to = std::time::Duration::from_secs(12);
-	Ok(req.timeout(to).send().await?.text().await?)
-}
-
-#[tokio::main(flavor = "current_thread")]
-pub async fn get_request_sync(url: String, header: &str) -> ResultType<String> {
-    get_request(url, header).await
-}
-
 #[inline]
 pub fn make_privacy_mode_msg(state: back_notification::PrivacyModeState) -> Message {
     let mut misc = Misc::new();
@@ -735,7 +762,13 @@ pub fn make_fd_to_json(id: i32, path: String, entries: &Vec<FileEntry>) -> Strin
     serde_json::to_string(&fd_json).unwrap_or("".into())
 }
 
-#[cfg(test)]
-mod test_common {
-    use super::*;
+/// The function to handle the url scheme sent by the system.
+///
+/// 1. Try to send the url scheme from ipc.
+/// 2. If failed to send the url scheme, we open a new main window to handle this url scheme.
+pub fn handle_url_scheme(url: String) {
+    if let Err(err) = crate::ipc::send_url_scheme(url.clone()) {
+        log::debug!("Send the url to the existing flutter process failed, {}. Let's open a new program to handle this.", err);
+        let _ = crate::run_me(vec![url]);
+    }
 }

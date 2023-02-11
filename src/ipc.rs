@@ -18,10 +18,10 @@ use hbb_common::{
     config::{self, Config, Config2},
     futures::StreamExt as _,
     futures_util::sink::SinkExt,
-    log, password_security as password, timeout, tokio,
+    log, password_security as password, ResultType, timeout,
+    tokio,
     tokio::io::{AsyncRead, AsyncWrite},
     tokio_util::codec::Framed,
-    ResultType,
 };
 
 use crate::rendezvous_mediator::RendezvousMediator;
@@ -212,11 +212,18 @@ pub enum Data {
     #[cfg(not(any(target_os = "android", target_os = "ios", feature = "cli")))]
     Mouse(DataMouse),
     Control(DataControl),
+    Theme(String),
+    Language(String),
     Empty,
     Disconnected,
     DataPortableService(DataPortableService),
     SwitchSidesRequest(String),
     SwitchSidesBack,
+    UrlLink(String),
+    VoiceCallIncoming,
+    StartVoiceCall,
+    VoiceCallResponse(bool),
+    CloseVoiceCall(String),
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -574,7 +581,7 @@ async fn check_pid(postfix: &str) {
             }
         }
     }
-    hbb_common::allow_err!(std::fs::remove_file(&Config::ipc_path(postfix)));
+    std::fs::remove_file(&Config::ipc_path(postfix)).ok();
 }
 
 #[inline]
@@ -779,16 +786,6 @@ pub fn set_option(key: &str, value: &str) {
     set_options(options).ok();
 }
 
-pub async fn set_option_async(key: &str, value: &str) {
-    let mut options = get_options_async().await;
-    if value.is_empty() {
-        options.remove(key);
-    } else {
-        options.insert(key.to_owned(), value.to_owned());
-    }
-    set_options_async(options).await.ok();
-}
-
 #[tokio::main(flavor = "current_thread")]
 pub async fn set_options(value: HashMap<String, String>) -> ResultType<()> {
     set_options_async(value).await
@@ -802,6 +799,16 @@ pub async fn set_options_async(value: HashMap<String, String>) -> ResultType<()>
     }
     Config::set_options(value);
     Ok(())
+}
+
+pub async fn set_option_async(key: &str, value: &str) {
+    let mut options = get_options_async().await;
+    if value.is_empty() {
+        options.remove(key);
+    } else {
+        options.insert(key.to_owned(), value.to_owned());
+    }
+    set_options_async(options).await.ok();
 }
 
 #[inline]
@@ -872,3 +879,9 @@ pub async fn test_rendezvous_server() -> ResultType<()> {
     Ok(())
 }
 */
+
+#[tokio::main(flavor = "current_thread")]
+pub async fn send_url_scheme(url: String) -> ResultType<()> {
+    connect(1_000, "_url").await?.send(&Data::UrlLink(url)).await?;
+    Ok(())
+}

@@ -318,10 +318,9 @@ fn wait_find_privacy_hwnd(msecs: u128) -> ResultType<HWND> {
 }
 
 pub fn is_process_consent_running() -> ResultType<bool> {
-	//const CREATE_NO_WINDOW: u32 = 0x08000000;
     let output = std::process::Command::new("cmd")
         .args(&["/C", "tasklist | findstr consent.exe"])
-		.creation_flags(CREATE_NO_WINDOW)
+        .creation_flags(CREATE_NO_WINDOW)
         .output()?;
     Ok(output.status.success() && !output.stdout.is_empty())
 }
