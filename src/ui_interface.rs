@@ -422,6 +422,11 @@ pub fn closing(x: i32, y: i32, w: i32, h: i32) {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     crate::server::input_service::fix_key_down_timeout_at_exit();
     LocalConfig::set_size(x, y, w, h);
+	#[cfg(target_os = "windows")]
+	{
+		let (_, _, _, exe) = crate::platform::get_install_info();
+		std::process::Command::new(&exe).arg("--tray").spawn().ok();
+	}
 }
 
 #[inline]
