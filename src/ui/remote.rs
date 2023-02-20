@@ -1,17 +1,17 @@
 use std::{
     collections::HashMap,
     ops::{Deref, DerefMut},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, RwLock},
 };
 
 use sciter::{
     dom::{
-        Element,
-        event::{BEHAVIOR_EVENTS, EVENT_GROUPS, EventReason, PHASE_MASK}, HELEMENT,
+        event::{EventReason, BEHAVIOR_EVENTS, EVENT_GROUPS, PHASE_MASK},
+        Element, HELEMENT,
     },
     make_args,
+    video::{video_destination, AssetPtr, COLOR_SPACE},
     Value,
-    video::{AssetPtr, COLOR_SPACE, video_destination},
 };
 
 use hbb_common::{
@@ -52,6 +52,20 @@ impl SciterHandler {
         if let Some(ref e) = self.element.lock().unwrap().as_ref() {
             allow_err!(e.call_method(func, &super::value_crash_workaround(args)[..]));
         }
+    }
+
+    fn make_displays_array(displays: &Vec<DisplayInfo>) -> Value {
+        let mut displays_value = Value::array(0);
+        for d in displays.iter() {
+            let mut display = Value::map();
+            display.set_item("x", d.x);
+            display.set_item("y", d.y);
+            display.set_item("width", d.width);
+            display.set_item("height", d.height);
+            display.set_item("cursor_embedded", d.cursor_embedded);
+            displays_value.push(display);
+        }
+        displays_value
     }
 }
 
@@ -201,7 +215,7 @@ impl InvokeUiSession for SciterHandler {
         self.call("adaptSize", &make_args!());
     }
 
-    fn on_rgba(&self, data: &[u8]) {
+    fn on_rgba(&self, data: &mut Vec<u8>) {
         VIDEO
             .lock()
             .unwrap()
@@ -215,20 +229,16 @@ impl InvokeUiSession for SciterHandler {
         pi_sciter.set_item("hostname", pi.hostname.clone());
         pi_sciter.set_item("platform", pi.platform.clone());
         pi_sciter.set_item("sas_enabled", pi.sas_enabled);
-
-        let mut displays = Value::array(0);
-        for ref d in pi.displays.iter() {
-            let mut display = Value::map();
-            display.set_item("x", d.x);
-            display.set_item("y", d.y);
-            display.set_item("width", d.width);
-            display.set_item("height", d.height);
-            display.set_item("cursor_embedded", d.cursor_embedded);
-            displays.push(display);
-        }
-        pi_sciter.set_item("displays", displays);
+		pi_sciter.set_item("displays", Self::make_displays_array(&pi.displays));
         pi_sciter.set_item("current_display", pi.current_display);
         self.call("updatePi", &make_args!(pi_sciter));
+    }
+
+    fn set_displays(&self, displays: &Vec<DisplayInfo>) {
+        self.call(
+            "updateDisplays",
+            &make_args!(Self::make_displays_array(displays)),
+        );
     }
 
     fn on_connected(&self, conn_type: ConnType) {
@@ -281,6 +291,13 @@ impl InvokeUiSession for SciterHandler {
     fn on_voice_call_incoming(&self) {
         self.call("onVoiceCallIncoming", &make_args!());
     }
+
+    /// RGBA is directly rendered by [on_rgba]. No need to store the rgba for the sciter ui.
+    fn get_rgba(&self) -> *const u8 {
+        std::ptr::null()
+    }
+
+    fn next_rgba(&mut self) {}
 }
 
 pub struct SciterSession(Session<SciterHandler>);

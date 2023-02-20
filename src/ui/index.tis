@@ -290,6 +290,7 @@ class MyIdMenu: Reactor.Component {
                 <li #enable-file-transfer title={translate('Enable File Transfer')}><span>{svg_checkmark}</span>{translate('Enable File Transfer')}</li>
                 <li #enable-remote-restart title={translate('Enable Remote Restart')}><span>{svg_checkmark}</span>{translate('Enable Remote Restart')}</li>
                 <li #enable-tunnel title={translate('Enable TCP Tunneling')}><span>{svg_checkmark}</span>{translate('Enable TCP Tunneling')}</li>
+                <li #enable-lan-discovery title={translate('Enable LAN Discovery')}><span>{svg_checkmark}</span>{translate('Enable LAN Discovery')}</li>
                 <AudioInputs />
                 <div .separator />
                 <li #custom-api-url title={translate('Choose Network')}>{translate('Choose Network')}</li>
@@ -748,6 +749,7 @@ class UpgradeMe: Reactor.Component {
         handler.update_me("");
     }
 }
+
 class UpdateMe: Reactor.Component {
     function render() {
         var update_or_download = "download"; // !is_win ? "download" : "update";
@@ -815,9 +817,10 @@ class TrustMe: Reactor.Component {
 class CanScreenRecording: Reactor.Component {
     function render() {
         return <div .trust-me #screen-recording-box style="margin-top: -5px;">
-            <div style="margin-top: 10px;">{translate('Permissions')}</div>
-            <div style="text-align: center">{translate('config_screen')}</div>
+            <div>{translate('Permissions')}</div>
+            <div>{translate('config_screen')}</div>
             <div #screen-recording .link>{translate('Configure')}</div>
+            <div #help-me .link>{translate('Help')}</div>
         </div>;
     }
 

@@ -27,14 +27,13 @@ pub(super) fn start_listening() -> ResultType<()> {
     loop {
         let mut buf = [0; 2048];
         if let Ok((len, addr)) = socket.recv_from(&mut buf) {
-            if let Ok(msg_in) = Message::parse_from_bytes(&buf[0..len]) {
+			if let Ok(msg_in) = Message::parse_from_bytes(&buf[0..len]) {
                 match msg_in.union {
                     Some(rendezvous_message::Union::PeerDiscovery(p)) => {
-                        //if p.cmd == "ping" {
                         if p.cmd == "ping" && Config::get_option("enable-lan-discovery").is_empty()
                         {
-                            if let Some(self_addr) = get_ipaddr_by_peer(&addr) {
-                                let mut msg_out = Message::new();
+							if let Some(self_addr) = get_ipaddr_by_peer(&addr) {
+								let mut msg_out = Message::new();
                                 let peer = PeerDiscovery {
                                     cmd: "pong".to_owned(),
                                     mac: get_mac(&self_addr),
@@ -44,7 +43,7 @@ pub(super) fn start_listening() -> ResultType<()> {
                                     platform: whoami::platform().to_string(),
                                     ..Default::default()
                                 };
-                                msg_out.set_peer_discovery(peer);
+								msg_out.set_peer_discovery(peer);
                                 socket.send_to(&msg_out.write_to_bytes()?, addr).ok();
                             }
                         }

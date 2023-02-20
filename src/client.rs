@@ -1,23 +1,23 @@
-pub use async_trait::async_trait;
-use bytes::Bytes;
-#[cfg(not(any(target_os = "android", target_os = "linux")))]
-use cpal::{
-    traits::{DeviceTrait, HostTrait, StreamTrait},
-    Device, Host, StreamConfig,
-};
-use magnum_opus::{Channels::*, Decoder as AudioDecoder};
-
-use sha2::{Digest, Sha256};
-#[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
-use std::sync::atomic::Ordering;
 use std::{
     collections::HashMap,
     net::SocketAddr,
     ops::{Deref, Not},
     str::FromStr,
-    sync::{atomic::AtomicBool, mpsc, Arc, Mutex, RwLock},
+    sync::{Arc, atomic::AtomicBool, mpsc, Mutex, RwLock},
     time::UNIX_EPOCH,
 };
+
+pub use async_trait::async_trait;
+use bytes::Bytes;
+#[cfg(not(any(target_os = "android", target_os = "linux")))]
+use cpal::{
+    Device,
+    Host, StreamConfig, traits::{DeviceTrait, HostTrait, StreamTrait},
+};
+use magnum_opus::{Channels::*, Decoder as AudioDecoder};
+use sha2::{Digest, Sha256};
+#[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
+use std::sync::atomic::Ordering;
 use uuid::Uuid;
 
 pub use file_trait::FileManager;
@@ -26,8 +26,9 @@ use hbb_common::{
     anyhow::{anyhow, Context},
     bail,
     config::{Config, PeerConfig, PeerInfoSerde, CONNECT_TIMEOUT, RENDEZVOUS_TIMEOUT},
-    get_version_number, log,
-    message_proto::{option_message::BoolOption, *},
+    get_version_number, 
+    log,
+    message_proto::{*, option_message::BoolOption},
     protobuf::Message as _,
     rand,
     rendezvous_proto::*,
@@ -39,13 +40,17 @@ use hbb_common::{
     tokio_util::compat::{Compat, TokioAsyncReadCompatExt},
     ResultType, Stream,
 };
-
-pub use helper::LatencyController;
 pub use helper::*;
+pub use helper::LatencyController;
 use scrap::{
     codec::{Decoder, DecoderCfg},
     record::{Recorder, RecorderContext},
     VpxDecoderConfig, VpxVideoCodecId,
+};
+
+use crate::{
+    common::{self, is_keyboard_mode_supported},
+    server::video_service::{SCRAP_X11_REF_URL, SCRAP_X11_REQUIRED},
 };
 
 pub use super::lang::*;
@@ -53,10 +58,7 @@ pub use super::lang::*;
 pub mod file_trait;
 pub mod helper;
 pub mod io_loop;
-use crate::{
-    common::{self, is_keyboard_mode_supported},
-    server::video_service::{SCRAP_X11_REF_URL, SCRAP_X11_REQUIRED},
-};
+
 pub static SERVER_KEYBOARD_ENABLED: AtomicBool = AtomicBool::new(true);
 pub static SERVER_FILE_TRANSFER_ENABLED: AtomicBool = AtomicBool::new(true);
 pub static SERVER_CLIPBOARD_ENABLED: AtomicBool = AtomicBool::new(true);
@@ -89,6 +91,7 @@ pub fn get_key_state(key: enigo::Key) -> bool {
     }
     ENIGO.lock().unwrap().get_key_state(key)
 }
+
 cfg_if::cfg_if! {
     if #[cfg(target_os = "android")] {
 
@@ -570,11 +573,7 @@ impl Client {
                                         &their_pk_b,
                                     );
 
-                                log::info!(
-                                    "Connection is secured: {}, and Security Code is: {}",
-                                    conn.is_secured(),
-                                    security_numbers
-                                );
+                                log::info!("Connection is secured: {}, and Security Code is: {}", conn.is_secured(), security_numbers);
                             } else {
                                 log::error!("Handshake failed: sign failure");
                                 conn.send(&Message::new()).await?;
@@ -688,6 +687,9 @@ impl Client {
     }
 }
 */
+
+
+ 
 
 #[derive(Default)]
 pub struct AudioHandler {
@@ -809,6 +811,7 @@ impl AudioHandler {
         }
         #[cfg(target_os = "linux")]
         if self.simple.is_none() {
+            log::debug!("PulseAudio simple binding does not exists");
             return;
         }
         #[cfg(target_os = "android")]
@@ -857,6 +860,7 @@ impl AudioHandler {
         });
     }
 
+    /// Build audio output stream for current device.
     #[cfg(not(any(target_os = "android", target_os = "linux")))]
     fn build_output_stream<T: cpal::Sample>(
         &mut self,
@@ -892,6 +896,7 @@ impl AudioHandler {
     }
 }
 
+/// Video handler for the [`Client`].
 pub struct VideoHandler {
     decoder: Decoder,
     latency_controller: Arc<Mutex<LatencyController>>,
@@ -901,6 +906,7 @@ pub struct VideoHandler {
 }
 
 impl VideoHandler {
+    /// Create a new video handler.
     pub fn new(latency_controller: Arc<Mutex<LatencyController>>) -> Self {
         VideoHandler {
             decoder: Decoder::new(DecoderCfg {
@@ -1620,7 +1626,7 @@ pub type MediaSender = mpsc::Sender<MediaData>;
 /// * `video_callback` - The callback for video frame. Being called when a video frame is ready.
 pub fn start_video_audio_threads<F>(video_callback: F) -> (MediaSender, MediaSender)
 where
-    F: 'static + FnMut(&[u8]) + Send,
+    F: 'static + FnMut(&mut Vec<u8>) + Send,
 {
     let (video_sender, video_receiver) = mpsc::channel::<MediaData>();
     let mut video_callback = video_callback;
@@ -1635,7 +1641,7 @@ where
                 match data {
                     MediaData::VideoFrame(vf) => {
                         if let Ok(true) = video_handler.handle_frame(vf) {
-                            video_callback(&video_handler.rgb);
+                            video_callback(&mut video_handler.rgb);
                         }
                     }
                     MediaData::Reset => {
@@ -1865,6 +1871,7 @@ pub fn handle_login_error(
         false
     }
 }
+
 /// Handle hash message sent by peer.
 /// Hash will be used for login.
 ///
@@ -1976,6 +1983,7 @@ async fn send_switch_login_request(
 /// Interface for client to send data and commands.
 #[async_trait]
 pub trait Interface: Send + Clone + 'static + Sized {
+    /// Send message data to remote peer.
     fn send(&self, data: Data);
     fn msgbox(&self, msgtype: &str, title: &str, text: &str, link: &str);
     fn handle_login_error(&mut self, err: &str) -> bool;
@@ -1992,6 +2000,7 @@ pub trait Interface: Send + Clone + 'static + Sized {
 
 }
 
+/// Data used by the client interface.
 #[derive(Clone)]
 pub enum Data {
     Close,
@@ -2170,8 +2179,9 @@ pub fn check_if_retry(msgtype: &str, title: &str, text: &str) -> bool {
                 && !text.to_lowercase().contains("resolve")
                 && !text.to_lowercase().contains("mismatch")
                 && !text.to_lowercase().contains("manually")
-                && !text.to_lowercase().contains("closed the session")
-                && !text.to_lowercase().contains("not allowed")))
+                && !text.to_lowercase().contains("not allowed")
+                && !text.to_lowercase().contains("as expected")                
+                && !text.to_lowercase().contains("closed the session")))
 }
 
 #[inline]
