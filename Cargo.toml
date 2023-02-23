@@ -1,6 +1,6 @@
 [package]
 name = "hoptodesk"
-version = "1.33.2"
+version = "1.33.3"
 authors = ["hoptodesk <info@hoptodesk.com>"]
 edition = "2021"
 build= "build.rs"
@@ -41,7 +41,6 @@ cfg-if = "1.0"
 lazy_static = "1.4"
 sha2 = "0.10"
 repng = "0.2"
-libc = "0.2"
 parity-tokio-ipc = { git = "https://github.com/open-trade/parity-tokio-ipc" }
 flexi_logger = { version = "0.22", features = ["async", "use_chrono_for_offset"] }
 runas = "0.2"
@@ -54,7 +53,6 @@ uuid = { version = "1.0", features = ["v4"] }
 clap = "3.0"
 rpassword = "7.0"
 base64 = "0.13"
-sysinfo = "0.24"
 num_cpus = "1.13"
 bytes = { version = "1.2", features = ["serde"] }
 default-net = "0.12.0"
@@ -144,7 +142,6 @@ flutter_rust_bridge = "1.61.1"
 
 [workspace]
 members = ["libs/scrap", "libs/hbb_common", "libs/enigo", "libs/clipboard", "libs/virtual_display", "libs/turn"]
-#members = ["libs/scrap", "libs/hbb_common", "libs/enigo", "libs/clipboard", "libs/virtual_display", "libs/turn", "libs/simple_rc"]
 
 [package.metadata.winres]
 LegalCopyright = "Changes copyright © 2023 Begonia Holdings.  Copyright © 2022 Purslane, Inc."
@@ -171,13 +168,13 @@ identifier = "com.hoptodesk.hoptodesk"
 icon = ["res/32x32.png", "res/128x128.png", "res/128x128@2x.png"]
 deb_depends = ["libgtk-3-0", "libxcb-randr0", "libxdo3", "libxfixes3", "libxcb-shape0", "libxcb-xfixes0", "libasound2", "libsystemd0", "curl", "libvdpau1", "libva2"]
 osx_frameworks = ["libsciter"]
-osx_minimum_system_version = "10.14"
+osx_minimum_system_version = "10.12"
 resources = ["res/mac-tray.png"]
 
 #https://github.com/johnthagen/min-sized-rust
 [profile.release]
 lto = true
-codegen-units = 256
+codegen-units = 1
 panic = 'abort'
 strip = true
 #opt-level = 'z' # only have smaller size after strip

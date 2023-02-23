@@ -193,7 +193,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Change Path", "Spremeni pot"),
         ("Create Folder", "Ustvari mapo"),
         ("Please enter the folder name", "Vnesite ime mape"),
-        ("Fix it", "Popravi"),
+        ("Disable Wayland", "Popravi"),
         ("Warning", "Opozorilo"),
         ("Login screen using Wayland is not supported", "Prijava z Waylandom ni podprta"),
         ("Reboot required", "Potreben je ponovni zagon"),

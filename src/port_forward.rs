@@ -1,4 +1,4 @@
-use std::sync::{Arc};
+use std::sync::{Arc, RwLock};
 
 use crate::client::*;
 use hbb_common::{
@@ -141,6 +141,11 @@ async fn connect_and_login(
                         }
                         _ => {}
                     }
+                }
+                Ok(Some(Err(err))) => {
+                    log::error!("Connection closed: {}", err);
+                    //interface.set_force_relay(direct, received);
+                    bail!("Connection closed: {}", err);
                 }
                 _ => {
                     bail!("Connection lost");

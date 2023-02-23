@@ -272,6 +272,7 @@ class Header: Reactor.Component {
         var code = this.security_numbers;
         msgbox("nocancel", translate("Your Security Code"), generate_security_number_block(code), "", function() { });
     }
+    
     event click $(#action) (_, me) {
         var menu = $(menu#action-options);
         me.popup(menu);
@@ -475,6 +476,14 @@ if (!(is_file_transfer || is_port_forward)) {
 
 handler.updatePi = function(v) {
     pi = v;
+    header.update();
+    if (is_port_forward) {
+        view.windowState = View.WINDOW_MINIMIZED;
+    }
+}
+
+handler.updateDisplays = function(v) {
+    pi.displays = v;
     header.update();
     if (is_port_forward) {
         view.windowState = View.WINDOW_MINIMIZED;

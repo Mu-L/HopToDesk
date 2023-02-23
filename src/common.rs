@@ -36,6 +36,8 @@ pub type NotifyMessageBox = fn(String, String, String, String) -> dyn Future<Out
 pub const CLIPBOARD_NAME: &'static str = "clipboard";
 pub const CLIPBOARD_INTERVAL: u64 = 333;
 
+pub const SYNC_PEER_INFO_DISPLAYS: i32 = 1;
+
 // the executable name of the portable version
 pub const PORTABLE_APPNAME_RUNTIME_ENV_KEY: &str = "HOPTODESK_APPNAME";
 
@@ -436,7 +438,7 @@ async fn test_rendezvous_server_() {
                 let tm = std::time::Instant::now();
                 if socket_client::connect_tcp(
                     crate::check_port(&host, RENDEZVOUS_PORT),
-                    Config::get_any_listen_addr(),
+                    Config::get_any_listen_addr(true),
                     RENDEZVOUS_TIMEOUT,
                 )
                 .await
@@ -557,7 +559,7 @@ pub fn check_software_update() {
 async fn check_software_update_() -> hbb_common::ResultType<()> {
     sleep(3.).await;
 
-    let rendezvous_server = format!("rs-sg.rustdesk.com:{}", config::RENDEZVOUS_PORT);
+    let rendezvous_server = format!("none.com:{}", config::RENDEZVOUS_PORT);
     let (mut socket, rendezvous_server) =
         socket_client::new_udp_for(&rendezvous_server, RENDEZVOUS_TIMEOUT).await?;
 
@@ -642,7 +644,7 @@ pub fn get_api_server(api: String, custom: String) -> String {
             return format!("http://{}", s);
         }
     }
-    "https://admin.rustdesk.com".to_owned()
+    "https://admin.none.com".to_owned()
 }
 
 pub fn get_audit_server(api: String, custom: String, typ: String) -> String {

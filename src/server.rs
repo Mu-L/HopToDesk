@@ -484,28 +484,26 @@ pub async fn start_ipc_url_server() {
             while let Some(Ok(conn)) = incoming.next().await {
                 let mut conn = crate::ipc::Connection::new(conn);
                 match conn.next_timeout(1000).await {
-                    Ok(Some(data)) => {
-                        match data {
-                            Data::UrlLink(url) => {
-                                #[cfg(feature = "flutter")]
-                                {
-                                    if let Some(stream) = crate::flutter::GLOBAL_EVENT_STREAM.read().unwrap().get(
-                                        crate::flutter::APP_TYPE_MAIN
-                                    ) {
-                                        let mut m = HashMap::new();
-                                        m.insert("name", "on_url_scheme_received");
-                                        m.insert("url", url.as_str());
-                                        stream.add(serde_json::to_string(&m).unwrap());
-                                    } else {
-                                        log::warn!("No main window app found!");
-                                    }
-                                }
-                            }
-                            _ => {
-                                log::warn!("An unexpected data was sent to the ipc url server.")
+                    Ok(Some(data)) => match data {
+                        #[cfg(feature = "flutter")]
+                        Data::UrlLink(url) => {
+                            if let Some(stream) = crate::flutter::GLOBAL_EVENT_STREAM
+                                .read()
+                                .unwrap()
+                                .get(crate::flutter::APP_TYPE_MAIN)
+                            {
+                                let mut m = HashMap::new();
+                                m.insert("name", "on_url_scheme_received");
+                                m.insert("url", url.as_str());
+                                stream.add(serde_json::to_string(&m).unwrap());
+                            } else {
+                                log::warn!("No main window app found!");
                             }
                         }
-                    }
+                        _ => {
+                            log::warn!("An unexpected data was sent to the ipc url server.")
+                        }
+                    },
                     Err(err) => {
                         log::error!("{}", err);
                     }

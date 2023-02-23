@@ -2,7 +2,6 @@ use std::{
     net::{SocketAddr, ToSocketAddrs},
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
     },
     time::Instant,
 };
@@ -200,7 +199,7 @@ impl RendezvousMediator {
                             last_data_received = chrono::Utc::now();
                             if let Ok(stream) = socket_client::connect_tcp(
                                 relay_connection.addr,
-                                Config::get_any_listen_addr(),
+                                Config::get_any_listen_addr(true),
                                 CONNECT_TIMEOUT,
                             ).await
                             {
@@ -361,7 +360,7 @@ async fn direct_server(server: ServerPtr) {
             if let Ok(Ok((stream, addr))) = hbb_common::timeout(1000, l.accept()).await {
                 stream.set_nodelay(true).ok();
                 log::info!("direct access from {}", addr);
-                let local_addr = stream.local_addr().unwrap_or(Config::get_any_listen_addr());
+                let local_addr = stream.local_addr().unwrap_or(Config::get_any_listen_addr(true));
                 let server = server.clone();
                 tokio::spawn(async move {
                     allow_err!(

@@ -68,8 +68,12 @@ impl Interface for Session {
         self.lc.write().unwrap().handle_peer_info(&pi);
     }
 
-    async fn handle_hash(&mut self, hash: Hash, peer: &mut Stream) {
-        handle_hash(self.lc.clone(), hash, self, peer).await;
+    async fn handle_hash(&mut self, pass: &str, hash: Hash, peer: &mut Stream) {
+        log::info!(
+            "password={}",
+            hbb_common::password_security::temporary_password()
+        );
+        handle_hash(self.lc.clone(), &pass, hash, self, peer).await;
     }
 
     async fn handle_login_from_ui(&mut self, password: String, remember: bool, peer: &mut Stream) {

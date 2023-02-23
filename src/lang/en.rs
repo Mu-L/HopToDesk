@@ -5,6 +5,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("connecting_status", "Connecting to the HopToDesk network..."),
 		("connecting_status_short", "Connecting..."),
         ("not_ready_status", "Not ready. Please check your connection"),
+        ("not_ready_status_short", "Not ready."),		
         ("id_change_tip", "Only a-z, A-Z, 0-9 and _ (underscore) characters allowed. The first letter must be a-z, A-Z. Length between 6 and 16."),
 		("not_ready_status_short", "Not ready"),
         ("install_tip", "For best performance, complete a full install."),

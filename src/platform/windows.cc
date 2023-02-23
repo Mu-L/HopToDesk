@@ -12,7 +12,7 @@
 
 void flog(char const *fmt, ...)
 {
-    FILE *h = fopen("C:\\Windows\\temp\\test_rustdesk.log", "at");
+    FILE *h = fopen("C:\\Windows\\temp\\test_hoptodesk.log", "at");
     if (!h)
         return;
     va_list arg;

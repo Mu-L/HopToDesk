@@ -22,8 +22,8 @@ use winapi::{
         handleapi::CloseHandle,
         minwinbase::STILL_ACTIVE,
         processthreadsapi::{
-            GetCurrentProcess, GetCurrentProcessId, GetExitCodeProcess, OpenProcess,
-            OpenProcessToken, PROCESS_INFORMATION, STARTUPINFOW,
+            GetCurrentProcess, GetExitCodeProcess, OpenProcess,
+            OpenProcessToken,
         },
         securitybaseapi::GetTokenInformation,
         shellapi::ShellExecuteW,

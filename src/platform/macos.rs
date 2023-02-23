@@ -558,7 +558,7 @@ pub fn hide_dock() {
 }
 
 fn check_main_window() -> bool {
-    use sysinfo::{ProcessExt, System, SystemExt};
+    use hbb_common::sysinfo::{ProcessExt, System, SystemExt};
     let mut sys = System::new();
     sys.refresh_processes();
     let app = format!("/Applications/{}.app", crate::get_app_name());
@@ -583,7 +583,7 @@ pub fn handle_application_should_open_untitled_file() {
     let x = std::env::args().nth(1).unwrap_or_default();
     if x == "--server" || x == "--cm" || x == "--tray" {
         if crate::platform::macos::check_main_window() {
-            allow_err!(crate::ipc::send_url_scheme("rustdesk:".into()));
+            allow_err!(crate::ipc::send_url_scheme("hoptodesk:".into()));
         }
     }
 }
