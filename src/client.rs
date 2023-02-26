@@ -3,7 +3,7 @@ use std::{
     net::SocketAddr,
     ops::{Deref, Not},
     str::FromStr,
-    sync::{Arc, atomic::AtomicBool, mpsc, Mutex, RwLock},
+    sync::{Arc, mpsc, Mutex, RwLock},
     time::UNIX_EPOCH,
 };
 
@@ -37,10 +37,13 @@ use hbb_common::{
     sodiumoxide::crypto::{box_, secretbox, sign},
     tcp::FramedStream,
     timeout,
-    tokio::{self, net::TcpStream, time::Duration},
+    tokio::{self, net::TcpStream},
     tokio_util::compat::{Compat, TokioAsyncReadCompatExt},
     ResultType, Stream,
 };
+
+use tokio::time::{Duration};
+
 pub use helper::LatencyController;
 pub use helper::*;
 use scrap::{
@@ -255,8 +258,8 @@ impl Client {
     )> {
         match Self::_start(peer, conn_type).await {
             Err(err) => {
-                // Refresh the content of api.hoptodest.com
-                hbb_common::api::erase_api().await;
+                // Refresh API
+				hbb_common::api::erase_api().await;
 
                 let err_str = err.to_string();
                 if err_str.starts_with("Failed") {

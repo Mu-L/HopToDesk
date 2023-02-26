@@ -29,6 +29,21 @@ lazy_static::lazy_static! {
     pub static ref GLOBAL_EVENT_STREAM: RwLock<HashMap<String, StreamSink<String>>> = Default::default(); // rust to dart event channel
 }
 
+#[cfg(all(target_os = "windows", feature = "flutter_texture_render"))]
+lazy_static::lazy_static! {
+    pub static ref TEXTURE_RGBA_RENDERER_PLUGIN: Result<Library, LibError> = Library::open("texture_rgba_renderer_plugin.dll");
+}
+
+#[cfg(all(target_os = "linux", feature = "flutter_texture_render"))]
+lazy_static::lazy_static! {
+    pub static ref TEXTURE_RGBA_RENDERER_PLUGIN: Result<Library, LibError> = Library::open("libtexture_rgba_renderer_plugin.so");
+}
+
+#[cfg(all(target_os = "macos", feature = "flutter_texture_render"))]
+lazy_static::lazy_static! {
+    pub static ref TEXTURE_RGBA_RENDERER_PLUGIN: Result<Library, LibError> = Library::open_self();
+}
+
 /// FFI for hoptodesk core's main entry.
 /// Return true if the app should continue running with UI(possibly Flutter), false if the app should exit.
 #[cfg(not(windows))]
@@ -108,6 +123,16 @@ pub unsafe extern "C" fn free_c_args(ptr: *mut *mut c_char, len: c_int) {
     // Afterwards the vector will be dropped and thus freed.
 }
 
+#[cfg(feature = "flutter_texture_render")]
+#[derive(Default, Clone)]
+pub struct FlutterHandler {
+    pub event_stream: Arc<RwLock<Option<StreamSink<EventToUI>>>>,
+    notify_rendered: Arc<RwLock<bool>>,
+    renderer: Arc<RwLock<VideoRenderer>>,
+    peer_info: Arc<RwLock<PeerInfo>>,
+}
+
+#[cfg(not(feature = "flutter_texture_render"))]
 #[derive(Default, Clone)]
 pub struct FlutterHandler {
     pub event_stream: Arc<RwLock<Option<StreamSink<EventToUI>>>>,
@@ -115,6 +140,84 @@ pub struct FlutterHandler {
     // We must check the `rgba_valid` before reading [rgba].
     pub rgba: Arc<RwLock<Vec<u8>>>,
     pub rgba_valid: Arc<AtomicBool>,
+    peer_info: Arc<RwLock<PeerInfo>>,
+}
+
+#[cfg(feature = "flutter_texture_render")]
+pub type FlutterRgbaRendererPluginOnRgba =
+    unsafe extern "C" fn(texture_rgba: *mut c_void, buffer: *const u8, width: c_int, height: c_int);
+
+// Video Texture Renderer in Flutter
+#[cfg(feature = "flutter_texture_render")]
+#[derive(Clone)]
+struct VideoRenderer {
+    // TextureRgba pointer in flutter native.
+    ptr: usize,
+    width: i32,
+    height: i32,
+    data_len: usize,
+    on_rgba_func: Option<Symbol<'static, FlutterRgbaRendererPluginOnRgba>>,
+}
+
+#[cfg(feature = "flutter_texture_render")]
+impl Default for VideoRenderer {
+    fn default() -> Self {
+        let on_rgba_func = match &*TEXTURE_RGBA_RENDERER_PLUGIN {
+            Ok(lib) => {
+                let find_sym_res = unsafe {
+                    lib.symbol::<FlutterRgbaRendererPluginOnRgba>("FlutterRgbaRendererPluginOnRgba")
+                };
+                match find_sym_res {
+                    Ok(sym) => Some(sym),
+                    Err(e) => {
+                        log::error!("Failed to find symbol FlutterRgbaRendererPluginOnRgba, {e}");
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                log::error!("Failed to load texture rgba renderer plugin, {e}");
+                None
+            }
+        };
+        Self {
+            ptr: 0,
+            width: 0,
+            height: 0,
+            data_len: 0,
+            on_rgba_func,
+        }
+    }
+}
+
+#[cfg(feature = "flutter_texture_render")]
+impl VideoRenderer {
+    #[inline]
+    pub fn set_size(&mut self, width: i32, height: i32) {
+        self.width = width;
+        self.height = height;
+        self.data_len = if width > 0 && height > 0 {
+            (width * height * 4) as usize
+        } else {
+            0
+        };
+    }
+
+    pub fn on_rgba(&self, rgba: &Vec<u8>) {
+        if self.ptr == usize::default() || rgba.len() != self.data_len {
+            return;
+        }
+        if let Some(func) = &self.on_rgba_func {
+            unsafe {
+                func(
+                    self.ptr as _,
+                    rgba.as_ptr() as _,
+                    self.width as _,
+                    self.height as _,
+                )
+            };
+        }
+    }
 }
 
 impl FlutterHandler {
@@ -155,6 +258,19 @@ impl FlutterHandler {
             msg_vec.push(h);
         }
         serde_json::ser::to_string(&msg_vec).unwrap_or("".to_owned())
+    }
+
+    #[inline]
+    #[cfg(feature = "flutter_texture_render")]
+    pub fn register_texture(&mut self, ptr: usize) {
+        self.renderer.write().unwrap().ptr = ptr;
+    }
+
+    #[inline]
+    #[cfg(feature = "flutter_texture_render")]
+    pub fn set_size(&mut self, width: i32, height: i32) {
+        *self.notify_rendered.write().unwrap() = false;
+        self.renderer.write().unwrap().set_size(width, height);
     }
 }
 
@@ -331,6 +447,19 @@ impl InvokeUiSession for FlutterHandler {
         }
     }
 
+    #[inline]
+    #[cfg(feature = "flutter_texture_render")]
+    fn on_rgba(&self, data: &mut Vec<u8>) {
+        self.renderer.read().unwrap().on_rgba(data);
+        if *self.notify_rendered.read().unwrap() {
+            return;
+        }
+        if let Some(stream) = &*self.event_stream.read().unwrap() {
+            stream.add(EventToUI::Rgba);
+            *self.notify_rendered.write().unwrap() = true;
+        }
+    }
+    
     fn set_peer_info(&self, pi: &PeerInfo) {
 		let displays = Self::make_displays_msg(&pi.displays);
         let mut features: HashMap<&str, i32> = Default::default();
@@ -340,6 +469,8 @@ impl InvokeUiSession for FlutterHandler {
 		//checkthis
 		features.insert("privacy_mode", 0);
         let features = serde_json::ser::to_string(&features).unwrap_or("".to_owned());
+        let resolutions = serialize_resolutions(&pi.resolutions.resolutions);
+        *self.peer_info.write().unwrap() = pi.clone();
         self.push_event(
             "peer_info",
             vec![
@@ -351,11 +482,13 @@ impl InvokeUiSession for FlutterHandler {
                 ("version", &pi.version),
                 ("features", &features),
                 ("current_display", &pi.current_display.to_string()),
+                ("resolutions", &resolutions),
             ],
         );
     }
 
     fn set_displays(&self, displays: &Vec<DisplayInfo>) {
+        self.peer_info.write().unwrap().displays = displays.clone();
         self.push_event(
             "sync_peer_info",
             vec![("displays", &Self::make_displays_msg(displays))],
@@ -387,6 +520,7 @@ impl InvokeUiSession for FlutterHandler {
     }
 
     fn switch_display(&self, display: &SwitchDisplay) {
+        let resolutions = serialize_resolutions(&display.resolutions.resolutions);
         self.push_event(
             "switch_display",
             vec![
@@ -406,6 +540,7 @@ impl InvokeUiSession for FlutterHandler {
                     }
                     .to_string(),
                 ),
+                ("resolutions", &resolutions),
             ],
         );
     }
@@ -426,6 +561,13 @@ impl InvokeUiSession for FlutterHandler {
         self.push_event("switch_back", [("peer_id", peer_id)].into());
     }
 
+    fn portable_service_running(&self, running: bool) {
+        self.push_event(
+            "portable_service_running",
+            [("running", running.to_string().as_str())].into(),
+        );
+    }
+    
     fn on_voice_call_started(&self) {
         self.push_event("on_voice_call_started", [].into());
     }
@@ -444,6 +586,7 @@ impl InvokeUiSession for FlutterHandler {
 
     #[inline]
     fn get_rgba(&self) -> *const u8 {
+        #[cfg(not(feature = "flutter_texture_render"))]
         if self.rgba_valid.load(Ordering::Relaxed) {
             return self.rgba.read().unwrap().as_ptr();
         }
@@ -451,7 +594,8 @@ impl InvokeUiSession for FlutterHandler {
     }
 
     #[inline]
-    fn next_rgba(&mut self) {
+    fn next_rgba(&self) {
+        #[cfg(not(feature = "flutter_texture_render"))]
         self.rgba_valid.store(false, Ordering::Relaxed);
     }
 }
@@ -516,6 +660,13 @@ pub fn session_add(
 /// * `events2ui` - The events channel to ui.
 pub fn session_start_(id: &str, event_stream: StreamSink<EventToUI>) -> ResultType<()> {
     if let Some(session) = SESSIONS.write().unwrap().get_mut(id) {
+        #[cfg(feature = "flutter_texture_render")]
+        log::info!(
+            "Session {} start, render by flutter texture rgba plugin",
+            id
+        );
+        #[cfg(not(feature = "flutter_texture_render"))]
+        log::info!("Session {} start, render by flutter paint widget", id);
         *session.event_stream.write().unwrap() = Some(event_stream);
         let session = session.clone();
         std::thread::spawn(move || {
@@ -709,11 +860,33 @@ pub fn set_cur_session_id(id: String) {
     }
 }
 
+#[inline]
+fn serialize_resolutions(resolutions: &Vec<Resolution>) -> String {
+    #[derive(Debug, serde::Serialize)]
+    struct ResolutionSerde {
+        width: i32,
+        height: i32,
+    }
+
+    let mut v = vec![];
+    resolutions
+        .iter()
+        .map(|r| {
+            v.push(ResolutionSerde {
+                width: r.width,
+                height: r.height,
+            })
+        })
+        .count();
+    serde_json::ser::to_string(&v).unwrap_or("".to_string())
+}
+
 #[no_mangle]
+#[cfg(not(feature = "flutter_texture_render"))]
 pub fn session_get_rgba_size(id: *const char) -> usize {
     let id = unsafe { std::ffi::CStr::from_ptr(id as _) };
     if let Ok(id) = id.to_str() {
-        if let Some(session) = SESSIONS.write().unwrap().get_mut(id) {
+        if let Some(session) = SESSIONS.read().unwrap().get(id) {
            return session.rgba.read().unwrap().len();
         }
     }
@@ -721,10 +894,16 @@ pub fn session_get_rgba_size(id: *const char) -> usize {
 }
 
 #[no_mangle]
+#[cfg(feature = "flutter_texture_render")]
+pub fn session_get_rgba_size(_id: *const char) -> usize {
+    0
+}
+
+#[no_mangle]
 pub fn session_get_rgba(id: *const char) -> *const u8 {
     let id = unsafe { std::ffi::CStr::from_ptr(id as _) };
     if let Ok(id) = id.to_str() {
-        if let Some(session) = SESSIONS.write().unwrap().get_mut(id) {
+        if let Some(session) = SESSIONS.read().unwrap().get(id) {
             return session.get_rgba();
         }
     }
@@ -735,8 +914,23 @@ pub fn session_get_rgba(id: *const char) -> *const u8 {
 pub fn session_next_rgba(id: *const char) {
     let id = unsafe { std::ffi::CStr::from_ptr(id as _) };
     if let Ok(id) = id.to_str() {
-        if let Some(session) = SESSIONS.write().unwrap().get_mut(id) {
+        if let Some(session) = SESSIONS.read().unwrap().get(id) {
             return session.next_rgba();
         }
     }
 }
+
+#[no_mangle]
+#[cfg(feature = "flutter_texture_render")]
+pub fn session_register_texture(id: *const char, ptr: usize) {
+    let id = unsafe { std::ffi::CStr::from_ptr(id as _) };
+    if let Ok(id) = id.to_str() {
+        if let Some(session) = SESSIONS.write().unwrap().get_mut(id) {
+            return session.register_texture(ptr);
+        }
+    }
+}
+
+#[no_mangle]
+#[cfg(not(feature = "flutter_texture_render"))]
+pub fn session_register_texture(_id: *const char, _ptr: usize) {}

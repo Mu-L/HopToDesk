@@ -455,6 +455,22 @@ div#tags-label svg#menu:hover {
     background-color: #ddd;
 }
 
+#passwordbox {
+	z-index: 999999;
+}
+
+#idbox {
+	z-index: 999999;
+}
+
+#passwordbox:hover {
+	cursor: pointer;
+}
+
+#idbox:hover {
+	cursor: pointer;
+}
+
 div.remote-session svg#menu {
     position: absolute;
     right: 0;

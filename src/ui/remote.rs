@@ -274,8 +274,11 @@ impl InvokeUiSession for SciterHandler {
     fn update_block_input_state(&self, on: bool) {
         self.call("updateBlockInputState", &make_args!(on));
     }
+
     fn switch_back(&self, _id: &str) {}
 
+    fn portable_service_running(&self, _running: bool) {}
+    
     fn on_voice_call_started(&self) {
         self.call("onVoiceCallStart", &make_args!());
     }
@@ -297,7 +300,7 @@ impl InvokeUiSession for SciterHandler {
         std::ptr::null()
     }
 
-    fn next_rgba(&mut self) {}
+    fn next_rgba(&self) {}
 }
 
 pub struct SciterSession(Session<SciterHandler>);

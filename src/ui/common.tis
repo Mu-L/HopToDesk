@@ -405,7 +405,7 @@ class PasswordComponent: Reactor.Component {
         });
     }
 }
-
+/*
 // type: #post, #get, #delete, #put
 function httpRequest(url, type, params, _onSuccess, _onError, headers="") {
     if (type != #post) {
@@ -426,7 +426,7 @@ function httpRequest(url, type, params, _onSuccess, _onError, headers="") {
     }
     check_status();
 }
-
+*/
 // type: #post, #get, #delete, #put
 function httpGetRequest(url, type, params, _onSuccess, _onError, headers="") {
     if (type != #get) {

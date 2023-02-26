@@ -25,12 +25,11 @@ use hbb_common::{allow_err, get_time, message_proto::*, sleep};
 use hbb_common::{fs, log, Stream};
 
 use crate::client::{
-    new_voice_call_request, Client, CodecFormat, MediaData, MediaSender,
-    QualityStatus, MILLI1, SEC30, SERVER_CLIPBOARD_ENABLED, SERVER_FILE_TRANSFER_ENABLED,
-    SERVER_KEYBOARD_ENABLED,
+    new_voice_call_request, Client, CodecFormat, MediaData, MediaSender, QualityStatus, MILLI1,
+    SEC30,
 };
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-use crate::common::{check_clipboard, update_clipboard, ClipboardContext, CLIPBOARD_INTERVAL};
+use crate::common::update_clipboard;
 use crate::common::{get_default_sound_input, set_sound_input};
 use crate::ui_session_interface::{InvokeUiSession, Session};
 use crate::{audio_service, common, ConnInner, CLIENT_SERVER};
@@ -57,6 +56,7 @@ pub struct Remote<T: InvokeUiSession> {
     data_count: Arc<AtomicUsize>,
     frame_count: Arc<AtomicUsize>,
     video_format: CodecFormat,
+    elevation_requested: bool,
 }
 
 impl<T: InvokeUiSession> Remote<T> {
@@ -88,11 +88,11 @@ impl<T: InvokeUiSession> Remote<T> {
             video_format: CodecFormat::Unknown,
             stop_voice_call_sender: None,
             voice_call_request_timestamp: None,
+            elevation_requested: false,
         }
     }
 
     pub async fn io_loop(&mut self, key: &str, token: &str) {
-        let stop_clipboard = self.start_clipboard();
         let mut last_recv_time = Instant::now();
         let mut received = false;
         let conn_type = if self.handler.is_file_transfer() {
@@ -100,16 +100,16 @@ impl<T: InvokeUiSession> Remote<T> {
         } else {
             ConnType::default()
         };
+
         match Client::start(
             &self.handler.id,
+//            key,
+//            token,
             conn_type,
         )
         .await
         {
             Ok((mut peer, relay, direct, security_numbers, security_qr_code)) => {
-                SERVER_KEYBOARD_ENABLED.store(true, Ordering::SeqCst);
-                SERVER_CLIPBOARD_ENABLED.store(true, Ordering::SeqCst);
-                SERVER_FILE_TRANSFER_ENABLED.store(true, Ordering::SeqCst);
                 self.handler.set_connection_type(peer.is_secured(), direct, security_numbers, security_qr_code); // flutter -> connection_ready
 
                 // just build for now
@@ -222,12 +222,8 @@ impl<T: InvokeUiSession> Remote<T> {
                     .msgbox("error", "Connection Error", &err.to_string(), "");
             }
         }
-        if let Some(stop) = stop_clipboard {
-            stop.send(()).ok();
-        }
-        SERVER_KEYBOARD_ENABLED.store(false, Ordering::SeqCst);
-        SERVER_CLIPBOARD_ENABLED.store(false, Ordering::SeqCst);
-        SERVER_FILE_TRANSFER_ENABLED.store(false, Ordering::SeqCst);
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        Client::try_stop_clipboard(&self.handler.id);
     }
 
     fn handle_job_status(&mut self, id: i32, file_num: i32, err: Option<String>) {
@@ -329,46 +325,6 @@ impl<T: InvokeUiSession> Remote<T> {
                 }
             }
         });
-        Some(tx)
-    }
-
-    fn start_clipboard(&mut self) -> Option<std::sync::mpsc::Sender<()>> {
-        if self.handler.is_file_transfer() || self.handler.is_port_forward() {
-            return None;
-        }
-        let (tx, rx) = std::sync::mpsc::channel();
-        let old_clipboard = self.old_clipboard.clone();
-        let tx_protobuf = self.sender.clone();
-        let lc = self.handler.lc.clone();
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        match ClipboardContext::new() {
-            Ok(mut ctx) => {
-                // ignore clipboard update before service start
-                check_clipboard(&mut ctx, Some(&old_clipboard));
-                std::thread::spawn(move || loop {
-                    std::thread::sleep(Duration::from_millis(CLIPBOARD_INTERVAL));
-                    match rx.try_recv() {
-                        Ok(_) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                            log::debug!("Exit clipboard service of client");
-                            break;
-                        }
-                        _ => {}
-                    }
-                    if !SERVER_CLIPBOARD_ENABLED.load(Ordering::SeqCst)
-                        || !SERVER_KEYBOARD_ENABLED.load(Ordering::SeqCst)
-                        || lc.read().unwrap().disable_clipboard.v
-                    {
-                        continue;
-                    }
-                    if let Some(msg) = check_clipboard(&mut ctx, Some(&old_clipboard)) {
-                        tx_protobuf.send(Data::Message(msg)).ok();
-                    }
-                });
-            }
-            Err(err) => {
-                log::error!("Failed to start clipboard service of client: {}", err);
-            }
-        }
         Some(tx)
     }
 
@@ -719,6 +675,7 @@ impl<T: InvokeUiSession> Remote<T> {
                 let mut msg = Message::new();
                 msg.set_misc(misc);
                 allow_err!(peer.send(&msg).await);
+                self.elevation_requested = true;
             }
             Data::ElevateWithLogon(username, password) => {
                 let mut request = ElevationRequest::new();
@@ -732,6 +689,7 @@ impl<T: InvokeUiSession> Remote<T> {
                 let mut msg = Message::new();
                 msg.set_misc(misc);
                 allow_err!(peer.send(&msg).await);
+                self.elevation_requested = true;
             }
             Data::NewVoiceCall => {
                 let msg = new_voice_call_request(true);
@@ -746,7 +704,8 @@ impl<T: InvokeUiSession> Remote<T> {
             Data::CloseVoiceCall => {
                 self.stop_voice_call();
                 let msg = new_voice_call_request(false);
-                self.handler.on_voice_call_closed("Closed manually by the peer");
+                self.handler
+                    .on_voice_call_closed("Closed manually by the peer");
                 allow_err!(peer.send(&msg).await);
             }
             _ => {}
@@ -869,22 +828,31 @@ impl<T: InvokeUiSession> Remote<T> {
                     Some(login_response::Union::PeerInfo(pi)) => {
                         self.handler.handle_peer_info(pi);
                         self.check_clipboard_file_context();
-                        if !(self.handler.is_file_transfer()
-                            || self.handler.is_port_forward()
-                            || !SERVER_CLIPBOARD_ENABLED.load(Ordering::SeqCst)
-                            || !SERVER_KEYBOARD_ENABLED.load(Ordering::SeqCst)
-                            || self.handler.lc.read().unwrap().disable_clipboard.v)
-                        {
-                            let txt = self.old_clipboard.lock().unwrap().clone();
-                            if !txt.is_empty() {
-                                let msg_out = crate::create_clipboard_msg(txt);
-                                let sender = self.sender.clone();
-                                tokio::spawn(async move {
-                                    // due to clipboard service interval time
-                                    sleep(common::CLIPBOARD_INTERVAL as f32 / 1_000.).await;
-                                    sender.send(Data::Message(msg_out)).ok();
-                                });
-                            }
+                        if !(self.handler.is_file_transfer() || self.handler.is_port_forward()) {
+                            let sender = self.sender.clone();
+                            let permission_config = self.handler.get_permission_config();
+
+                            #[cfg(feature = "flutter")]
+                            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                            Client::try_start_clipboard(None);
+                            #[cfg(not(feature = "flutter"))]
+                            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                            Client::try_start_clipboard(Some((
+                                permission_config.clone(),
+                                sender.clone(),
+                            )));
+
+                            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                            tokio::spawn(async move {
+                                // due to clipboard service interval time
+                                sleep(common::CLIPBOARD_INTERVAL as f32 / 1_000.).await;
+                                if permission_config.is_text_clipboard_required() {
+                                    if let Some(msg_out) = Client::get_current_text_clipboard_msg()
+                                    {
+                                        sender.send(Data::Message(msg_out)).ok();
+                                    }
+                                }
+                            });
                         }
 
                         if self.handler.is_file_transfer() {
@@ -1076,18 +1044,25 @@ impl<T: InvokeUiSession> Remote<T> {
                         log::info!("Change permission {:?} -> {}", p.permission, p.enabled);
                         match p.permission.enum_value_or_default() {
                             Permission::Keyboard => {
-                                SERVER_KEYBOARD_ENABLED.store(p.enabled, Ordering::SeqCst);
+                                #[cfg(feature = "flutter")]
+                                #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                                crate::flutter::update_text_clipboard_required();
+                                *self.handler.server_keyboard_enabled.write().unwrap() = p.enabled;
                                 self.handler.set_permission("keyboard", p.enabled);
                             }
                             Permission::Clipboard => {
-                                SERVER_CLIPBOARD_ENABLED.store(p.enabled, Ordering::SeqCst);
+                                #[cfg(feature = "flutter")]
+                                #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                                crate::flutter::update_text_clipboard_required();
+                                *self.handler.server_clipboard_enabled.write().unwrap() = p.enabled;
                                 self.handler.set_permission("clipboard", p.enabled);
                             }
                             Permission::Audio => {
                                 self.handler.set_permission("audio", p.enabled);
                             }
                             Permission::File => {
-                                SERVER_FILE_TRANSFER_ENABLED.store(p.enabled, Ordering::SeqCst);
+                                *self.handler.server_file_transfer_enabled.write().unwrap() =
+                                    p.enabled;
                                 if !p.enabled && self.handler.is_file_transfer() {
                                     return true;
                                 }
@@ -1197,7 +1172,8 @@ impl<T: InvokeUiSession> Remote<T> {
                         }
                     }
                     Some(misc::Union::PortableServiceRunning(b)) => {
-                        if b {
+                        self.handler.portable_service_running(b);
+                        if self.elevation_requested && b {
                             self.handler.msgbox(
                                 "custom-nocancel-success",
                                 "Successful",
@@ -1267,6 +1243,14 @@ impl<T: InvokeUiSession> Remote<T> {
                                 self.handler.on_voice_call_closed("");
                             }
                         }
+                    }
+                }
+                Some(message::Union::PeerInfo(pi)) => {
+                    match pi.conn_id {
+                        crate::SYNC_PEER_INFO_DISPLAYS => {
+                            self.handler.set_displays(&pi.displays);
+                        }
+                        _ => {}
                     }
                 }
                 _ => {}
@@ -1342,7 +1326,7 @@ impl<T: InvokeUiSession> Remote<T> {
                 self.handler.msgbox(
                     "error",
                     "Connecting...",
-                    "Someone turns on privacy mode, exit",
+                    "Someone turned on privacy mode, exiting.",
                     "",
                 );
                 return false;
@@ -1400,7 +1384,7 @@ impl<T: InvokeUiSession> Remote<T> {
     fn check_clipboard_file_context(&self) {
         #[cfg(windows)]
         {
-            let enabled = SERVER_FILE_TRANSFER_ENABLED.load(Ordering::SeqCst)
+            let enabled = *self.handler.server_file_transfer_enabled.read().unwrap()
                 && self.handler.lc.read().unwrap().enable_file_transfer.v;
             ContextSend::enable(enabled);
         }

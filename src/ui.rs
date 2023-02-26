@@ -1,26 +1,20 @@
+use copypasta::{ClipboardContext, ClipboardProvider};
 use std::{
     collections::HashMap,
     iter::FromIterator,
     process::Child,
     sync::{Arc, Mutex},
 };
-
+use tokio::time::{Duration};
 use sciter::Value;
 
 use hbb_common::{
     allow_err, api,
-    config::{self, Config, PeerConfig},
+    config::{self, Config, LocalConfig, PeerConfig},
     log,
     rendezvous_proto::*,
     tokio::{self},
 };
-
-/*
-use crate::common::get_app_name;
-use crate::ui_interface::*;
-use crate::{ipc, two_factor_auth};
-use hbb_common::get_version_number;
-*/
 
 #[cfg(not(any(feature = "flutter", feature = "cli")))]
 use crate::ui_session_interface::Session;
@@ -33,8 +27,6 @@ pub mod inline;
 #[cfg(target_os = "macos")]
 pub mod macos;
 pub mod remote;
-
-//type Message = RendezvousMessage;
 
 pub type Children = Arc<Mutex<(bool, HashMap<(String, String), Child>)>>;
 #[allow(dead_code)]
@@ -50,6 +42,7 @@ lazy_static::lazy_static! {
     pub static ref CUR_SESSION: Arc<Mutex<Option<Session<remote::SciterHandler>>>> = Default::default();
     static ref CHILDREN : Children = Default::default();
 }
+
 struct UIHostHandler;
 
 pub fn start(args: &mut [String]) {
@@ -114,6 +107,7 @@ pub fn start(args: &mut [String]) {
         let children: Children = Default::default();
         std::thread::spawn(move || check_zombie(children));
         set_version();
+
         frame.event_handler(UI {});
         frame.sciter_handler(UIHostHandler {});
 
@@ -343,6 +337,14 @@ impl UI {
         //log::info!("from config {} Vs from wire  {}", crate::VERSION, Config::get_option("api_version"));
         get_version_number(crate::VERSION) < get_version_number(&Config::get_option("api_version"))
     }
+	
+	fn copy_text(&self, text: String) {
+		copy_text(&text)
+	}
+
+    fn set_version_sync(&self) {
+        set_version_sync()
+    }
 
     fn install_path(&mut self) -> String {
         install_path()
@@ -461,7 +463,7 @@ impl UI {
     fn remove_peer(&mut self, id: String) {
         remove_peer(id)
     }
-
+    
     fn remove_discovered(&mut self, id: String) {
         let mut peers = config::LanPeers::load().peers;
         peers.retain(|x| x.id != id);
@@ -613,6 +615,11 @@ impl UI {
         post_request(url, body, header)
     }
 
+    fn get_request(&self, url: String, header: String) {
+        get_request(url, header)
+    }
+	
+	
     fn is_ok_change_id(&self) -> bool {
         is_ok_change_id()
     }
@@ -622,11 +629,11 @@ impl UI {
     }
 
     fn t(&self, name: String) -> String {
-        t(name)
+        crate::client::translate(name)
     }
 
     fn is_xfce(&self) -> bool {
-        is_xfce()
+        crate::platform::is_xfce()
     }
 
     /*
@@ -743,6 +750,7 @@ impl sciter::EventHandler for UI {
         //fn change_id(String);
         fn get_async_job_status();
         fn post_request(String, String, String);
+		fn get_request(String, String);
         fn is_ok_change_id();
         fn create_shortcut(String);
         fn discover();
@@ -753,6 +761,8 @@ impl sciter::EventHandler for UI {
         fn default_video_save_directory();
         fn is_2fa_enabled();
         fn requires_update();
+		fn set_version_sync();
+		fn copy_text(String);
         fn get_config_option(String);
         fn set_config_option(String, String);
         fn get_custom_api_url();
@@ -803,7 +813,7 @@ async fn get_version_() -> String {
             let body =  serde_json::from_value::<Version>(v).expect("Could not get api_version.");
             
             if cfg!(windows) {
-                return body.winversion
+				return body.winversion
             } else if cfg!(macos) {
                 return body.macversion
             } else if cfg!(linux) {
@@ -819,8 +829,23 @@ async fn get_version_() -> String {
     };
 }
 
+use tokio::runtime::Runtime;
+
+fn copy_text(text: &str) {
+	let mut ctx = ClipboardContext::new().unwrap();
+	ctx.set_contents(text.to_owned()).unwrap();
+}
+
+
+pub fn set_version_sync() {
+    let rt = Runtime::new().unwrap();
+    rt.block_on(async {
+        Config::set_option("api_version".to_owned(), get_version_().await);
+    });
+}
+
 #[tokio::main]
-async fn set_version() {
+pub async fn set_version() {
     Config::set_option("api_version".to_owned(), get_version_().await)
 }
 
@@ -855,8 +880,8 @@ pub fn value_crash_workaround(values: &[Value]) -> Arc<Vec<Value>> {
     let persist = Arc::new(values.to_vec());
     STUPID_VALUES.lock().unwrap().push(persist.clone());
     persist
-
 }
+
 
 #[inline]
 pub fn recent_sessions_updated() -> bool {

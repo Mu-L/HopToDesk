@@ -627,7 +627,6 @@ view.on("size", function() { if (app && app.multipleSessions) app.multipleSessio
     peers: [{id: "abcd", username: "", hostname: "", platform: "", alias: "", tags: ["", "", ...]}, ...],
     tags: [],
 }
-*/
 
 function handleAbError(err) {
     abLoading = false;
@@ -669,7 +668,7 @@ function resetAb() {
     ab = { tags: [], peers: [] };
     app.update();
 }
-
+*/
 function updateAbPeer() {
     if (ab.peers.length == 0) return;
     // to-do: inefficient

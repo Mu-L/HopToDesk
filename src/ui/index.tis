@@ -193,7 +193,6 @@ class Languages: Reactor.Component {
     }
 }
 
-/*
 var enhancementsMenu;
 class Enhancements: Reactor.Component {
     function this() {
@@ -257,7 +256,7 @@ function getUserName() {
         return JSON.parse(handler.get_local_option("user_info")).name;
     } catch(e) {}
     return '';
-}*/
+}
 
 function updateTheme() {
     var root_element = self;
@@ -337,7 +336,7 @@ class MyIdMenu: Reactor.Component {
         var menu = this.$(menu#config-options);
         this.$(svg#menu).popup(menu);
     }
-
+/*
     event click $(li#login) () {
         login();
     }
@@ -345,6 +344,7 @@ class MyIdMenu: Reactor.Component {
     event click $(li#logout) () {
         logout();
     }
+*/	
 
     function toggleMenuState() {
 		for (var el in $$(menu#config-options>li)) {
@@ -442,12 +442,12 @@ class MyIdMenu: Reactor.Component {
 			let selectedcustomnetwork;
 			if (old_url) {selectedhopnetwork = ".uncheckednetwork"; selectedcustomnetwork = ".checkednetwork";} else {selectedhopnetwork = ".checkednetwork"; selectedcustomnetwork = ".uncheckednetwork";}
 			
-            msgbox("custom", "Choose Network", "<div .form> \
+            msgbox("custom", translate('Choose Network'), "<div .form> \
             <div> \
-			<div #networkhoptodesk .custom-event title='HopToDesk Network' " + selectedhopnetwork + " network='networkhoptodesk' style=\"height: 30px; display:block;\"><div style=\"padding-top: 1px; margin-top: 5px; margin-left: 35px; display: block;\">HopToDesk Network (Default)</div></div><br></br> \
-			<div #networkcustom .custom-event title='Custom Network Settings' " + selectedcustomnetwork + " network='networkcustom' id='networkcustom' style=\"height: 30px; display:block;\"><div style=\"padding-top: 1px; margin-top: 5px; margin-left: 35px; display: block;\">Custom Network Settings</div></div><br></br> \
+			<div #networkhoptodesk .custom-event title='HopToDesk Network' " + selectedhopnetwork + " network='networkhoptodesk' style=\"height: 30px; display:block;\"><div style=\"padding-top: 1px; margin-top: 5px; margin-left: 35px; display: block;\">" + translate("HopToDesk Network (Default)") + "</div></div><br></br> \
+			<div #networkcustom .custom-event title='Custom Network Settings' " + selectedcustomnetwork + " network='networkcustom' id='networkcustom' style=\"height: 30px; display:block;\"><div style=\"padding-top: 1px; margin-top: 5px; margin-left: 35px; display: block;\">" + translate("Custom Network Settings") + "</div></div><br></br> \
 			<span style=\"margin-top: 5px; margin-bottom: 5px;\">" + translate("Enter your custom network settings URL:") + "</span><br></br><br></br> \
-			<input|text .outline-focus name='url' value='" + old_url + "' placeholder='" + 'Custom network settings URL' + "' style=\"margin-bottom: 5px;\" #customurl/></div> \
+			<input|text .outline-focus name='url' value='" + old_url + "' placeholder='" + translate('Custom network settings URL') + "' style=\"margin-bottom: 5px;\" #customurl/></div> \
             </div> \
 			", "", function(el) {
 				if (el) {
@@ -463,7 +463,7 @@ class MyIdMenu: Reactor.Component {
 
 							httpGetRequest(resurl, #get, {}, function(data) {
 								if (data.error) {
-									msgbox("custom-error", "Custom Network Error", "The custom network URL provided was not valid, please try again.<br/>" + data.error, () => {});
+									msgbox("custom-error", translate("Custom Network Error"), translate("The custom network URL provided was not valid, please try again.") + "<br/>" + data.error, () => {});
 									return;
 								}
 
@@ -473,21 +473,19 @@ class MyIdMenu: Reactor.Component {
 								try {
 									json = JSON.parse(text_res);
 								} catch (e) {
-									return msgbox("custom-error", "Custom Network Error", "The custom network URL provided was not valid, please try again.<br/>`" + text_res + "`", () => {});
+									return msgbox("custom-error", translate("Custom Network Error"), translate("The custom network URL provided was not valid, please try again.") + "<br/>" + text_res , () => {});
 								}
 								
 								if (data instanceof Object && data.turnservers && data.rendezvous) {
-									stdout.println("SUCCESS 1" + JSON.stringify(data));
 									let host = data.rendezvous.host;
 									let port = data.rendezvous.port.toInteger();
-									if (port == undefined || port < 0 || port > 65536) return msgbox("custom-error", "Custom Network Error", "Port `" + data.rendezvous.port + "` is an invalid port.");
+									if (port == undefined || port < 0 || port > 65536) return msgbox("custom-error", translate("Custom Network Error"), "Port `" + data.rendezvous.port + "` is an invalid port.");
 									valid_url();
-								} else msgbox("custom-error", "Custom Network Error", "The custom network URL provided did not return a correct response: (`" + text_res + "`).");
+								} else msgbox("custom-error", translate("Custom Network Error"), "The custom network URL provided did not return a correct response: (`" + text_res + "`).");
 							}, function(err, status) {
-								msgbox("custom-error", "Custom Network Error", "The custom network URL provided was not valid, please try again.<br/>Status " + status + ": `" + err + "`", () => {});
+								msgbox("custom-error", translate("Custom Network Error"), translate("The custom network URL provided was not valid, please try again.") + "<br/>Status " + status + ": `" + err + "`", () => {});
 							});
 						}
-
 					} else {
 						if (el && el.attributes['network'] === 'networkhoptodesk') {
 							$(#customurl).value = '';
@@ -629,14 +627,14 @@ class App: Reactor.Component
                         <div .lighter-text>{translate('desk_tip')}</div>
                         <div .your-desktop>
                             {!show_settings_button ? <MyIdMenu>{translate("ID")}<div tabindex="0">{svg_menu}</div></MyIdMenu> : ""}
-                            {key_confirmed ? <input type="text" readonly title={translate('ID')} value={formatId(get_id())}/> : translate("Generating ...")}
+                            {key_confirmed ? <input #idbox .idbox type="text" readonly title={translate('ID (Click to Copy)')} value={formatId(get_id())}/> : translate("Generating ...")}
                         </div>
                         <PasswordArea />
                     </div>
 
                     {!is_win || handler.is_installed() ? "": <InstallMe />}
                     {is_win && handler.is_installed() ? <EmptyMe />: ""}
-					{handler.requires_update() ? <div #launch-update .update_available .link url='https://www.hoptodesk.com/'>{translate('New Update Available')}</div> : ""}
+					<div #launch-update style="display:none" .update_available .link url='https://www.hoptodesk.com/'>{translate('New Update Available')}</div>
                     {is_can_screen_recording ? "": <CanScreenRecording />}
                     {is_can_screen_recording && !handler.is_process_trusted(false) ? <TrustMe /> : ""}
                     {!service_stopped && is_can_screen_recording && handler.is_process_trusted(false) && handler.is_installed() && !handler.is_installed_daemon(false) ? <InstallDaemon /> : ""}
@@ -668,7 +666,12 @@ class App: Reactor.Component
             </div>;
     }
 
-    event click $(button#connect) {
+	event focus $(.idbox) {
+		var el = $(#idbox);
+		handler.copy_text(el.value);
+	}
+
+	event click $(button#connect) {
         this.newRemote("connect");
     }
 
@@ -925,11 +928,21 @@ class PasswordEyeArea : Reactor.Component {
         var value = mode == 'click' ||  method == 'use-permanent-password' ? "-" : password_cache[0];
         return
             <div .eye-area style="width: *">
-                <input|text @{this.input} readonly value={value} title={translate('Password')}/>
+                <input|text @{this.input} #passwordbox .passwordbox readonly value={value} title={translate('Password (Click to Copy)')}/>
                 {svg_refresh_password}
             </div>;
     }
 
+	event focus $(.passwordbox) {
+		var el = $(#passwordbox);
+		handler.copy_text(el.value);
+	}
+	
+    event click $(#passwordbox) (_, me) {
+        var el = $(#passwordbox);
+		handler.copy_text(el.value);
+    }
+	
     event click $(svg#refresh-password) (_, me) {
         handler.update_temporary_password();
         this.update();
@@ -1211,7 +1224,7 @@ function self.ready() {
     if (!handler.get_remote_id()) {
         view.focus = $(#remote_id);
     }
-	refreshCurrentUser();
+	//refreshCurrentUser();
     updateTheme();
 }
 
@@ -1224,9 +1237,31 @@ function showSettings() {
     myIdMenu.showSettingMenu();
 }
 
+if (handler.requires_update()) {
+	var el = $(#launch-update);
+	el.style.set{display: "inline-block"};
+}
+
+//hophere update
+function updateCheck() {
+    self.timer(3600s, function() {
+		handler.set_version_sync();
+		var el = $(#launch-update);
+		if (handler.requires_update()) {
+            el.style.set{display: "inline-block"};
+		} else {
+			el.style.set{display: "none"};
+		}
+		updateCheck();
+    });		
+}
+updateCheck();
+
 function checkConnectStatus() {
     //handler.check_mouse_time(); // trigger connection status updater
+
     self.timer(1s, function() {
+
         var tmp = !!handler.get_option("stop-service");
         if (tmp != service_stopped) {
             service_stopped = tmp;
@@ -1292,7 +1327,7 @@ function check_if_overlay() {
 }
 
 checkConnectStatus();
-
+/*
 function login() {
     var name0 = getUserName();
     var pass0 = '';
@@ -1380,3 +1415,4 @@ function refreshCurrentUser() {
 function getHttpHeaders() {
     return "Authorization: Bearer " + handler.get_local_option("access_token");
 }
+*/

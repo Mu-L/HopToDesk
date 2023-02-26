@@ -92,7 +92,7 @@ impl RendezvousMediator {
     }
 
     pub async fn start(server: ServerPtr, host_list: String) -> ResultType<()> {
-        log::info!("start rendezvous mediator of {}", host_list);
+        log::info!("starting signal server {} ", host_list);
 
         let public_addr = match turn_client::get_public_ip().await {
             Some(addr) => addr,

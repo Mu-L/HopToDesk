@@ -1,29 +1,29 @@
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use crate::common::get_default_sound_input;
+use crate::{
+    client::file_trait::FileManager,
+    common::is_keyboard_mode_supported,
+    common::make_fd_to_json,
+    flutter::{self, SESSIONS},
+    flutter::{session_add, session_start_},
+    ui_interface::{self, *},
+};
+use flutter_rust_bridge::{StreamSink, SyncReturn};
+use hbb_common::{
+    config::{self, LocalConfig, PeerConfig, ONLINE},
+    fs, log,
+    message_proto::KeyboardMode,
+    ResultType,
+};
+use serde_json::json;
 use std::{
     collections::HashMap,
     ffi::{CStr, CString},
     os::raw::c_char,
+    str::FromStr,
 };
 
-use flutter_rust_bridge::{StreamSink, SyncReturn, ZeroCopyBuffer};
-use serde_json::json;
-
-use hbb_common::{
-    config::{self, LocalConfig, ONLINE, PeerConfig},
-    fs, log,
-};
-use hbb_common::message_proto::KeyboardMode;
-use hbb_common::ResultType;
-
-use std::str::FromStr;
-use crate::{
-    client::file_trait::FileManager,
-    common::make_fd_to_json,
-    flutter::{session_add, session_start_},
-};
-use crate::common::is_keyboard_mode_supported;
-use crate::flutter::{self, SESSIONS};
-use crate::ui_interface::{self, *};
-
+//use std::str::FromStr;
 // use crate::hbbs_http::account::AuthResult;
 
 fn initialize(app_dir: &str) {
@@ -50,7 +50,7 @@ fn initialize(app_dir: &str) {
 
 pub enum EventToUI {
     Event(String),
-    Rgba(ZeroCopyBuffer<Vec<u8>>),
+    Rgba,
 }
 
 pub fn start_global_event_stream(s: StreamSink<String>, app_type: String) -> ResultType<()> {
@@ -512,6 +512,19 @@ pub fn session_elevate_with_logon(id: String, username: String, password: String
 pub fn session_switch_sides(id: String) {
     if let Some(session) = SESSIONS.read().unwrap().get(&id) {
         session.switch_sides();
+    }
+}
+
+pub fn session_change_resolution(id: String, width: i32, height: i32) {
+    if let Some(session) = SESSIONS.read().unwrap().get(&id) {
+        session.change_resolution(width, height);
+    }
+}
+
+pub fn session_set_size(_id: String, _width: i32, _height: i32) {
+    #[cfg(feature = "flutter_texture_render")]
+    if let Some(session) = SESSIONS.write().unwrap().get_mut(&_id) {
+        session.set_size(_width, _height);
     }
 }
 
@@ -1182,6 +1195,9 @@ pub fn main_start_grab_keyboard() -> SyncReturn<bool> {
         return SyncReturn(false);
     }
     crate::keyboard::client::start_grab_loop();
+    if !is_can_input_monitoring(false) {
+        return SyncReturn(false);
+    }
     SyncReturn(true)
 }
 
@@ -1211,6 +1227,10 @@ pub fn main_is_share_rdp() -> SyncReturn<bool> {
 
 pub fn main_is_rdp_service_open() -> SyncReturn<bool> {
     SyncReturn(is_rdp_service_open())
+}
+
+pub fn main_set_share_rdp(enable: bool) {
+    set_share_rdp(enable)
 }
 
 pub fn main_goto_install() -> SyncReturn<bool> {
@@ -1287,6 +1307,17 @@ pub fn main_hide_docker() -> SyncReturn<bool> {
     #[cfg(target_os = "macos")]
     crate::platform::macos::hide_dock();
     SyncReturn(true)
+}
+
+pub fn main_use_texture_render() -> SyncReturn<bool> {
+    #[cfg(not(feature = "flutter_texture_render"))]
+    {
+        SyncReturn(false)
+    }
+    #[cfg(feature = "flutter_texture_render")]
+    {
+        SyncReturn(true)
+    }
 }
 
 pub fn cm_start_listen_ipc_thread() {

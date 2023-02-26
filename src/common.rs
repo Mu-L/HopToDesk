@@ -707,6 +707,23 @@ pub async fn post_request_sync(url: String, body: String, header: &str) -> Resul
     post_request(url, body, header).await
 }
 
+pub async fn get_request(url: String, header: &str) -> ResultType<String> {
+	let mut req = reqwest::Client::new().get(url);
+	if !header.is_empty() {
+		let tmp: Vec<&str> = header.split(": ").collect();
+		if tmp.len() == 2 {
+			req = req.header(tmp[0], tmp[1]);
+		}
+	}
+	let to = std::time::Duration::from_secs(12);
+	Ok(req.timeout(to).send().await?.text().await?)
+}
+
+#[tokio::main(flavor = "current_thread")]
+pub async fn get_request_sync(url: String, header: &str) -> ResultType<String> {
+    get_request(url, header).await
+}
+
 #[inline]
 pub fn make_privacy_mode_msg(state: back_notification::PrivacyModeState) -> Message {
     let mut misc = Misc::new();

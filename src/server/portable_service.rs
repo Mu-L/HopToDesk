@@ -530,7 +530,7 @@ pub mod client {
                             if std::fs::copy(&exe, &dst).is_ok() {
                                 if dst.exists() {
                                     if set_path_permission(&dir, "RX").is_ok() {
-                                        exe = dst.to_string_lossy().to_string();
+                                        //exe = dst.to_string_lossy().to_string();
                                     }
                                 }
                             }

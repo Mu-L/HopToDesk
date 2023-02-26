@@ -1,6 +1,6 @@
 [package]
 name = "hoptodesk"
-version = "1.33.3"
+version = "1.33.4"
 authors = ["hoptodesk <info@hoptodesk.com>"]
 edition = "2021"
 build= "build.rs"
@@ -87,6 +87,7 @@ sciter-rs = { git = "https://github.com/open-trade/rust-sciter", branch = "dyn" 
 sys-locale = "0.2"
 enigo = { path = "libs/enigo", features = [ "with_serde" ] }
 clipboard = { path = "libs/clipboard" }
+copypasta = "0.8.2"
 ctrlc = "3.2"
 arboard = "2.0"
 #minreq = { version = "2.4", features = ["punycode", "https-native"] }
@@ -128,6 +129,7 @@ mouce = { git="https://github.com/fufesou/mouce.git" }
 evdev = { git="https://github.com/fufesou/evdev" }
 dbus = "0.9"
 dbus-crossroads = "0.5"
+xrandr-parser = "0.3.0"
 backtrace = "0.3"
 tokio-tungstenite = { version = "^0.17.2", features = ["native-tls-vendored"] }
 native-tls = { version = "0.2.10", features = ["vendored"] }

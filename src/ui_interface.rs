@@ -147,7 +147,7 @@ pub fn get_license() -> String {
 */
 
 #[inline]
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(target_os = "windows")]
 pub fn get_option_opt(key: &str) -> Option<String> {
     OPTIONS.lock().unwrap().get(key).map(|x| x.clone())
 }
@@ -316,7 +316,7 @@ pub fn set_option(key: String, value: String) {
     #[cfg(target_os = "macos")]
     if &key == "stop-service" {
         let is_stop = value == "Y";
-        if is_stop && crate::platform::macos::uninstall() {
+        if is_stop && crate::platform::macos::uninstall(true) {
             return;
         }
     }
@@ -554,6 +554,7 @@ pub fn new_remote(id: String, remote_type: String, password: String) {
     }
 }
 
+
 #[inline]
 pub fn is_process_trusted(_prompt: bool) -> bool {
     #[cfg(target_os = "macos")]
@@ -599,9 +600,9 @@ pub fn get_error() -> String {
         if dtype != "x11" {
             return format!(
                 "{} {}, {}",
-                t("Unsupported display server ".to_owned()),
+                crate::client::translate("Unsupported display server ".to_owned()),
                 dtype,
-                t("x11 expected".to_owned()),
+                crate::client::translate("x11 expected".to_owned()),
             );
         }
     }
@@ -730,6 +731,17 @@ pub fn post_request(url: String, body: String, header: String) {
 }
 
 #[inline]
+pub fn get_request(url: String, header: String) {
+    *ASYNC_JOB_STATUS.lock().unwrap() = " ".to_owned();
+    std::thread::spawn(move || {
+        *ASYNC_JOB_STATUS.lock().unwrap() = match crate::get_request_sync(url, &header) {
+            Err(err) => err.to_string(),
+            Ok(text) => text,
+        };
+    });
+}
+
+#[inline]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn is_ok_change_id() -> bool {
     machine_uid::get().is_ok()
@@ -738,12 +750,6 @@ pub fn is_ok_change_id() -> bool {
 #[inline]
 pub fn get_async_job_status() -> String {
     ASYNC_JOB_STATUS.lock().unwrap().clone()
-}
-
-#[inline]
-#[cfg(not(any(target_os = "android", target_os = "ios", feature = "cli")))]
-pub fn t(name: String) -> String {
-    crate::client::translate(name)
 }
 
 #[inline]
@@ -784,11 +790,6 @@ pub fn default_video_save_directory() -> String {
         }
     }
     "".to_owned()
-}
-
-#[inline]
-pub fn is_xfce() -> bool {
-    crate::platform::is_xfce()
 }
 
 /* 

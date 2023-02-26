@@ -35,6 +35,8 @@ fn main() {
     common::global_clean();
 }
 
+
+
 #[cfg(feature = "cli")]
 fn main() {
     if !common::global_init() {

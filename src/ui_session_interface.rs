@@ -6,7 +6,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc, Mutex, RwLock,
 };
-use std::time::{Duration, SystemTime};
+use std::time::{SystemTime};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -18,6 +18,7 @@ use hbb_common::rendezvous_proto::ConnType;
 use hbb_common::tokio::{self, sync::mpsc};
 use hbb_common::{allow_err, message_proto::*};
 use hbb_common::{fs, get_version_number, log, Stream};
+
 use crate::client::io_loop::Remote;
 use crate::client::{
     check_if_retry, handle_hash, handle_login_error, handle_login_from_ui, handle_test_delay,
@@ -762,12 +763,13 @@ pub trait InvokeUiSession: Send + Sync + Clone + 'static + Sized + Default {
     fn clipboard(&self, content: String);
     fn cancel_msgbox(&self, tag: &str);
     fn switch_back(&self, id: &str);
+    fn portable_service_running(&self, running: bool);
     fn on_voice_call_started(&self);
     fn on_voice_call_closed(&self, reason: &str);
     fn on_voice_call_waiting(&self);
     fn on_voice_call_incoming(&self);
     fn get_rgba(&self) -> *const u8;
-    fn next_rgba(&mut self);
+    fn next_rgba(&self);
 }
 
 impl<T: InvokeUiSession> Deref for Session<T> {
@@ -920,13 +922,14 @@ impl<T: InvokeUiSession> Session<T> {
 pub async fn io_loop<T: InvokeUiSession>(handler: Session<T>) {
     let (sender, mut receiver) = mpsc::unbounded_channel::<Data>();
     *handler.sender.write().unwrap() = Some(sender.clone());
-    let mut options = crate::ipc::get_options_async().await;
-    let mut key = options.remove("key").unwrap_or("".to_owned());
-    let token = LocalConfig::get_option("access_token");
-    if key.is_empty() {
-        //key = crate::platform::get_license_key();
-    }
+    let options = crate::ipc::get_options_async().await;
+    let key = ""; //options.remove("key").unwrap_or("".to_owned());
+    let token = ""; //LocalConfig::get_option("access_token");
 /*
+    if key.is_empty() {
+        key = crate::platform::get_license_key();
+    }
+
     if key.is_empty() && !option_env!("RENDEZVOUS_SERVER").unwrap_or("").is_empty() {
         key = RS_PUB_KEY.to_owned();
     }
