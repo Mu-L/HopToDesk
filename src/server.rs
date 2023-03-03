@@ -152,12 +152,7 @@ pub async fn create_tcp_connection(
         w.id_count
     };
     let (sk, pk) = Config::get_key_pair();
-    log::info!(
-        "create tcp connection {} - {} - {}",
-        secure,
-        pk.len(),
-        sk.len()
-    );
+    log::info!("create tcp connection {} - {} - {}",secure,pk.len(),sk.len());
     let mut security_numbers = String::new();
     let mut security_qr_code = String::new();
     if secure && pk.len() == sign::PUBLICKEYBYTES && sk.len() == sign::SECRETKEYBYTES {
@@ -238,15 +233,7 @@ pub async fn create_tcp_connection(
             .ok();
         log::info!("wake up macos");
     }
-    Connection::start(
-        addr,
-        stream,
-        id,
-        Arc::downgrade(&server),
-        security_numbers,
-        security_qr_code,
-    )
-    .await;
+    Connection::start(addr,stream,id,Arc::downgrade(&server),security_numbers,security_qr_code).await;
     Ok(())
 }
 

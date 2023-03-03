@@ -1,7 +1,3 @@
-// Specify the Windows subsystem to eliminate console window.
-// Requires Rust 1.18.
-//#![windows_subsystem = "windows"]
-
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 use libhoptodesk::*;
 
@@ -34,8 +30,6 @@ fn main() {
     }
     common::global_clean();
 }
-
-
 
 #[cfg(feature = "cli")]
 fn main() {

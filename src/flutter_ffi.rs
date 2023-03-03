@@ -86,8 +86,15 @@ pub fn session_add_sync(
     is_file_transfer: bool,
     is_port_forward: bool,
     switch_uuid: String,
+    force_relay: bool,
 ) -> SyncReturn<String> {
-    if let Err(e) = session_add(&id, is_file_transfer, is_port_forward, &switch_uuid) {
+    if let Err(e) = session_add(
+        &id,
+        is_file_transfer,
+        is_port_forward,
+        &switch_uuid,
+        force_relay,
+    ) {
         SyncReturn(format!("Failed to add session with id {}, {}", &id, e))
     } else {
         SyncReturn("".to_owned())
@@ -152,16 +159,22 @@ pub fn session_record_screen(id: String, start: bool, width: usize, height: usiz
     }
 }
 
-pub fn session_reconnect(id: String) {
+pub fn session_reconnect(id: String, force_relay: bool) {
     if let Some(session) = SESSIONS.read().unwrap().get(&id) {
-        session.reconnect();
+        session.reconnect(force_relay);
     }
 }
 
 pub fn session_toggle_option(id: String, value: String) {
+    let mut is_found = false;
     if let Some(session) = SESSIONS.write().unwrap().get_mut(&id) {
-        log::warn!("toggle option {}", value);
-        session.toggle_option(value);
+        is_found = true;
+        log::warn!("toggle option {}", &value);
+        session.toggle_option(value.clone());
+    }
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    if is_found && value == "disable-clipboard" {
+        crate::flutter::update_text_clipboard_required();
     }
 }
 
@@ -605,6 +618,7 @@ pub fn main_get_app_name() -> String {
 pub fn main_get_app_name_sync() -> SyncReturn<String> {
     SyncReturn(get_app_name())
 }
+
 pub fn main_get_license() -> String {
     // get_license()
     "".to_owned()
@@ -715,6 +729,10 @@ pub fn main_peer_has_password(id: String) -> bool {
     peer_has_password(id)
 }
 
+pub fn main_is_in_recent_peers(id: String) -> bool {
+    PeerConfig::peers().iter().any(|e| e.0 == id)
+}
+
 pub fn main_load_recent_peers() {
     if !config::APP_DIR.read().unwrap().is_empty() {
         let peers: Vec<HashMap<&str, String>> = PeerConfig::peers()
@@ -785,6 +803,10 @@ pub fn main_load_lan_peers() {
     };
 }
 
+pub fn main_remove_discovered(id: String) {
+    remove_discovered(id);
+}
+
 fn main_broadcast_message(data: &HashMap<&str, &str>) {
     let apps = vec![
         flutter::APP_TYPE_DESKTOP_REMOTE,
@@ -819,6 +841,10 @@ pub fn main_set_user_default_option(key: String, value: String) {
 
 pub fn main_get_user_default_option(key: String) -> SyncReturn<String> {
     SyncReturn(get_user_default_option(key))
+}
+
+pub fn main_handle_relay_id(id: String) -> String {
+    handle_relay_id(id)
 }
 
 pub fn session_add_port_forward(
@@ -1134,12 +1160,6 @@ pub fn cm_elevate_portable(conn_id: i32) {
 
 pub fn cm_switch_back(conn_id: i32) {
     crate::ui_cm_interface::switch_back(conn_id);
-}
-pub fn main_get_icon() -> String {
-    #[cfg(not(any(target_os = "android", target_os = "ios", feature = "cli")))]
-    return ui_interface::get_icon();
-    #[cfg(any(target_os = "android", target_os = "ios", feature = "cli"))]
-    return String::new();
 }
 
 pub fn main_get_build_date() -> String {

@@ -3,12 +3,21 @@ use crate::{
     flutter_ffi::EventToUI,
     ui_session_interface::{io_loop, InvokeUiSession, Session},
 };
+#[cfg(feature = "flutter_texture_render")]
+use dlopen::{
+    symbor::{Library, Symbol},
+    Error as LibError,
+};
 use flutter_rust_bridge::StreamSink;
+#[cfg(feature = "flutter_texture_render")]
+use hbb_common::libc::c_void;
 use hbb_common::{
-    bail, config::LocalConfig, message_proto::*, rendezvous_proto::ConnType,
-    ResultType,
+    bail, config::LocalConfig, log, message_proto::*,
+    rendezvous_proto::ConnType, ResultType,
 };
 use serde_json::json;
+
+#[cfg(not(feature = "flutter_texture_render"))]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
     collections::HashMap,
@@ -143,9 +152,16 @@ pub struct FlutterHandler {
     peer_info: Arc<RwLock<PeerInfo>>,
 }
 
+
 #[cfg(feature = "flutter_texture_render")]
-pub type FlutterRgbaRendererPluginOnRgba =
-    unsafe extern "C" fn(texture_rgba: *mut c_void, buffer: *const u8, width: c_int, height: c_int);
+pub type FlutterRgbaRendererPluginOnRgba = unsafe extern "C" fn(
+    texture_rgba: *mut c_void,
+    buffer: *const u8,
+    len: c_int,
+    width: c_int,
+    height: c_int,
+    dst_rgba_stride: c_int,
+);
 
 // Video Texture Renderer in Flutter
 #[cfg(feature = "flutter_texture_render")]
@@ -155,7 +171,6 @@ struct VideoRenderer {
     ptr: usize,
     width: i32,
     height: i32,
-    data_len: usize,
     on_rgba_func: Option<Symbol<'static, FlutterRgbaRendererPluginOnRgba>>,
 }
 
@@ -184,7 +199,6 @@ impl Default for VideoRenderer {
             ptr: 0,
             width: 0,
             height: 0,
-            data_len: 0,
             on_rgba_func,
         }
     }
@@ -196,15 +210,10 @@ impl VideoRenderer {
     pub fn set_size(&mut self, width: i32, height: i32) {
         self.width = width;
         self.height = height;
-        self.data_len = if width > 0 && height > 0 {
-            (width * height * 4) as usize
-        } else {
-            0
-        };
     }
 
     pub fn on_rgba(&self, rgba: &Vec<u8>) {
-        if self.ptr == usize::default() || rgba.len() != self.data_len {
+        if self.ptr == usize::default() {
             return;
         }
         if let Some(func) = &self.on_rgba_func {
@@ -212,8 +221,10 @@ impl VideoRenderer {
                 func(
                     self.ptr as _,
                     rgba.as_ptr() as _,
+                    rgba.len() as _,
                     self.width as _,
                     self.height as _,
+                    crate::DST_STRIDE_RGBA as _,
                 )
             };
         }
@@ -433,6 +444,8 @@ impl InvokeUiSession for FlutterHandler {
     // unused in flutter
     fn adapt_size(&self) {}
 
+    #[inline]
+    #[cfg(not(feature = "flutter_texture_render"))]
     fn on_rgba(&self, data: &mut Vec<u8>) {
         // If the current rgba is not fetched by flutter, i.e., is valid.
         // We give up sending a new event to flutter.
@@ -612,6 +625,7 @@ pub fn session_add(
     is_file_transfer: bool,
     is_port_forward: bool,
     switch_uuid: &str,
+    force_relay: bool,
 ) -> ResultType<()> {
     let session_id = get_session_id(id.to_owned());
     LocalConfig::set_remote_id(&session_id);
@@ -643,7 +657,7 @@ pub fn session_add(
         .lc
         .write()
         .unwrap()
-        .initialize(session_id, conn_type, switch_uuid);
+        .initialize(session_id, conn_type, switch_uuid, force_relay);
 
     if let Some(same_id_session) = SESSIONS.write().unwrap().insert(id.to_owned(), session) {
         same_id_session.close();

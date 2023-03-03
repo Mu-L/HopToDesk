@@ -26,7 +26,6 @@ use hbb_common::{
     futures::{SinkExt, StreamExt},
     get_time, get_version_number,
     message_proto::{option_message::BoolOption, permission_info::Permission},
-    //password_security as password, sleep, timeout,
     password_security::{self as password, ApproveMode},
     sleep, timeout,
     tokio::{
@@ -42,7 +41,6 @@ use scrap::android::call_main_service_mouse_input;
 use sha2::{Digest, Sha256};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use std::sync::atomic::Ordering;
-//use std::sync::{atomic::AtomicI64, mpsc as std_mpsc};
 use std::{
     num::NonZeroI64,
     sync::{atomic::AtomicI64, mpsc as std_mpsc},
@@ -912,6 +910,16 @@ impl Connection {
             ..Default::default()
         })
         .into();
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            pi.resolutions = Some(SupportedResolutions {
+                resolutions: video_service::get_current_display_name()
+                    .map(|name| crate::platform::resolutions(&name))
+                    .unwrap_or(vec![]),
+                ..Default::default()
+            })
+            .into();
+        }
 
         let mut sub_service = false;
         if self.file_transfer.is_some() {

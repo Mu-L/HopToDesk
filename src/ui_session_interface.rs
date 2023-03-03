@@ -371,10 +371,87 @@ impl<T: InvokeUiSession> Session<T> {
         return "".to_owned();
     }
 
+    pub fn swab_modifier_key(&self, msg: &mut KeyEvent) {
+
+        let allow_swap_key = self.get_toggle_option("allow_swap_key".to_string());
+        if allow_swap_key {
+            if let Some(key_event::Union::ControlKey(ck)) = msg.union {
+                let ck = ck.enum_value_or_default();
+                let ck = match ck {
+                    ControlKey::Control => ControlKey::Meta,
+                    ControlKey::Meta => ControlKey::Control,
+                    ControlKey::RControl => ControlKey::Meta,
+                    ControlKey::RWin => ControlKey::Control,
+                    _ => ck,
+                };
+                msg.set_control_key(ck);
+            }
+            msg.modifiers = msg.modifiers.iter().map(|ck| {
+                let ck = ck.enum_value_or_default();
+                let ck = match ck {
+                    ControlKey::Control => ControlKey::Meta,
+                    ControlKey::Meta => ControlKey::Control,
+                    ControlKey::RControl => ControlKey::Meta,
+                    ControlKey::RWin => ControlKey::Control,
+                    _ => ck,
+                };
+                hbb_common::protobuf::EnumOrUnknown::new(ck)
+            }).collect();
+            
+        
+            let code = msg.chr();
+            if code != 0 {
+                let mut peer = self.peer_platform().to_lowercase();
+                peer.retain(|c| !c.is_whitespace());
+
+                let key = match peer.as_str() {
+                    "windows" => {
+                        let key = rdev::win_key_from_scancode(code);
+                        let key = match key {
+                            rdev::Key::ControlLeft => rdev::Key::MetaLeft,
+                            rdev::Key::MetaLeft => rdev::Key::ControlLeft,
+                            rdev::Key::ControlRight => rdev::Key::MetaLeft,
+                            rdev::Key::MetaRight => rdev::Key::ControlLeft,
+                            _ => key,
+                        };
+                        rdev::win_scancode_from_key(key).unwrap_or_default()
+                    }
+                    "macos" => {
+                        let key = rdev::macos_key_from_code(code);
+                        let key = match key {
+                            rdev::Key::ControlLeft => rdev::Key::MetaLeft,
+                            rdev::Key::MetaLeft => rdev::Key::ControlLeft,
+                            rdev::Key::ControlRight => rdev::Key::MetaLeft,
+                            rdev::Key::MetaRight => rdev::Key::ControlLeft,
+                            _ => key,
+                        };
+                        rdev::macos_keycode_from_key(key).unwrap_or_default()
+                    }
+                    _ => {
+                        let key = rdev::linux_key_from_code(code);
+                        let key = match key {
+                            rdev::Key::ControlLeft => rdev::Key::MetaLeft,
+                            rdev::Key::MetaLeft => rdev::Key::ControlLeft,
+                            rdev::Key::ControlRight => rdev::Key::MetaLeft,
+                            rdev::Key::MetaRight => rdev::Key::ControlLeft,
+                            _ => key,
+                        };
+                        rdev::linux_keycode_from_key(key).unwrap_or_default()
+                    }
+                };
+                msg.set_chr(key);
+            }
+        }
+
+    }
+
     pub fn send_key_event(&self, evt: &KeyEvent) {
         // mode: legacy(0), map(1), translate(2), auto(3)
+
+        let mut msg = evt.clone();
+        self.swab_modifier_key(&mut msg);
         let mut msg_out = Message::new();
-        msg_out.set_key_event(evt.clone());
+        msg_out.set_key_event(msg);
         self.send(Data::Message(msg_out));
     }
 
@@ -567,9 +644,13 @@ impl<T: InvokeUiSession> Session<T> {
         }
     }
 
-    pub fn reconnect(&self) {
+    pub fn reconnect(&self, force_relay: bool) {
         self.send(Data::Close);
         let cloned = self.clone();
+        // override only if true
+        if true == force_relay {
+            cloned.lc.write().unwrap().force_relay = true;
+        }
         let mut lock = self.thread.lock().unwrap();
         lock.take().map(|t| t.join());
         *lock = Some(std::thread::spawn(move || {
@@ -713,6 +794,18 @@ impl<T: InvokeUiSession> Session<T> {
                 log::info!("server not started (will try to start): {}", err);
             }
         }
+    }
+
+    pub fn change_resolution(&self, width: i32, height: i32) {
+        let mut misc = Misc::new();
+        misc.set_change_resolution(Resolution {
+            width,
+            height,
+            ..Default::default()
+        });
+        let mut msg = Message::new();
+        msg.set_misc(misc);
+        self.send(Data::Message(msg));
     }
 
     pub fn request_voice_call(&self) {
@@ -890,6 +983,23 @@ impl<T: InvokeUiSession> Interface for Session<T> {
         }
     }
 
+    fn swap_modifier_mouse(&self, msg : &mut hbb_common::protos::message::MouseEvent) {
+        let allow_swap_key = self.get_toggle_option("allow_swap_key".to_string());
+        if allow_swap_key  {
+            msg.modifiers = msg.modifiers.iter().map(|ck| {
+                let ck = ck.enum_value_or_default();
+                let ck = match ck {
+                    ControlKey::Control => ControlKey::Meta,
+                    ControlKey::Meta => ControlKey::Control,
+                    ControlKey::RControl => ControlKey::Meta,
+                    ControlKey::RWin => ControlKey::Control,
+                    _ => ck,
+                };
+                hbb_common::protobuf::EnumOrUnknown::new(ck)
+            }).collect();
+        };
+    }        
+        
     fn set_force_relay(&mut self, direct: bool, received: bool) {
         let mut lc = self.lc.write().unwrap();
         lc.force_relay = false;
@@ -924,7 +1034,7 @@ pub async fn io_loop<T: InvokeUiSession>(handler: Session<T>) {
     *handler.sender.write().unwrap() = Some(sender.clone());
     let options = crate::ipc::get_options_async().await;
     let key = ""; //options.remove("key").unwrap_or("".to_owned());
-    let token = ""; //LocalConfig::get_option("access_token");
+    let token = ""; // LocalConfig::get_option("access_token");
 /*
     if key.is_empty() {
         key = crate::platform::get_license_key();
@@ -1069,5 +1179,3 @@ async fn send_note(url: String, id: String, conn_id: i32, note: String) {
     let body = serde_json::json!({ "id": id, "Id": conn_id, "note": note });
     allow_err!(crate::post_request(url, body.to_string(), "").await);
 }
-
-

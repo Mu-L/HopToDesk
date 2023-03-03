@@ -358,7 +358,7 @@ impl sciter::EventHandler for SciterSession {
                     let site = AssetPtr::adopt(ptr as *mut video_destination);
                     log::debug!("[video] start video");
                     *VIDEO.lock().unwrap() = Some(site);
-                    self.reconnect();
+                    self.reconnect(false);
                 }
             }
             BEHAVIOR_EVENTS::VIDEO_INITIALIZED => {
@@ -407,7 +407,7 @@ impl sciter::EventHandler for SciterSession {
         fn transfer_file();
         fn tunnel();
         fn lock_screen();
-        fn reconnect();
+        fn reconnect(bool);
         fn get_chatbox();
         fn get_icon();
         fn get_home_dir();
@@ -462,6 +462,7 @@ impl sciter::EventHandler for SciterSession {
 
 impl SciterSession {
     pub fn new(cmd: String, id: String, password: String, args: Vec<String>) -> Self {
+        let force_relay = args.contains(&"--relay".to_string());
         let session: Session<SciterHandler> = Session {
             id: id.clone(),
             password: password.clone(),
@@ -482,7 +483,11 @@ impl SciterSession {
             ConnType::DEFAULT_CONN
         };
 
-        session.lc.write().unwrap().initialize(id, conn_type, None);
+        session
+            .lc
+            .write()
+            .unwrap()
+            .initialize(id, conn_type, None, force_relay);
 
         Self(session)
     }

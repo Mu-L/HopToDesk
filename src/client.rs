@@ -49,7 +49,7 @@ pub use helper::*;
 use scrap::{
     codec::{Decoder, DecoderCfg},
     record::{Recorder, RecorderContext},
-    VpxDecoderConfig, VpxVideoCodecId,
+    ImageFormat, VpxDecoderConfig, VpxVideoCodecId,
 };
 
 use crate::{
@@ -110,7 +110,7 @@ pub fn get_key_state(key: enigo::Key) -> bool {
 cfg_if::cfg_if! {
     if #[cfg(target_os = "android")] {
 
-use libc::{c_float, c_int, c_void};
+use hbb_common::libc::{c_float, c_int, c_void};
 use std::cell::RefCell;
 type Oboe = *mut c_void;
 extern "C" {
@@ -686,102 +686,7 @@ impl Client {
             Some(crate::create_clipboard_msg(txt.clone()))
         }
     }
-
-
 }
-
-/*
-
-    async fn request_relay(
-        peer: &str,
-        relay_server: String,
-        rendezvous_server: &str,
-        secure: bool,
-        key: &str,
-        token: &str,
-        conn_type: ConnType,
-    ) -> ResultType<Stream> {
-        let mut succeed = false;
-        let mut uuid = "".to_owned();
-        let mut ipv4 = true;
-        for i in 1..=3 {
-            // use different socket due to current hbbs implement requiring different nat address for each attempt
-            let mut socket = socket_client::connect_tcp(rendezvous_server, RENDEZVOUS_TIMEOUT)
-                .await
-                .with_context(|| "Failed to connect to rendezvous server")?;
-
-            ipv4 = socket.local_addr().is_ipv4();
-            let mut msg_out = RendezvousMessage::new();
-            uuid = Uuid::new_v4().to_string();
-            log::info!(
-                "#{} request relay attempt, id: {}, uuid: {}, relay_server: {}, secure: {}",
-                i,
-                peer,
-                uuid,
-                relay_server,
-                secure,
-            );
-            msg_out.set_request_relay(RequestRelay {
-                id: peer.to_owned(),
-                token: token.to_owned(),
-                uuid: uuid.clone(),
-                relay_server: relay_server.clone(),
-                secure,
-                ..Default::default()
-            });
-            socket.send(&msg_out).await?;
-            if let Some(Ok(bytes)) = socket.next_timeout(CONNECT_TIMEOUT).await {
-                if let Ok(msg_in) = RendezvousMessage::parse_from_bytes(&bytes) {
-                    if let Some(rendezvous_message::Union::RelayResponse(rs)) = msg_in.union {
-                        if !rs.refuse_reason.is_empty() {
-                            bail!(rs.refuse_reason);
-                        }
-                        succeed = true;
-                        break;
-                    }
-                }
-            }
-        }
-        if !succeed {
-            bail!("Timeout");
-        }
-        Self::create_relay(peer, uuid, relay_server, key, conn_type).await
-    }
-
-    async fn create_relay(
-        peer: &str,
-        uuid: String,
-        relay_server: String,
-        key: &str,
-        conn_type: ConnType,
-        ipv4: bool,
-    ) -> ResultType<Stream> {
-        let mut conn = socket_client::connect_tcp(
-            socket_client::ipv4_to_ipv6(crate::check_port(relay_server, RELAY_PORT), ipv4),
-            CONNECT_TIMEOUT,
-        )
-        .await
-        .with_context(|| "Failed to connect to relay server")?;
-        let mut msg_out = RendezvousMessage::new();
-        msg_out.set_request_relay(RequestRelay {
-            licence_key: key.to_owned(),
-            id: peer.to_owned(),
-            uuid,
-            conn_type: conn_type.into(),
-            ..Default::default()
-        });
-        conn.send(&msg_out).await?;
-        Ok(conn)
-    }
-}
-*/
-
-
- 
-
-
-
-
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 impl TextClipboardState {
@@ -811,6 +716,7 @@ pub struct AudioHandler {
 }
 
 impl AudioHandler {
+    /// Create a new audio handler.
     pub fn new(latency_controller: Arc<Mutex<LatencyController>>) -> Self {
         AudioHandler {
             latency_controller,
@@ -818,6 +724,7 @@ impl AudioHandler {
         }
     }
 
+    /// Start the audio playback.
     #[cfg(target_os = "linux")]
     fn start_audio(&mut self, format0: AudioFormat) -> ResultType<()> {
         use psimple::Simple;
@@ -847,6 +754,7 @@ impl AudioHandler {
         Ok(())
     }
 
+    /// Start the audio playback.
     #[cfg(target_os = "android")]
     fn start_audio(&mut self, format0: AudioFormat) -> ResultType<()> {
         self.oboe = Some(OboePlayer::new(
@@ -857,6 +765,7 @@ impl AudioHandler {
         Ok(())
     }
 
+    /// Start the audio playback.
     #[cfg(not(any(target_os = "android", target_os = "linux")))]
     fn start_audio(&mut self, format0: AudioFormat) -> ResultType<()> {
         let device = AUDIO_HOST
@@ -895,6 +804,7 @@ impl AudioHandler {
         }
     }
 
+    /// Handle audio frame and play it.
     pub fn handle_frame(&mut self, frame: AudioFrame) {
         if frame.timestamp != 0 {
             if self
@@ -904,6 +814,7 @@ impl AudioHandler {
                 .check_audio(frame.timestamp)
                 .not()
             {
+                log::debug!("audio frame {} is ignored", frame.timestamp);
                 return;
             }
         }
@@ -1025,8 +936,10 @@ impl VideoHandler {
         }
     }
 
+    /// Handle a new video frame.
     pub fn handle_frame(&mut self, vf: VideoFrame) -> ResultType<bool> {
         if vf.timestamp != 0 {
+            // Update the latency controller with the latest timestamp.
             self.latency_controller
                 .lock()
                 .unwrap()
@@ -1034,7 +947,11 @@ impl VideoHandler {
         }
         match &vf.union {
             Some(frame) => {
-                let res = self.decoder.handle_video_frame(frame, &mut self.rgb);
+                let res = self.decoder.handle_video_frame(
+                    frame,
+                    (ImageFormat::ARGB, crate::DST_STRIDE_RGBA),
+                    &mut self.rgb,
+                );
                 if self.record {
                     self.recorder
                         .lock()
@@ -1048,6 +965,7 @@ impl VideoHandler {
         }
     }
 
+    /// Reset the decoder.
     pub fn reset(&mut self) {
         self.decoder = Decoder::new(DecoderCfg {
             vpx: VpxDecoderConfig {
@@ -1109,6 +1027,11 @@ impl Deref for LoginConfigHandler {
     }
 }
 
+/// Load [`PeerConfig`] from id.
+///
+/// # Arguments
+///
+/// * `id` - id of peer
 #[inline]
 pub fn load_config(id: &str) -> PeerConfig {
     PeerConfig::load(id)
@@ -1121,7 +1044,13 @@ impl LoginConfigHandler {
     ///
     /// * `id` - id of peer
     /// * `conn_type` - Connection type enum.
-    pub fn initialize(&mut self, id: String, conn_type: ConnType, switch_uuid: Option<String>) {
+    pub fn initialize(
+        &mut self,
+        id: String,
+        conn_type: ConnType,
+        switch_uuid: Option<String>,
+        force_relay: bool,
+    ) {
         self.id = id;
         self.conn_type = conn_type;
         let config = self.load_config();
@@ -1130,9 +1059,10 @@ impl LoginConfigHandler {
         self.session_id = rand::random();
         self.supported_encoding = None;
         self.restarting_remote_device = false;
-        self.force_relay = !self.get_option("force-always-relay").is_empty();
+        self.force_relay = !self.get_option("force-always-relay").is_empty() || force_relay;
         self.switch_uuid = switch_uuid;
         self.success_time = None;
+        self.direct_error_counter = 0;
     }
 
     // XXX: fix conflicts between with config that introduces by Deref.
@@ -1434,6 +1364,11 @@ impl LoginConfigHandler {
         }
     }
 
+    /// Get the status of a toggle option.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The name of the toggle option.
     pub fn get_toggle_option(&self, name: &str) -> bool {
         if name == "show-remote-cursor" {
             self.config.show_remote_cursor.v
@@ -1719,6 +1654,7 @@ impl LoginConfigHandler {
     }
 }
 
+/// Media data.
 pub enum MediaData {
     VideoFrame(VideoFrame),
     AudioFrame(AudioFrame),
@@ -1890,6 +1826,7 @@ pub fn send_mouse(
     if check_scroll_on_mac(mask, x, y) {
         mouse_event.modifiers.push(ControlKey::Scroll.into());
     }
+    interface.swap_modifier_mouse(&mut mouse_event);
     msg_out.set_mouse_event(mouse_event);
     interface.send(Data::Message(msg_out));
 }
@@ -2107,8 +2044,10 @@ pub trait Interface: Send + Clone + 'static + Sized {
     async fn handle_hash(&mut self, pass: &str, hash: Hash, peer: &mut Stream);
     async fn handle_login_from_ui(&mut self, password: String, remember: bool, peer: &mut Stream);
     async fn handle_test_delay(&mut self, t: TestDelay, peer: &mut Stream);
+
     fn get_login_config_handler(&self) -> Arc<RwLock<LoginConfigHandler>>;
 
+    fn swap_modifier_mouse(&self, _msg: &mut hbb_common::protos::message::MouseEvent) {}
 }
 
 /// Data used by the client interface.

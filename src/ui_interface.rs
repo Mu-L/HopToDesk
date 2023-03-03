@@ -705,6 +705,13 @@ pub fn get_lan_peers() -> Vec<HashMap<&'static str, String>> {
 }
 
 #[inline]
+pub fn remove_discovered(id: String) {
+    let mut peers = config::LanPeers::load().peers;
+    peers.retain(|x| x.id != id);
+    config::LanPeers::store(&peers);
+}
+
+#[inline]
 pub fn get_uuid() -> String {
     base64::encode(hbb_common::get_uuid())
 }
@@ -1042,7 +1049,7 @@ async fn check_id(
     id: String,
     uuid: String,
 ) -> &'static str {
-    let any_addr = Config::get_any_listen_addr();
+    let any_addr = Config::get_any_listen_addr(true);
     if let Ok(mut socket) = FramedStream::new(
         crate::check_port(rendezvous_server, RENDEZVOUS_PORT),
         any_addr,
@@ -1097,4 +1104,13 @@ async fn check_id(
         return "Failed to connect to rendezvous server";
     }
     ""
+}
+
+// if it's relay id, return id processed, otherwise return original id
+pub fn handle_relay_id(id: String) -> String {
+    if id.ends_with(r"\r") || id.ends_with(r"/r") {
+        id[0..id.len() - 2].to_string()
+    } else {
+        id
+    }
 }
