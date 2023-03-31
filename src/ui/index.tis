@@ -767,7 +767,8 @@ class UpdateMe: Reactor.Component {
     event click $(#install-me) {
         handler.open_url("https://www.hoptodesk.com");
         return;
-        if (!is_win) {
+        /*
+		if (!is_win) {
             handler.open_url("https://www.hoptodesk.com");
             return;
         }
@@ -791,6 +792,7 @@ class UpdateMe: Reactor.Component {
             url,
             self.url(path),
             onsuccess, onerror, onprogress);
+		*/
     }
 }
 
@@ -1285,11 +1287,13 @@ function checkConnectStatus() {
             system_error = tmp;
             app.update();
         }
+/*
         tmp = handler.get_software_update_url();
         if (tmp != software_update_url) {
             software_update_url = tmp;
             app.update();
         }
+*/		
         if (handler.recent_sessions_updated()) {
             stdout.println("recent sessions updated");
             updateAbPeer();

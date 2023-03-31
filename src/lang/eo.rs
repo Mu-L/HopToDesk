@@ -439,7 +439,6 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Strong", ""),
         ("Switch Sides", ""),
         ("Please confirm if you want to share your desktop?", ""),
-        ("Closed as expected", ""),        
 		("Enable 2FA", "Ebligu 2FA"),
         ("2FA QR code", "2FA QR kodo"),
 		("Enable Wake On LAN", "Ebligu Wake On LAN"),

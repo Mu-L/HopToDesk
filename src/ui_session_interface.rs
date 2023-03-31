@@ -10,7 +10,7 @@ use std::time::{SystemTime};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use rdev::{Event, EventType::*};
+use rdev::{Event, EventType::*, KeyCode};
 use uuid::Uuid;
 
 use hbb_common::config::{Config, LocalConfig, PeerConfig};
@@ -386,18 +386,21 @@ impl<T: InvokeUiSession> Session<T> {
                 };
                 msg.set_control_key(ck);
             }
-            msg.modifiers = msg.modifiers.iter().map(|ck| {
-                let ck = ck.enum_value_or_default();
-                let ck = match ck {
-                    ControlKey::Control => ControlKey::Meta,
-                    ControlKey::Meta => ControlKey::Control,
-                    ControlKey::RControl => ControlKey::Meta,
-                    ControlKey::RWin => ControlKey::Control,
-                    _ => ck,
-                };
-                hbb_common::protobuf::EnumOrUnknown::new(ck)
-            }).collect();
-            
+            msg.modifiers = msg
+                .modifiers
+                .iter()
+                .map(|ck| {
+                    let ck = ck.enum_value_or_default();
+                    let ck = match ck {
+                        ControlKey::Control => ControlKey::Meta,
+                        ControlKey::Meta => ControlKey::Control,
+                        ControlKey::RControl => ControlKey::Meta,
+                        ControlKey::RWin => ControlKey::Control,
+                        _ => ck,
+                    };
+                    hbb_common::protobuf::EnumOrUnknown::new(ck)
+                })
+                .collect();
         
             let code = msg.chr();
             if code != 0 {
@@ -417,7 +420,7 @@ impl<T: InvokeUiSession> Session<T> {
                         rdev::win_scancode_from_key(key).unwrap_or_default()
                     }
                     "macos" => {
-                        let key = rdev::macos_key_from_code(code);
+                        let key = rdev::macos_key_from_code(code as _);
                         let key = match key {
                             rdev::Key::ControlLeft => rdev::Key::MetaLeft,
                             rdev::Key::MetaLeft => rdev::Key::ControlLeft,
@@ -425,7 +428,7 @@ impl<T: InvokeUiSession> Session<T> {
                             rdev::Key::MetaRight => rdev::Key::ControlLeft,
                             _ => key,
                         };
-                        rdev::macos_keycode_from_key(key).unwrap_or_default()
+                        rdev::macos_keycode_from_key(key).unwrap_or_default() as _
                     }
                     _ => {
                         let key = rdev::linux_key_from_code(code);
@@ -542,8 +545,8 @@ impl<T: InvokeUiSession> Session<T> {
         if scancode < 0 || keycode < 0 {
             return;
         }
-        let keycode: u32 = keycode as u32;
-        let scancode: u32 = scancode as u32;
+        let keycode: KeyCode = keycode as _;
+        let scancode: u32 = scancode as _;
 
         #[cfg(not(target_os = "windows"))]
         let key = rdev::key_from_code(keycode) as rdev::Key;
@@ -559,8 +562,8 @@ impl<T: InvokeUiSession> Session<T> {
         let event = Event {
             time: SystemTime::now(),
             unicode: None,
-            code: keycode as _,
-            scan_code: scancode as _,
+            platform_code: keycode as _,
+            position_code: scancode as _,
             event_type: event_type,
         };
         keyboard::client::process_event(&event, Some(lock_modes));
@@ -815,6 +818,40 @@ impl<T: InvokeUiSession> Session<T> {
     pub fn close_voice_call(&self) {
         self.send(Data::CloseVoiceCall);
     }
+/*
+
+    pub fn show_relay_hint(
+        &mut self,
+        last_recv_time: tokio::time::Instant,
+        msgtype: &str,
+        title: &str,
+        text: &str,
+    ) -> bool {
+        let duration = Duration::from_secs(3);
+        let counter_interval = 3;
+        let lock = self.lc.read().unwrap();
+        let success_time = lock.success_time;
+        let direct = lock.direct.unwrap_or(false);
+        let received = lock.received;
+        drop(lock);
+        if let Some(success_time) = success_time {
+            if direct && last_recv_time.duration_since(success_time) < duration {
+                let retry_for_relay = direct && !received;
+                let retry = check_if_retry(msgtype, title, text, retry_for_relay);
+                if retry && !retry_for_relay {
+                    self.lc.write().unwrap().direct_error_counter += 1;
+                    if self.lc.read().unwrap().direct_error_counter % counter_interval == 0 {
+                        #[cfg(feature = "flutter")]
+                        return true;
+                    }
+                }
+            } else {
+                self.lc.write().unwrap().direct_error_counter = 0;
+            }
+        }
+        false
+    }
+*/    
 }
 
 pub trait InvokeUiSession: Send + Sync + Clone + 'static + Sized + Default {
@@ -846,7 +883,14 @@ pub trait InvokeUiSession: Send + Sync + Clone + 'static + Sized + Default {
         only_count: bool,
     );
     fn confirm_delete_files(&self, id: i32, i: i32, name: String);
-    fn override_file_confirm(&self, id: i32, file_num: i32, to: String, is_upload: bool);
+    fn override_file_confirm(
+        &self,
+        id: i32,
+        file_num: i32,
+        to: String,
+        is_upload: bool,
+        is_identical: bool,
+    );
     fn update_block_input_state(&self, on: bool);
     fn job_progress(&self, id: i32, file_num: i32, speed: f64, finished_size: f64);
     fn adapt_size(&self);
@@ -985,18 +1029,22 @@ impl<T: InvokeUiSession> Interface for Session<T> {
 
     fn swap_modifier_mouse(&self, msg : &mut hbb_common::protos::message::MouseEvent) {
         let allow_swap_key = self.get_toggle_option("allow_swap_key".to_string());
-        if allow_swap_key  {
-            msg.modifiers = msg.modifiers.iter().map(|ck| {
-                let ck = ck.enum_value_or_default();
-                let ck = match ck {
-                    ControlKey::Control => ControlKey::Meta,
-                    ControlKey::Meta => ControlKey::Control,
-                    ControlKey::RControl => ControlKey::Meta,
-                    ControlKey::RWin => ControlKey::Control,
-                    _ => ck,
-                };
-                hbb_common::protobuf::EnumOrUnknown::new(ck)
-            }).collect();
+        if allow_swap_key {
+            msg.modifiers = msg
+                .modifiers
+                .iter()
+                .map(|ck| {
+                    let ck = ck.enum_value_or_default();
+                    let ck = match ck {
+                        ControlKey::Control => ControlKey::Meta,
+                        ControlKey::Meta => ControlKey::Control,
+                        ControlKey::RControl => ControlKey::Meta,
+                        ControlKey::RWin => ControlKey::Control,
+                        _ => ck,
+                    };
+                    hbb_common::protobuf::EnumOrUnknown::new(ck)
+                })
+                .collect();
         };
     }        
         
@@ -1030,20 +1078,14 @@ impl<T: InvokeUiSession> Session<T> {
 
 #[tokio::main(flavor = "current_thread")]
 pub async fn io_loop<T: InvokeUiSession>(handler: Session<T>) {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    let (sender, receiver) = mpsc::unbounded_channel::<Data>();
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let (sender, mut receiver) = mpsc::unbounded_channel::<Data>();
     *handler.sender.write().unwrap() = Some(sender.clone());
     let options = crate::ipc::get_options_async().await;
     let key = ""; //options.remove("key").unwrap_or("".to_owned());
     let token = ""; // LocalConfig::get_option("access_token");
-/*
-    if key.is_empty() {
-        key = crate::platform::get_license_key();
-    }
-
-    if key.is_empty() && !option_env!("RENDEZVOUS_SERVER").unwrap_or("").is_empty() {
-        key = RS_PUB_KEY.to_owned();
-    }
-*/    
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     if handler.is_port_forward() {
         if handler.is_rdp() {

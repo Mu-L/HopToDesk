@@ -1,9 +1,9 @@
 use std::{
     collections::HashMap,
     net::SocketAddr,
-    ops::{Deref, Not},
+    ops::Deref,
     str::FromStr,
-    sync::{Arc, mpsc, Mutex, RwLock},
+    sync::{mpsc, Arc, Mutex, RwLock},
     time::UNIX_EPOCH,
 };
 
@@ -11,13 +11,13 @@ pub use async_trait::async_trait;
 use bytes::Bytes;
 #[cfg(not(any(target_os = "android", target_os = "linux")))]
 use cpal::{
-    Device,
-    Host, StreamConfig, traits::{DeviceTrait, HostTrait, StreamTrait},
+    traits::{DeviceTrait, HostTrait, StreamTrait},
+    Device, Host, StreamConfig,
 };
 use magnum_opus::{Channels::*, Decoder as AudioDecoder};
+#[cfg(not(any(target_os = "android", target_os = "linux")))]
+use ringbuf::{ring_buffer::RbBase, Rb};
 use sha2::{Digest, Sha256};
-#[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
-use std::sync::atomic::Ordering;
 use uuid::Uuid;
 
 pub use file_trait::FileManager;
@@ -37,14 +37,11 @@ use hbb_common::{
     sodiumoxide::crypto::{box_, secretbox, sign},
     tcp::FramedStream,
     timeout,
+    tokio::time::Duration,    
     tokio::{self, net::TcpStream},
     tokio_util::compat::{Compat, TokioAsyncReadCompatExt},
-    ResultType, Stream,
+    AddrMangle, ResultType, Stream,
 };
-
-use tokio::time::{Duration};
-
-pub use helper::LatencyController;
 pub use helper::*;
 use scrap::{
     codec::{Decoder, DecoderCfg},
@@ -349,7 +346,14 @@ impl Client {
                         //tx.send(Ok((stream, Some(relay), true))).await;
                     }
                     Err(err) => {
-                        tx.send(Err(err)).await;
+                        //tx.send(Err(err)).await;
+						match tx.send(Err(err)).await {
+							Ok(_) => {},
+							Err(err) => {
+
+							}
+							//Err(e) => {  }
+						}						
                     }
                 };
             });
@@ -413,7 +417,7 @@ impl Client {
                             if let Ok(listening) =
                                 serde_json::from_str::<rendezvous_messages::Listening>(msg)
                             {
-                                if let Ok(raw_pk) = base64::decode(listening.pk) {
+                                if let Ok(raw_pk) = crate::decode64(listening.pk) {
                                     id_pk = raw_pk;
                                     peer_addr = listening.addr;
                                     peer_public_addr = listening.public_addr;
@@ -470,6 +474,38 @@ impl Client {
         ))
     }
 
+	async fn connect_over_turn(
+		peer_id: &str,
+		sender: soketto::Sender<Compat<TcpStream>>,
+		peer_public_addr: SocketAddr,
+	) -> ResultType<(FramedStream, Arc<impl webrtc_util::Conn>)> {
+		let start = std::time::Instant::now();
+		log::info!("start connecting peer via turn servers");
+
+		let (relay, conn) = match turn_client::connect_over_turn_servers(
+			&peer_id,
+			peer_public_addr,
+			sender,
+		)
+		.await {
+			Ok((relay_conn, stream)) => {
+				log::info!("connect successfully to peer via TURN servers!");
+				(relay_conn, stream)
+			}
+			Err(err) => {
+				log::warn!("attempt to connect via turn servers failed: {}", err);
+				return Err(err.into());
+			}
+		};
+
+		let time_used = start.elapsed().as_millis() as u64;
+		log::info!("{}ms used to establish connection", time_used);
+
+		//Self::secure_connection(peer_id, id_pk, &mut conn).await?;
+		Ok((conn, relay))
+	}
+
+/*
     async fn connect_over_turn(
         peer_id: &str,
         sender: soketto::Sender<Compat<TcpStream>>,
@@ -498,7 +534,7 @@ impl Client {
         //Self::secure_connection(peer_id, id_pk, &mut conn).await?;
         Ok((conn, relay))
     }
-
+*/
     async fn connect_directly(peer_id: &str, peer: &Peer) -> ResultType<FramedStream> {
         let connect_timeout = peer.connect_timeout(peer_id).await;
         log::info!("start connecting peer directly: {}", peer.local_addr);
@@ -581,13 +617,7 @@ impl Client {
                                 });
                                 timeout(CONNECT_TIMEOUT, conn.send(&msg_out)).await??;
                                 conn.set_key(key);
-
-                                security_numbers =
-                                    hbb_common::password_security::compute_security_code(
-                                        &out_sk_b,
-                                        &their_pk_b,
-                                    );
-
+                                security_numbers = hbb_common::password_security::compute_security_code(&out_sk_b,&their_pk_b,);
                                 log::info!("Connection is secured: {}, and Security Code is: {}", conn.is_secured(), security_numbers);
                             } else {
                                 log::error!("Handshake failed: sign failure");
@@ -707,23 +737,28 @@ pub struct AudioHandler {
     #[cfg(target_os = "linux")]
     simple: Option<psimple::Simple>,
     #[cfg(not(any(target_os = "android", target_os = "linux")))]
-    audio_buffer: Arc<std::sync::Mutex<std::collections::vec_deque::VecDeque<f32>>>,
+    audio_buffer: AudioBuffer,
     sample_rate: (u32, u32),
     #[cfg(not(any(target_os = "android", target_os = "linux")))]
     audio_stream: Option<Box<dyn StreamTrait>>,
     channels: u16,
-    latency_controller: Arc<Mutex<LatencyController>>,
+    #[cfg(not(any(target_os = "android", target_os = "linux")))]
+    ready: Arc<std::sync::Mutex<bool>>,
+}
+
+#[cfg(not(any(target_os = "android", target_os = "linux")))]
+struct AudioBuffer(pub Arc<std::sync::Mutex<ringbuf::HeapRb<f32>>>);
+
+#[cfg(not(any(target_os = "android", target_os = "linux")))]
+impl Default for AudioBuffer {
+    fn default() -> Self {
+        Self(Arc::new(std::sync::Mutex::new(
+            ringbuf::HeapRb::<f32>::new(48000 * 2), // 48000hz, 2 channel, 1 second
+        )))
+    }
 }
 
 impl AudioHandler {
-    /// Create a new audio handler.
-    pub fn new(latency_controller: Arc<Mutex<LatencyController>>) -> Self {
-        AudioHandler {
-            latency_controller,
-            ..Default::default()
-        }
-    }
-
     /// Start the audio playback.
     #[cfg(target_os = "linux")]
     fn start_audio(&mut self, format0: AudioFormat) -> ResultType<()> {
@@ -805,22 +840,10 @@ impl AudioHandler {
     }
 
     /// Handle audio frame and play it.
+    #[inline]
     pub fn handle_frame(&mut self, frame: AudioFrame) {
-        if frame.timestamp != 0 {
-            if self
-                .latency_controller
-                .lock()
-                .unwrap()
-                .check_audio(frame.timestamp)
-                .not()
-            {
-                log::debug!("audio frame {} is ignored", frame.timestamp);
-                return;
-            }
-        }
-
         #[cfg(not(any(target_os = "android", target_os = "linux")))]
-        if self.audio_stream.is_none() {
+        if self.audio_stream.is_none() || !self.ready.lock().unwrap().clone() {
             return;
         }
         #[cfg(target_os = "linux")]
@@ -840,11 +863,7 @@ impl AudioHandler {
                 {
                     let sample_rate0 = self.sample_rate.0;
                     let sample_rate = self.sample_rate.1;
-                    let audio_buffer = self.audio_buffer.clone();
-                    // avoiding memory overflow if audio_buffer consumer side has problem
-                    if audio_buffer.lock().unwrap().len() as u32 > sample_rate * 120 {
-                        *audio_buffer.lock().unwrap() = Default::default();
-                    }
+                    let audio_buffer = self.audio_buffer.0.clone();
                     if sample_rate != sample_rate0 {
                         let buffer = crate::resample_channels(
                             &buffer[0..n],
@@ -852,12 +871,12 @@ impl AudioHandler {
                             sample_rate,
                             channels,
                         );
-                        audio_buffer.lock().unwrap().extend(buffer);
+                        audio_buffer.lock().unwrap().push_slice_overwrite(&buffer);
                     } else {
                         audio_buffer
                             .lock()
                             .unwrap()
-                            .extend(buffer[0..n].iter().cloned());
+                            .push_slice_overwrite(&buffer[0..n]);
                     }
                 }
                 #[cfg(target_os = "android")]
@@ -885,16 +904,23 @@ impl AudioHandler {
             // too many errors, will improve later
             log::trace!("an error occurred on stream: {}", err);
         };
-        let audio_buffer = self.audio_buffer.clone();
+        let audio_buffer = self.audio_buffer.0.clone();
+        let ready = self.ready.clone();
         let stream = device.build_output_stream(
             config,
             move |data: &mut [T], _: &_| {
+                if !*ready.lock().unwrap() {
+                    *ready.lock().unwrap() = true;
+                }
                 let mut lock = audio_buffer.lock().unwrap();
                 let mut n = data.len();
-                if lock.len() < n {
-                    n = lock.len();
+                if lock.occupied_len() < n {
+                    n = lock.occupied_len();
                 }
-                let mut input = lock.drain(0..n);
+                let mut elems = vec![0.0f32; n];
+                lock.pop_slice(&mut elems);
+                drop(lock);
+                let mut input = elems.into_iter();
                 for sample in data.iter_mut() {
                     *sample = match input.next() {
                         Some(x) => T::from(&x),
@@ -913,7 +939,6 @@ impl AudioHandler {
 /// Video handler for the [`Client`].
 pub struct VideoHandler {
     decoder: Decoder,
-    latency_controller: Arc<Mutex<LatencyController>>,
     pub rgb: Vec<u8>,
     recorder: Arc<Mutex<Option<Recorder>>>,
     record: bool,
@@ -921,7 +946,7 @@ pub struct VideoHandler {
 
 impl VideoHandler {
     /// Create a new video handler.
-    pub fn new(latency_controller: Arc<Mutex<LatencyController>>) -> Self {
+    pub fn new() -> Self {
         VideoHandler {
             decoder: Decoder::new(DecoderCfg {
                 vpx: VpxDecoderConfig {
@@ -929,7 +954,6 @@ impl VideoHandler {
                     num_threads: (num_cpus::get() / 2) as _,
                 },
             }),
-            latency_controller,
             rgb: Default::default(),
             recorder: Default::default(),
             record: false,
@@ -937,14 +961,8 @@ impl VideoHandler {
     }
 
     /// Handle a new video frame.
+    #[inline]
     pub fn handle_frame(&mut self, vf: VideoFrame) -> ResultType<bool> {
-        if vf.timestamp != 0 {
-            // Update the latency controller with the latest timestamp.
-            self.latency_controller
-                .lock()
-                .unwrap()
-                .update_video(vf.timestamp);
-        }
         match &vf.union {
             Some(frame) => {
                 let res = self.decoder.handle_video_frame(
@@ -1233,6 +1251,26 @@ impl LoginConfigHandler {
             option.block_input = BoolOption::No.into();
         } else if name == "show-quality-monitor" {
             config.show_quality_monitor.v = !config.show_quality_monitor.v;
+        } else if name == "allow_swap_key" {
+            config.allow_swap_key.v = !config.allow_swap_key.v;
+        } else if name == "view-only" {
+            config.view_only.v = !config.view_only.v;
+            let f = |b: bool| {
+                if b {
+                    BoolOption::Yes.into()
+                } else {
+                    BoolOption::No.into()
+                }
+            };
+            if config.view_only.v {
+                option.disable_keyboard = f(true);
+                option.disable_clipboard = f(true);
+                option.show_remote_cursor = f(true);
+            } else {
+                option.disable_keyboard = f(false);
+                option.disable_clipboard = f(self.get_toggle_option("disable-clipboard"));
+                option.show_remote_cursor = f(self.get_toggle_option("show-remote-cursor"));
+            }
         } else {
             let is_set = self
                 .options
@@ -1240,7 +1278,12 @@ impl LoginConfigHandler {
                 .map(|o| !o.is_empty())
                 .unwrap_or(false);
             if is_set {
-                self.config.options.remove(&name);
+                if name == "zoom-cursor" {
+                    self.config.options.insert(name, "".to_owned());
+                } else {
+                    // Notice: When PeerConfig loads, the default value is taken when the option key does not exist.
+                    self.config.options.remove(&name);
+                }
             } else {
                 self.config.options.insert(name, "Y".to_owned());
             }
@@ -1249,11 +1292,6 @@ impl LoginConfigHandler {
         }
         if !name.contains("block-input") {
             self.save_config(config);
-        }
-        #[cfg(feature = "flutter")]
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        if name == "disable-clipboard" {
-            crate::flutter::update_text_clipboard_required();
         }
         let mut misc = Misc::new();
         misc.set_option(option);
@@ -1299,7 +1337,12 @@ impl LoginConfigHandler {
         if let Some(custom_fps) = self.options.get("custom-fps") {
             msg.custom_fps = custom_fps.parse().unwrap_or(30);
         }
-        if self.get_toggle_option("show-remote-cursor") {
+        let view_only = self.get_toggle_option("view-only");
+        if view_only {
+            msg.disable_keyboard = BoolOption::Yes.into();
+            n += 1;
+        }
+        if view_only || self.get_toggle_option("show-remote-cursor") {
             msg.show_remote_cursor = BoolOption::Yes.into();
             n += 1;
         }
@@ -1315,7 +1358,7 @@ impl LoginConfigHandler {
             msg.enable_file_transfer = BoolOption::Yes.into();
             n += 1;
         }
-        if self.get_toggle_option("disable-clipboard") {
+        if view_only || self.get_toggle_option("disable-clipboard") {
             msg.disable_clipboard = BoolOption::Yes.into();
             n += 1;
         }
@@ -1348,6 +1391,13 @@ impl LoginConfigHandler {
         }
     }
 
+    /// Parse the image quality option.
+    /// Return [`ImageQuality`] if the option is valid, otherwise return `None`.
+    ///
+    /// # Arguments
+    ///
+    /// * `q` - The image quality option.
+    /// * `ignore_default` - Ignore the default value.
     fn get_image_quality_enum(&self, q: &str, ignore_default: bool) -> Option<ImageQuality> {
         if q == "low" {
             Some(ImageQuality::Low)
@@ -1384,6 +1434,10 @@ impl LoginConfigHandler {
             self.config.disable_clipboard.v
         } else if name == "show-quality-monitor" {
             self.config.show_quality_monitor.v
+        } else if name == "allow_swap_key" {
+            self.config.allow_swap_key.v
+        } else if name == "view-only" {
+            self.config.view_only.v
         } else {
             !self.get_option(name).is_empty()
         }
@@ -1652,6 +1706,21 @@ impl LoginConfigHandler {
         msg_out.set_misc(misc);
         msg_out
     }
+/*
+
+    pub fn set_force_relay(&mut self, direct: bool, received: bool) {
+        self.force_relay = false;
+        if direct && !received {
+            let errno = errno::errno().0;
+            log::info!("errno is {}", errno);
+            // TODO: check mac and ios
+            if cfg!(windows) && errno == 10054 || !cfg!(windows) && errno == 104 {
+                self.force_relay = true;
+                self.set_option("force-always-relay".to_owned(), "Y".to_owned());
+            }
+        }
+    }
+*/    
 }
 
 /// Media data.
@@ -1678,11 +1747,8 @@ where
     let (video_sender, video_receiver) = mpsc::channel::<MediaData>();
     let mut video_callback = video_callback;
 
-    let latency_controller = LatencyController::new();
-    let latency_controller_cl = latency_controller.clone();
-
     std::thread::spawn(move || {
-        let mut video_handler = VideoHandler::new(latency_controller);
+        let mut video_handler = VideoHandler::new();
         loop {
             if let Ok(data) = video_receiver.recv() {
                 match data {
@@ -1705,19 +1771,16 @@ where
         }
         log::info!("Video decoder loop exits");
     });
-    let audio_sender = start_audio_thread(Some(latency_controller_cl));
+    let audio_sender = start_audio_thread();
     return (video_sender, audio_sender);
 }
 
 /// Start an audio thread
 /// Return a audio [`MediaSender`]
-pub fn start_audio_thread(
-    latency_controller: Option<Arc<Mutex<LatencyController>>>,
-) -> MediaSender {
-    let latency_controller = latency_controller.unwrap_or(LatencyController::new());
+pub fn start_audio_thread() -> MediaSender {
     let (audio_sender, audio_receiver) = mpsc::channel::<MediaData>();
     std::thread::spawn(move || {
-        let mut audio_handler = AudioHandler::new(latency_controller);
+        let mut audio_handler = AudioHandler::default();
         loop {
             if let Ok(data) = audio_receiver.recv() {
                 match data {
@@ -2229,9 +2292,9 @@ pub fn check_if_retry(msgtype: &str, title: &str, text: &str) -> bool {
                 && !text.to_lowercase().contains("resolve")
                 && !text.to_lowercase().contains("mismatch")
                 && !text.to_lowercase().contains("manually")
-                && !text.to_lowercase().contains("not allowed")
                 && !text.to_lowercase().contains("as expected")                
-                && !text.to_lowercase().contains("closed the session")))
+                && !text.to_lowercase().contains("closed the session")
+                && !text.to_lowercase().contains("not allowed")))
 }
 
 #[inline]
@@ -2247,7 +2310,7 @@ fn get_pk(pk: &[u8]) -> Option<[u8; 32]> {
 /*
 #[inline]
 fn get_rs_pk(str_base64: &str) -> Option<sign::PublicKey> {
-    if let Ok(pk) = base64::decode(str_base64) {
+    if let Ok(pk) = crate::decode64(str_base64) {
         get_pk(&pk).map(|x| sign::PublicKey(x))
     } else {
         None

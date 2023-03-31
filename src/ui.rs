@@ -58,6 +58,18 @@ pub fn start(args: &mut [String]) {
         let dir = "/usr";
         sciter::set_library(&(prefix + dir + "/lib/hoptodesk/libsciter-gtk.so")).ok();
     }
+    #[cfg(windows)]
+    // Check if there is a sciter.dll nearby.
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            let sciter_dll_path = parent.join("sciter.dll");
+            if sciter_dll_path.exists() {
+                // Try to set the sciter dll.
+                let p = sciter_dll_path.to_string_lossy().to_string();
+                log::debug!("Found dll:{}, \n {:?}", p, sciter::set_library(&p));
+            }
+        }
+    }    
     // https://github.com/c-smile/sciter-sdk/blob/master/include/sciter-x-types.h
     // https://github.com/rustdesk/rustdesk/issues/132#issuecomment-886069737
     #[cfg(windows)]
@@ -105,10 +117,8 @@ pub fn start(args: &mut [String]) {
         let children: Children = Default::default();
         std::thread::spawn(move || check_zombie(children));
         set_version();
-
         frame.event_handler(UI {});
         frame.sciter_handler(UIHostHandler {});
-
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         frame.register_behavior(
             "enable-2fa-button",
@@ -184,16 +194,6 @@ pub fn start(args: &mut [String]) {
             .unwrap_or("".to_owned()),
         page
     ));
-    #[cfg(all(target_os = "macos", not(feature = "packui")))]
-    {
-        frame.load_file(&format!(
-            "file://{}/../Resources/src/ui/{}",
-            std::env::current_dir()
-                .map(|c| c.display().to_string())
-                .unwrap_or("".to_owned()),
-            page
-        ));
-    }
     frame.run_app();
 }
 
@@ -388,12 +388,19 @@ impl UI {
     }
 
     fn closing(&mut self, x: i32, y: i32, w: i32, h: i32) {
-        closing(x, y, w, h)
+        crate::server::input_service::fix_key_down_timeout_at_exit();
+        LocalConfig::set_size(x, y, w, h);
     }
 
     fn get_size(&mut self) -> Value {
-        Value::from_iter(get_size())
-    }
+        let s = LocalConfig::get_size();
+        let mut v = Vec::new();
+        v.push(s.0);
+        v.push(s.1);
+        v.push(s.2);
+        v.push(s.3);
+        Value::from_iter(v)
+	}
 
     fn get_mouse_time(&self) -> f64 {
         get_mouse_time()
@@ -447,7 +454,7 @@ impl UI {
 
     fn get_recent_sessions(&mut self) -> Value {
         // to-do: limit number of recent sessions, and remove old peer file
-        let peers: Vec<Value> = get_recent_sessions()
+        let peers: Vec<Value> = PeerConfig::peers()
             .drain(..)
             .map(|p| Self::get_peer_value(p.0, p.2))
             .collect();
@@ -459,13 +466,11 @@ impl UI {
     }
 
     fn remove_peer(&mut self, id: String) {
-        remove_peer(id)
+        PeerConfig::remove(&id);
     }
-    
+
     fn remove_discovered(&mut self, id: String) {
-        let mut peers = config::LanPeers::load().peers;
-        peers.retain(|x| x.id != id);
-        config::LanPeers::store(&peers);
+        remove_discovered(id);
     }
 
     fn send_wol(&mut self, id: String) {
@@ -520,9 +525,9 @@ impl UI {
         modify_default_login()
     }
 
-    fn get_software_update_url(&self) -> String {
-        get_software_update_url()
-    }
+//    fn get_software_update_url(&self) -> String {
+//        get_software_update_url()
+//    }
 
     fn get_new_version(&self) -> String {
         get_new_version()
@@ -650,7 +655,11 @@ impl UI {
     fn default_video_save_directory(&self) -> String {
         default_video_save_directory()
     }
-    
+
+    fn handle_relay_id(&self, id: String) -> String {
+        handle_relay_id(id)
+    }
+        
     fn get_custom_api_url(&self) -> String {
         if let Ok(Some(v)) = ipc::get_config("custom-api-url") {
             v
@@ -735,7 +744,7 @@ impl sciter::EventHandler for UI {
         fn get_sound_inputs();
         fn set_options(Value);
         fn set_option(String, String);
-        fn get_software_update_url();
+        //fn get_software_update_url();
         fn get_new_version();
         fn get_version();
         fn update_me(String);
@@ -757,6 +766,7 @@ impl sciter::EventHandler for UI {
         //fn has_hwcodec();
         fn get_langs();
         fn default_video_save_directory();
+        fn handle_relay_id(String);        
         fn is_2fa_enabled();
         fn requires_update();
 		fn set_version_sync();
@@ -891,6 +901,7 @@ pub fn recent_sessions_updated() -> bool {
         false
     }
 }
+
 pub fn get_icon() -> String {
     // 128x128
     #[cfg(target_os = "macos")]

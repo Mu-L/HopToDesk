@@ -33,18 +33,10 @@ html.darktheme {
     var(placeholder): #555;
 }
 
-div.security_number_block {
-  text-align: center;
-  font-family: 'Courier New';
-  font-size: 1.1em;
-  line-height: 2.5em;
-  font-weight: bold;
-}
 body {
     margin: 0;
     color: color(text);
 }
-
 
 button.button {
     height: 2em;
@@ -59,13 +51,6 @@ button.button {
 	padding-bottom: 5px;
 	font-weight: 600;
 	font-size: 1.1em;
-}
-
-button.button#connect{
-	font-family: 'opensans-semb';
-    font-size: 1.2em;
-    color: white;
-	font-weight: 500;
 }
 
 button[type=checkbox], button[type=checkbox]:active {
@@ -484,4 +469,19 @@ div#msgbox div.set-password input {
 
 div#msgbox #error {
   color: red;
+}
+
+div.security_number_block {
+  text-align: center;
+  font-family: 'Courier New';
+  font-size: 1.1em;
+  line-height: 2.5em;
+  font-weight: bold;
+}
+
+button.button#connect{
+	font-family: 'opensans-semb';
+    font-size: 1.2em;
+    color: white;
+	font-weight: 500;
 }

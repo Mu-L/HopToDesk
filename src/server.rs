@@ -1,16 +1,24 @@
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use crate::two_factor_auth::sockets::AuthAnswer;
+
 use std::{
     collections::HashMap,
     net::SocketAddr,
     sync::{Arc, Mutex, RwLock, Weak},
     time::Duration,
 };
+
 use bytes::Bytes;
+
 pub use connection::*;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use hbb_common::config::Config2;
+use hbb_common::tcp::new_listener;
 use hbb_common::{
     allow_err,
     anyhow::{anyhow, Context},
     bail,
-    config::{Config, Config2, CONNECT_TIMEOUT},
+    config::{Config, CONNECT_TIMEOUT},
     log,
     message_proto::*,
     protobuf::{Enum, Message as _},
@@ -53,10 +61,6 @@ pub mod portable_service;
 mod service;
 mod video_qos;
 pub mod video_service;
-
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-use crate::two_factor_auth::sockets::AuthAnswer;
-use hbb_common::tcp::new_listener;
 
 pub type Childs = Arc<Mutex<Vec<std::process::Child>>>;
 type ConnMap = HashMap<i32, ConnInner>;
@@ -198,10 +202,7 @@ pub async fn create_tcp_connection(
                             let mut key = [0u8; secretbox::KEYBYTES];
                             key[..].copy_from_slice(&symmetric_key);
                             stream.set_key(secretbox::Key(key));
-                            security_numbers = hbb_common::password_security::compute_security_code(
-                                &our_sk_b,
-                                &their_pk_b,
-                            );
+                            security_numbers = hbb_common::password_security::compute_security_code(&our_sk_b,&their_pk_b,);
                             log::info!("Security Code: {security_numbers}");
                         } else if pk.asymmetric_value.is_empty() {
                             log::info!("pk might mismatch in client, fall back to non-secure");
@@ -283,10 +284,7 @@ async fn create_relay_connection_(
     )
     .await?;
     let mut msg_out = RendezvousMessage::new();
-    let mut licence_key = Config::get_option("key");
-    if licence_key.is_empty() {
-        licence_key = crate::platform::get_license_key();
-    }
+    let licence_key = crate::get_key(true).await;
     msg_out.set_request_relay(RequestRelay {
         licence_key,
         uuid,
@@ -428,6 +426,7 @@ pub async fn start_server(is_server: bool) {
         //#[cfg(windows)]
         //crate::platform::windows::bootstrap();
         input_service::fix_key_down_timeout_loop();
+        //crate::hbbs_http::sync::start();
         #[cfg(target_os = "linux")]
         if crate::platform::current_is_wayland() {
             allow_err!(input_service::setup_uinput(0, 1920, 0, 1080).await);

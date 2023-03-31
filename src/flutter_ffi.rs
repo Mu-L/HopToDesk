@@ -10,7 +10,7 @@ use crate::{
 };
 use flutter_rust_bridge::{StreamSink, SyncReturn};
 use hbb_common::{
-    config::{self, LocalConfig, PeerConfig, ONLINE},
+    config::{self, LocalConfig, PeerConfig, PeerInfoSerde, ONLINE},
     fs, log,
     message_proto::KeyboardMode,
     ResultType,
@@ -21,10 +21,9 @@ use std::{
     ffi::{CStr, CString},
     os::raw::c_char,
     str::FromStr,
+    time::SystemTime,
 };
 
-//use std::str::FromStr;
-// use crate::hbbs_http::account::AuthResult;
 
 fn initialize(app_dir: &str) {
     *config::APP_DIR.write().unwrap() = app_dir.to_owned();
@@ -87,6 +86,7 @@ pub fn session_add_sync(
     is_port_forward: bool,
     switch_uuid: String,
     force_relay: bool,
+    password: String,
 ) -> SyncReturn<String> {
     if let Err(e) = session_add(
         &id,
@@ -94,6 +94,7 @@ pub fn session_add_sync(
         is_port_forward,
         &switch_uuid,
         force_relay,
+        password,
     ) {
         SyncReturn(format!("Failed to add session with id {}, {}", &id, e))
     } else {
@@ -141,10 +142,10 @@ pub fn session_login(id: String, password: String, remember: bool) {
 }
 
 pub fn session_close(id: String) {
-    if let Some(session) = SESSIONS.read().unwrap().get(&id) {
+    if let Some(mut session) = SESSIONS.write().unwrap().remove(&id) {
+        session.close_event_stream();
         session.close();
     }
-    let _ = SESSIONS.write().unwrap().remove(&id);
 }
 
 pub fn session_refresh(id: String) {
@@ -166,14 +167,12 @@ pub fn session_reconnect(id: String, force_relay: bool) {
 }
 
 pub fn session_toggle_option(id: String, value: String) {
-    let mut is_found = false;
     if let Some(session) = SESSIONS.write().unwrap().get_mut(&id) {
-        is_found = true;
         log::warn!("toggle option {}", &value);
         session.toggle_option(value.clone());
     }
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    if is_found && value == "disable-clipboard" {
+    if SESSIONS.read().unwrap().get(&id).is_some() && value == "disable-clipboard" {
         crate::flutter::update_text_clipboard_required();
     }
 }
@@ -336,10 +335,10 @@ pub fn session_handle_flutter_key_event(
     }
 }
 
-pub fn session_enter_or_leave(id: String, enter: bool) {
+pub fn session_enter_or_leave(_id: String, _enter: bool) {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    if let Some(session) = SESSIONS.read().unwrap().get(&id) {
-        if enter {
+    if let Some(session) = SESSIONS.read().unwrap().get(&_id) {
+        if _enter {
             session.enter();
         } else {
             session.leave();
@@ -1378,8 +1377,12 @@ pub mod server_side {
     pub unsafe extern "system" fn Java_com_hoptodesk_app_MainService_startServer(
         env: JNIEnv,
         _class: JClass,
+        app_dir: JString,
     ) {
-        log::debug!("startServer from java");
+        log::debug!("startServer from jvm");
+        if let Ok(app_dir) = env.get_string(app_dir) {
+            *config::APP_DIR.write().unwrap() = app_dir.into();
+        }
         std::thread::spawn(move || start_server(true));
     }
 

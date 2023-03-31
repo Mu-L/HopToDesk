@@ -45,69 +45,63 @@ async fn get_turn_servers() -> Option<Vec<TurnConfig>> {
 pub async fn connect_over_turn_servers(
     peer_id: &str,
     peer_addr: SocketAddr,
-    mut sender: soketto::Sender<Compat<TcpStream>>,
+    sender: soketto::Sender<Compat<TcpStream>>,
 ) -> ResultType<(Arc<impl Conn>, FramedStream)> {
-    if let Some(turn_servers) = get_turn_servers().await {
-        let srv_len = turn_servers.len();
-        let sender = Arc::new(tokio::sync::Mutex::new(sender));
-        let (tx, mut rx) = mpsc::channel(srv_len);
-        for config in turn_servers {
-            let sender = sender.clone();
-            let peer_id = peer_id.to_owned();
-            let tx = tx.clone();
-            tokio::spawn(async move {
-                let turn_server = config.addr.clone();
-                log::info!(
-                    "[turn] start establishing over TURN server: {}",
-                    turn_server
-                );
-                if let Ok(turn_client) = TurnClient::new(config).await {
-                    match turn_client.create_relay_connection(peer_addr).await {
-                        Ok(relay) => {
-                            let conn = relay.0;
-                            let relay_addr = relay.1;
-                            match establish_over_relay(&peer_id, turn_client, relay_addr, sender)
-                                .await
-                            {
-                                Ok(stream) => {
-                                    //tx.send(Some((conn, stream))).await;
-									match tx.send(Some((conn, stream))).await {
-										Ok(()) => {},
-										Err(_) => {},
-									}
-
-                                    log::info!(
-                                        "[turn] connection has been established by TURN server {}",
-                                        turn_server
-                                    );
-                                    return;
-                                }
-                                Err(err) => log::warn!("{}", err),
-                            };
+    let turn_servers = match get_turn_servers().await {
+        Some(servers) => servers,
+        None => bail!("empty turn servers!"),
+    };
+    let srv_len = turn_servers.len();
+    let sender = Arc::new(tokio::sync::Mutex::new(sender));
+    let (tx, mut rx) = mpsc::channel(srv_len);
+    let mut handles = Vec::new();
+    for config in turn_servers {
+        let sender = sender.clone();
+        let peer_id = peer_id.to_owned();
+        let tx = tx.clone();
+        let handle = tokio::spawn(async move {
+            let turn_server = config.addr.clone();
+            log::info!(
+                "[turn] start establishing over TURN server: {}",
+                turn_server
+            );
+            if let Ok(turn_client) = TurnClient::new(config).await {
+                match turn_client.create_relay_connection(peer_addr).await {
+                    Ok(relay) => {
+                        let conn = relay.0;
+                        let relay_addr = relay.1;
+                        if let Ok(stream) = establish_over_relay(&peer_id, turn_client, relay_addr, sender).await {
+                            if tx.send(Some((conn, stream))).await.is_err() {
+                                log::warn!("failed to send result to channel");
+                            }
+                            log::info!(
+                                "[turn] connection has been established by TURN server {}",
+                                turn_server
+                            );
+                            return;
                         }
-                        Err(err) => log::warn!("create relay conn failed {err}"),
-                    };
-                }
-
-				match tx.send(None).await {
-					Ok(()) => {},
-					Err(_) => {},
-				}
-
-                //tx.send(None).await;
-            });
-        }
-        for _ in 0..srv_len {
-            if let Some(ret) = rx.recv().await {
-                if let Some(ret) = ret {
-                    return Ok(ret);
-                }
+                    }
+                    Err(err) => log::warn!("create relay conn failed: {}", err),
+                };
             }
-        }
-        bail!("Failed to connect via relay server: all condidates are failed!") // all tasks have done without luck.
+            if tx.send(None).await.is_err() {
+                log::warn!("failed to send result to channel");
+            }
+        });
+        handles.push(handle);
     }
-    bail!("empty turn servers!")
+    for handle in handles {
+        handle.await?;
+    }
+    drop(tx); // drop tx to end the channel
+    while let Some(ret) = rx.recv().await {
+        if let Some(ret) = ret {
+            return Ok(ret);
+        }
+    }
+    bail!("Failed to connect via relay server: all candidates are failed!")
 }
+
 
 async fn establish_over_relay(
     peer_id: &str,

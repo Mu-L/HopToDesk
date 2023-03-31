@@ -13,7 +13,6 @@
 // https://github.com/krruzic/pulsectl
 
 use super::*;
-use hbb_common::get_time;
 use magnum_opus::{Application::*, Channels::*, Encoder};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -65,6 +64,7 @@ mod pa_impl {
                 )))
                 .await
         );
+        #[cfg(target_os = "linux")]
         let zero_audio_frame: Vec<f32> = vec![0.; AUDIO_DATA_SIZE_U8 / 4];
         while sp.ok() && !RESTARTING.load(Ordering::SeqCst) {
             sp.snapshot(|sps| {
@@ -349,7 +349,6 @@ fn send_f32(data: &[f32], encoder: &mut Encoder, sp: &GenericService) {
                         let mut msg_out = Message::new();
                         msg_out.set_audio_frame(AudioFrame {
                             data: data.into(),
-                            timestamp: get_time(),
                             ..Default::default()
                         });
                         sp.send(msg_out);
@@ -369,7 +368,6 @@ fn send_f32(data: &[f32], encoder: &mut Encoder, sp: &GenericService) {
             let mut msg_out = Message::new();
             msg_out.set_audio_frame(AudioFrame {
                 data: data.into(),
-                timestamp: get_time(),
                 ..Default::default()
             });
             sp.send(msg_out);

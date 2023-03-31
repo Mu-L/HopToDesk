@@ -9,9 +9,11 @@ use hbb_common::{
     sleep, timeout, tokio,
 };
 use std::io::prelude::*;
+use std::ptr::null_mut;
 use std::{
     ffi::OsString,
     fs, io, mem,
+    os::windows::process::CommandExt,
     path::PathBuf,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -24,7 +26,7 @@ use winapi::{
         handleapi::CloseHandle,
         minwinbase::STILL_ACTIVE,
         processthreadsapi::{
-            GetCurrentProcess, GetExitCodeProcess, OpenProcess,
+            GetCurrentProcess,  GetCurrentProcessId, GetExitCodeProcess, OpenProcess,
             OpenProcessToken,
         },
         securitybaseapi::GetTokenInformation,
@@ -940,7 +942,7 @@ fn get_after_install(exe: &str) -> String {
 }
 
 pub fn install_me(options: &str, path: String, silent: bool, debug: bool, no_startup: bool) -> ResultType<()> {
-    let uninstall_str = get_uninstall();
+    let uninstall_str = get_uninstall(false);
     let mut path = path.trim_end_matches('\\').to_owned();
     let (subkey, _path, start_menu, exe) = get_default_install_info();
     let mut exe = exe;
@@ -1141,29 +1143,35 @@ pub fn run_after_install() -> ResultType<()> {
 }
 
 pub fn run_before_uninstall() -> ResultType<()> {
-    run_cmds(get_before_uninstall(), false, "before_install")
+    run_cmds(get_before_uninstall(true), false, "before_install")
 }
 
-fn get_before_uninstall() -> String {
+fn get_before_uninstall(kill_self: bool) -> String {
     let app_name = crate::get_app_name();
     let ext = app_name.to_lowercase();
+    let filter = if kill_self {
+        "".to_string()
+    } else {
+        format!(" /FI \"PID ne {}\"", get_current_pid())
+    };
     format!(
         "
     chcp 65001
     sc stop {app_name}
     sc delete {app_name}
 	taskkill /F /IM {broker_exe}
-    taskkill /F /IM {app_name}.exe
+    taskkill /F /IM {app_name}.exe{filter}
     reg delete HKEY_CLASSES_ROOT\\.{ext} /f
     netsh advfirewall firewall delete rule name=\"{app_name} Service\"
     ",
         app_name = app_name,
 		broker_exe = crate::win_privacy::INJECTED_PROCESS_EXE,
-        ext = ext
+        ext = ext,
+        filter = filter,
     )
 }
 
-fn get_uninstall() -> String {
+fn get_uninstall(kill_self: bool) -> String {
     let (subkey, path, start_menu, _) = get_install_info();
     format!(
         "
@@ -1174,7 +1182,7 @@ fn get_uninstall() -> String {
     if exist \"%PUBLIC%\\Desktop\\{app_name}.lnk\" del /f /q \"%PUBLIC%\\Desktop\\{app_name}.lnk\"
     if exist \"%PROGRAMDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\{app_name} Tray.lnk\" del /f /q \"%PROGRAMDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\{app_name} Tray.lnk\"
     ",
-        before_uninstall=get_before_uninstall(),
+        before_uninstall=get_before_uninstall(kill_self),
         subkey=subkey,
         app_name = crate::get_app_name(),
         path = path,
@@ -1182,8 +1190,8 @@ fn get_uninstall() -> String {
     )
 }
 
-pub fn uninstall_me() -> ResultType<()> {
-    run_cmds(get_uninstall(), false, "uninstall")
+pub fn uninstall_me(kill_self: bool) -> ResultType<()> {
+    run_cmds(get_uninstall(kill_self), false, "uninstall")
 }
 
 fn write_cmds(cmds: String, ext: &str, tip: &str) -> ResultType<std::path::PathBuf> {
@@ -1631,6 +1639,29 @@ pub fn is_elevated(process_id: Option<DWORD>) -> ResultType<bool> {
     }
 }
 
+#[inline]
+fn filter_foreground_window(process_id: DWORD) -> ResultType<bool> {
+    if let Ok(output) = std::process::Command::new("tasklist")
+        .args(vec![
+            "/SVC",
+            "/NH",
+            "/FI",
+            &format!("PID eq {}", process_id),
+        ])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+    {
+        let s = String::from_utf8_lossy(&output.stdout)
+            .to_string()
+            .to_lowercase();
+        Ok(["Taskmgr", "mmc", "regedit"]
+            .iter()
+            .any(|name| s.contains(&name.to_string().to_lowercase())))
+    } else {
+        bail!("run tasklist failed");
+    }
+}
+
 pub fn is_foreground_window_elevated() -> ResultType<bool> {
     unsafe {
         let mut process_id: DWORD = 0;
@@ -1638,10 +1669,15 @@ pub fn is_foreground_window_elevated() -> ResultType<bool> {
         if process_id == 0 {
             bail!("Failed to get processId, errno {}", GetLastError())
         }
-        is_elevated(Some(process_id))
+        let elevated = is_elevated(Some(process_id))?;
+        if elevated {
+            filter_foreground_window(process_id)
+        } else {
+            Ok(false)
+        }
     }
 }
-/*
+
 fn get_current_pid() -> u32 {
     unsafe { GetCurrentProcessId() }
 }
@@ -1649,7 +1685,7 @@ fn get_current_pid() -> u32 {
 pub fn get_double_click_time() -> u32 {
     unsafe { GetDoubleClickTime() }
 }
-*/
+
 fn wide_string(s: &str) -> Vec<u16> {
     use std::os::windows::prelude::OsStrExt;
     std::ffi::OsStr::new(s)
@@ -1695,9 +1731,15 @@ pub fn send_message_to_hnwd(
 }
 /*
 pub fn create_process_with_logon(user: &str, pwd: &str, exe: &str, arg: &str) -> ResultType<()> {
+    let last_error_table = HashMap::from([
+        (ERROR_LOGON_FAILURE, "The user name or password is incorrect."),
+        (ERROR_ACCESS_DENIED, "Access is denied.")
+    ]);
+
     unsafe {
-        let wuser = wide_string(user);
-        let wpc = wide_string("");
+        let user_split = user.split("\\").collect::<Vec<&str>>();
+        let wuser = wide_string(user_split.get(1).unwrap_or(&user));
+        let wpc = wide_string(user_split.get(0).unwrap_or(&""));
         let wpwd = wide_string(pwd);
         let cmd = if arg.is_empty() {
             format!("\"{}\"", exe)
@@ -1727,7 +1769,14 @@ pub fn create_process_with_logon(user: &str, pwd: &str, exe: &str, arg: &str) ->
                 &mut pi as *mut PROCESS_INFORMATION,
             )
         {
-            bail!("CreateProcessWithLogonW failed, errno={}", GetLastError());
+            let last_error = GetLastError();
+            bail!(
+                "CreateProcessWithLogonW failed : \"{}\", errno={}", 
+                last_error_table
+                    .get(&last_error)
+                    .unwrap_or(&"Unknown error"),
+                last_error
+            );
         }
     }
     return Ok(());
@@ -1737,7 +1786,7 @@ pub fn set_path_permission(dir: &PathBuf, permission: &str) -> ResultType<()> {
     std::process::Command::new("icacls")
         .arg(dir.as_os_str())
         .arg("/grant")
-        .arg(format!("Everyone:(OI)(CI){}", permission))
+        .arg(format!("*S-1-1-0:(OI)(CI){}", permission))
         .arg("/T")
         .spawn()?;
     Ok(())
@@ -1843,4 +1892,71 @@ pub fn user_accessible_folder() -> ResultType<PathBuf> {
         bail!("no vaild user accessible folder");
     }
     Ok(dir)
+}
+pub fn get_char_by_vk(vk: u32) -> Option<char> {
+    const BUF_LEN: i32 = 32;
+    let mut buff = [0_u16; BUF_LEN as usize];
+    let buff_ptr = buff.as_mut_ptr();
+    let len = unsafe {
+        let current_window_thread_id = GetWindowThreadProcessId(GetForegroundWindow(), null_mut());
+        let layout = GetKeyboardLayout(current_window_thread_id);
+
+        // refs: https://github.com/fufesou/rdev/blob/25a99ce71ab42843ad253dd51e6a35e83e87a8a4/src/windows/keyboard.rs#L115
+        let press_state = 129;
+        let mut state: [BYTE; 256] = [0; 256];
+        let shift_left = rdev::get_modifier(rdev::Key::ShiftLeft);
+        let shift_right = rdev::get_modifier(rdev::Key::ShiftRight);
+        if shift_left {
+            state[VK_LSHIFT as usize] = press_state;
+        }
+        if shift_right {
+            state[VK_RSHIFT as usize] = press_state;
+        }
+        if shift_left || shift_right {
+            state[VK_SHIFT as usize] = press_state;
+        }
+        ToUnicodeEx(vk, 0x00, &state as _, buff_ptr, BUF_LEN, 0, layout)
+    };
+    if len == 1 {
+        if let Some(chr) = String::from_utf16(&buff[..len as usize])
+            .ok()?
+            .chars()
+            .next()
+        {
+            if chr.is_control() {
+                return None;
+            } else {
+                Some(chr)
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_install_cert() {
+        println!(
+            "install driver cert: {:?}",
+            cert::install_cert("RustDeskIddDriver.cer")
+        );
+    }
+
+    #[test]
+    fn test_uninstall_cert() {
+        println!("uninstall driver certs: {:?}", cert::uninstall_certs());
+    }
+
+    #[test]
+    fn test_get_char_by_vk() {
+        let chr = get_char_by_vk(0x41); // VK_A
+        assert_eq!(chr, Some('a'));
+        let chr = get_char_by_vk(VK_ESCAPE as u32); // VK_ESC
+        assert_eq!(chr, None)
+    }
 }

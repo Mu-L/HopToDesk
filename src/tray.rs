@@ -124,7 +124,6 @@ pub fn make_tray() -> hbb_common::ResultType<()> {
     // https://github.com/tauri-apps/tray-icon/blob/dev/examples/tao.rs
     use hbb_common::anyhow::Context;
     use tao::event_loop::{ControlFlow, EventLoopBuilder};
-    //use tray_icon::{TrayEvent, TrayIconBuilder};
     use tray_icon::{
         menu::{Menu, MenuEvent, MenuItem},
         ClickEvent, TrayEvent, TrayIconBuilder,
@@ -194,4 +193,3 @@ pub fn make_tray() -> hbb_common::ResultType<()> {
         }
     });
 }
-

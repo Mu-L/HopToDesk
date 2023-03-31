@@ -1,7 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use libhoptodesk::*;
 
-#[cfg(any(target_os = "android", target_os = "ios"))]
+#[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
 fn main() {
     if !common::global_init() {
         return;
@@ -76,7 +77,7 @@ fn main() {
         if options.len() > 3 {
             remote_host = options[3].clone();
         }
-        /*
+/*        
         common::test_rendezvous_server();
         common::test_nat_type();
         let key = matches.value_of("key").unwrap_or("").to_owned();

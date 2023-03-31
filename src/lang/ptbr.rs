@@ -447,7 +447,6 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Strong", "Forte"),
         ("Switch Sides", ""),
         ("Please confirm if you want to share your desktop?", "Por favor confirme se você quer compartilhar sua area de trabalho"),
-        ("Closed as expected", "Fechado como esperado"),        
 		("Your Security Code", "Seu Código de Segurança"),
 		("Enable 2FA", "Ativar 2FA"),
 		("Enable Wake On LAN", "Ativar Wake On LAN"),		

@@ -26,8 +26,13 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+/// tag "main" for [Desktop Main Page] and [Mobile (Client and Server)] (the mobile don't need multiple windows, only one global event stream is needed)
+/// tag "cm" only for [Desktop CM Page]
 pub(super) const APP_TYPE_MAIN: &str = "main";
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(super) const APP_TYPE_CM: &str = "cm";
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub(super) const APP_TYPE_CM: &str = "main";
 pub(super) const APP_TYPE_DESKTOP_REMOTE: &str = "remote";
 pub(super) const APP_TYPE_DESKTOP_FILE_TRANSFER: &str = "file transfer";
 pub(super) const APP_TYPE_DESKTOP_PORT_FORWARD: &str = "port forward";
@@ -417,7 +422,14 @@ impl InvokeUiSession for FlutterHandler {
     // unused in flutter // TEST flutter
     fn confirm_delete_files(&self, _id: i32, _i: i32, _name: String) {}
 
-    fn override_file_confirm(&self, id: i32, file_num: i32, to: String, is_upload: bool) {
+    fn override_file_confirm(
+        &self,
+        id: i32,
+        file_num: i32,
+        to: String,
+        is_upload: bool,
+        is_identical: bool,
+    ) {
         self.push_event(
             "override_file_confirm",
             vec![
@@ -425,6 +437,7 @@ impl InvokeUiSession for FlutterHandler {
                 ("file_num", &file_num.to_string()),
                 ("read_path", &to),
                 ("is_upload", &is_upload.to_string()),
+                ("is_identical", &is_identical.to_string()),
             ],
         );
     }
@@ -496,6 +509,7 @@ impl InvokeUiSession for FlutterHandler {
                 ("features", &features),
                 ("current_display", &pi.current_display.to_string()),
                 ("resolutions", &resolutions),
+                ("platform_additions", &pi.platform_additions),
             ],
         );
     }
@@ -626,12 +640,14 @@ pub fn session_add(
     is_port_forward: bool,
     switch_uuid: &str,
     force_relay: bool,
+    password: String,
 ) -> ResultType<()> {
     let session_id = get_session_id(id.to_owned());
     LocalConfig::set_remote_id(&session_id);
 
     let session: Session<FlutterHandler> = Session {
         id: session_id.clone(),
+        password,
         server_keyboard_enabled: Arc::new(RwLock::new(true)),
         server_file_transfer_enabled: Arc::new(RwLock::new(true)),
         server_clipboard_enabled: Arc::new(RwLock::new(true)),

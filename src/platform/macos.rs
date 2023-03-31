@@ -484,8 +484,8 @@ pub fn start_os_service() {
     /* // mouse/keyboard works in prelogin now with launchctl asuser.
        // below can avoid multi-users logged in problem, but having its own below problem.
        // Not find a good way to start --cm without root privilege (affect file transfer).
-       // one way is to start with `launchctl asuser <uid> open -n -a /Applications/RustDesk.app/ --args --cm`,
-       // this way --cm is started with the user privilege, but we will have problem to start another RustDesk.app
+       // one way is to start with `launchctl asuser <uid> open -n -a /Applications/HopToDesk.app/ --args --cm`,
+       // this way --cm is started with the user privilege, but we will have problem to start another HopToDesk.app
        // with open in explorer.
         use std::sync::{
             atomic::{AtomicBool, Ordering},
@@ -581,7 +581,7 @@ fn check_main_window() -> bool {
     sys.refresh_processes();
     let app = format!("/Applications/{}.app", crate::get_app_name());
     let my_uid = sys
-        .process((std::process::id() as i32).into())
+        .process((std::process::id() as usize).into())
         .map(|x| x.user_id())
         .unwrap_or_default();
     for (_, p) in sys.processes().iter() {
@@ -667,9 +667,6 @@ pub fn change_resolution(name: &str, width: usize, height: usize) -> ResultType<
     Ok(())
 }
 
-
 pub fn check_super_user_permission() -> ResultType<bool> {
-    unsafe {
-        Ok(MacCheckAdminAuthorization() == YES)
-    }
+    unsafe { Ok(MacCheckAdminAuthorization() == YES) }
 }

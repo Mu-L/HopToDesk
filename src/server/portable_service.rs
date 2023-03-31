@@ -495,7 +495,7 @@ pub mod client {
                     bail!("Failed to run portable service process:{}", e);
                 }
             }
-            StartPara::Logon(username, password) => {
+            StartPara::Logon(_username, _password) => {
                 #[allow(unused_mut)]
                 let mut exe = std::env::current_exe()?.to_string_lossy().to_string();
                 #[cfg(feature = "flutter")]

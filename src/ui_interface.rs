@@ -10,17 +10,20 @@ use hbb_common::password_security;
 use hbb_common::{
     allow_err,
     config::{self, Config, LocalConfig, PeerConfig},
-    directories_next, log, sleep,
-    tokio::{self, sync::mpsc, time},
+    directories_next, log, tokio,
+};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use hbb_common::{
+    sleep,
+    tokio::{sync::mpsc, time},
 };
 
-#[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
 use hbb_common::{
     config::{RENDEZVOUS_PORT, RENDEZVOUS_TIMEOUT},
     futures::future::join_all,
     protobuf::Message as _,
     rendezvous_proto::*,
-    tcp::FramedStream,
+    tcp::FramedStream,    
 };
 /*
 #[cfg(feature = "flutter")]
@@ -28,7 +31,6 @@ use crate::hbbs_http::account;
 */
 use crate::{common::SOFTWARE_UPDATE_URL, ipc};
 
-#[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
 type Message = RendezvousMessage;
 
 pub type Children = Arc<Mutex<(bool, HashMap<(String, String), Child>)>>;
@@ -360,8 +362,8 @@ pub fn get_socks() -> Vec<String> {
 }
 
 #[inline]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn set_socks(proxy: String, username: String, password: String) {
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     ipc::set_socks(config::Socks5Server {
         proxy,
         username,
@@ -369,6 +371,9 @@ pub fn set_socks(proxy: String, username: String, password: String) {
     })
     .ok();
 }
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub fn set_socks(_: String, _: String, _: String) {}
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[inline]
@@ -416,7 +421,7 @@ pub fn is_installed_lower_version() -> bool {
         return a > b;
     }
 }
-
+/*
 #[inline]
 pub fn closing(x: i32, y: i32, w: i32, h: i32) {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -439,6 +444,7 @@ pub fn get_size() -> Vec<i32> {
     v.push(s.3);
     v
 }
+*/
 
 #[inline]
 pub fn get_mouse_time() -> f64 {
@@ -638,12 +644,12 @@ pub fn modify_default_login() -> String {
     #[cfg(not(target_os = "linux"))]
     return "".to_owned();
 }
-
+/*
 #[inline]
 pub fn get_software_update_url() -> String {
     SOFTWARE_UPDATE_URL.lock().unwrap().clone()
 }
-
+*/
 #[inline]
 pub fn get_new_version() -> String {
     hbb_common::get_version_from_url(&*SOFTWARE_UPDATE_URL.lock().unwrap())
@@ -713,7 +719,7 @@ pub fn remove_discovered(id: String) {
 
 #[inline]
 pub fn get_uuid() -> String {
-    base64::encode(hbb_common::get_uuid())
+    crate::encode64(hbb_common::get_uuid())
 }
 
 #[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
@@ -767,20 +773,50 @@ pub fn get_langs() -> String {
 #[inline]
 pub fn default_video_save_directory() -> String {
     let appname = crate::get_app_name();
+    // ui process can show it correctly Once vidoe process created it.
+    let try_create = |path: &std::path::Path| {
+        if !path.exists() {
+            std::fs::create_dir_all(path).ok();
+        }
+        if path.exists() {
+            path.to_string_lossy().to_string()
+        } else {
+            "".to_string()
+        }
+    };
 
     #[cfg(any(target_os = "android", target_os = "ios"))]
     if let Ok(home) = config::APP_HOME_DIR.read() {
         let mut path = home.to_owned();
         path.push_str("/HopToDesk/ScreenRecord");
-        return path;
+        let dir = try_create(&std::path::Path::new(&path));
+        if !dir.is_empty() {
+            return dir;
+        }
     }
 
     if let Some(user) = directories_next::UserDirs::new() {
         if let Some(video_dir) = user.video_dir() {
-            return video_dir.join(appname).to_string_lossy().to_string();
+            let dir = try_create(&video_dir.join(&appname));
+            if !dir.is_empty() {
+                return dir;
+            }
+            if video_dir.exists() {
+                return video_dir.to_string_lossy().to_string();
+            }
+        }
+        if let Some(desktop_dir) = user.desktop_dir() {
+            if desktop_dir.exists() {
+                return desktop_dir.to_string_lossy().to_string();
+            }
+        }
+        let home = user.home_dir();
+        if home.exists() {
+            return home.to_string_lossy().to_string();
         }
     }
 
+    // same order as above
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     if let Some(home) = crate::platform::get_active_user_home() {
         let name = if cfg!(target_os = "macos") {
@@ -788,12 +824,31 @@ pub fn default_video_save_directory() -> String {
         } else {
             "Videos"
         };
-        return home.join(name).join(appname).to_string_lossy().to_string();
+        let video_dir = home.join(name);
+        let dir = try_create(&video_dir.join(&appname));
+        if !dir.is_empty() {
+            return dir;
+        }
+        if video_dir.exists() {
+            return video_dir.to_string_lossy().to_string();
+        }
+        let desktop_dir = home.join("Desktop");
+        if desktop_dir.exists() {
+            return desktop_dir.to_string_lossy().to_string();
+        }
+        if home.exists() {
+            return home.to_string_lossy().to_string();
+        }
     }
 
     if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            return dir.join("videos").to_string_lossy().to_string();
+        if let Some(parent) = exe.parent() {
+            let dir = try_create(&parent.join("videos"));
+            if !dir.is_empty() {
+                return dir;
+            }
+            // basically exist
+            return parent.to_string_lossy().to_string();
         }
     }
     "".to_owned()
@@ -835,10 +890,10 @@ pub fn is_root() -> bool {
 pub fn check_super_user_permission() -> bool {
     #[cfg(feature = "flatpak")]
     return true;
-    #[cfg(any(windows, target_os = "linux"))]
+    #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
     return crate::platform::check_super_user_permission().unwrap_or(false);
-    #[cfg(not(any(windows, target_os = "linux")))]
-    true
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+    return true;
 }
 
 #[allow(dead_code)]
@@ -864,14 +919,15 @@ pub fn check_zombie(children: Children) {
     }
 }
 
+// Make sure `SENDER` is inited here.
+#[inline]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn start_option_status_sync() {
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    {
-        let _sender = SENDER.lock().unwrap();
-    }
+    let _sender = SENDER.lock().unwrap();
 }
 
 // not call directly
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn check_connect_status(reconnect: bool) -> mpsc::UnboundedSender<ipc::Data> {
     let (tx, rx) = mpsc::unbounded_channel::<ipc::Data>();
     std::thread::spawn(move || check_connect_status_(reconnect, rx));
@@ -908,6 +964,7 @@ pub fn get_user_default_option(key: String) -> String {
 
 // notice: avoiding create ipc connecton repeatly,
 // because windows named pipe has serious memory leak issue.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tokio::main(flavor = "current_thread")]
 async fn check_connect_status_(reconnect: bool, rx: mpsc::UnboundedReceiver<ipc::Data>) {
     let mut key_confirmed = false;
@@ -987,12 +1044,9 @@ pub(crate) async fn send_to_cm(data: &ipc::Data) {
     }
 }
 
-#[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
 const INVALID_FORMAT: &'static str = "Invalid format";
-#[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
 const UNKNOWN_ERROR: &'static str = "Unknown error";
 
-#[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
 #[tokio::main(flavor = "current_thread")]
 pub async fn change_id_shared(id: String, old_id: String) -> &'static str {
     if !hbb_common::is_valid_custom_id(&id) {
@@ -1002,7 +1056,7 @@ pub async fn change_id_shared(id: String, old_id: String) -> &'static str {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let uuid = machine_uid::get().unwrap_or("".to_owned());
     #[cfg(any(target_os = "android", target_os = "ios"))]
-    let uuid = base64::encode(hbb_common::get_uuid());
+    let uuid = crate::encode64(hbb_common::get_uuid());
 
     if uuid.is_empty() {
         log::error!("Failed to change id, uuid is_empty");
@@ -1042,7 +1096,6 @@ pub async fn change_id_shared(id: String, old_id: String) -> &'static str {
     err
 }
 
-#[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
 async fn check_id(
     rendezvous_server: String,
     old_id: String,

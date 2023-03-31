@@ -376,7 +376,8 @@ pub mod sockets {
                     log::info!("Writer process exited successfully.")
                 };
 
-                let write_handle = tokio::spawn(write_fut);
+                //let write_handle = tokio::spawn(write_fut);
+				tokio::spawn(write_fut);
                 log::info!("Spawned writer");
                 let read_handle = tokio::spawn(read_fut);
                 log::info!("Spawned reader");
@@ -520,7 +521,7 @@ pub mod ui {
     struct Enable2FA;
 
     impl EventHandler for Enable2FA {
-        fn on_script_call(&mut self, root: HELEMENT, name: &str, args: &[Value]) -> Option<Value> {
+        fn on_script_call(&mut self, _root: HELEMENT, name: &str, args: &[Value]) -> Option<Value> {
             match name {
                 "is_2fa_enabled" => Some(Value::from(is_2fa_enabled())),
                 "enable_2fa" => {
@@ -551,7 +552,7 @@ pub mod ui {
     pub struct Manage2FA;
 
     impl EventHandler for Manage2FA {
-        fn on_script_call(&mut self, root: HELEMENT, name: &str, args: &[Value]) -> Option<Value> {
+        fn on_script_call(&mut self, _root: HELEMENT, name: &str, args: &[Value]) -> Option<Value> {
             match name {
                 "is_2fa_enabled" => Some(Value::from(is_2fa_enabled())),
 
