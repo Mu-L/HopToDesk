@@ -299,8 +299,7 @@ async fn create_websocket_(
             .build()?,
     ));
 
-    let (websocket, _) =
-        tokio_tungstenite::connect_async_tls_with_config(&uri, None, tls_opts).await?;
+    let (websocket, _) = tokio_tungstenite::connect_async_tls_with_config(&uri, None, tls_opts).await?;
 
     //Normally check for valid certificate
     //let (websocket, _) = tokio_tungstenite::client_async_tls(&uri, socket).await?;

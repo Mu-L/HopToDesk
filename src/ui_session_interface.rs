@@ -6,7 +6,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc, Mutex, RwLock,
 };
-use std::time::{SystemTime};
+use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -243,12 +243,13 @@ impl<T: InvokeUiSession> Session<T> {
     }
 
     pub fn get_audit_server(&self, typ: String) -> String {
+        return "".to_owned();
+        /* 
         if self.lc.read().unwrap().conn_id <= 0
             || LocalConfig::get_option("access_token").is_empty()
         {
             return "".to_owned();
         }
-        /* 
         crate::get_audit_server(
             Config::get_option("api-server"),
             Config::get_option("custom-rendezvous-server"),
@@ -256,7 +257,7 @@ impl<T: InvokeUiSession> Session<T> {
         )
         */
         //TODO: the above will be added after compilation
-        "".to_owned()
+        //"".to_owned()
     }
  
     pub fn send_note(&self, note: String) {
@@ -715,6 +716,7 @@ impl<T: InvokeUiSession> Session<T> {
         let id = self.get_id();
         if !remember {
             //crate::ipc::set_password_for_file_transfer(password.clone(), id.clone());
+			log::info!("Logging in...");
 			match crate::ipc::set_password_for_file_transfer(password.clone(), id.clone()) {
 				Ok(()) => {},
 				Err(e) => log::info!("Error setting password for file transfer {e}"),
@@ -938,6 +940,7 @@ impl<T: InvokeUiSession> Interface for Session<T> {
     }
 
     fn msgbox(&self, msgtype: &str, title: &str, text: &str, link: &str) {
+		log::info!("Message box");
         let retry = check_if_retry(msgtype, title, text);
         self.ui_handler.msgbox(msgtype, title, text, link, retry);
     }
@@ -1175,13 +1178,15 @@ pub async fn io_loop<T: InvokeUiSession>(handler: Session<T>) {
     let frame_count = Arc::new(AtomicUsize::new(0));
     let frame_count_cl = frame_count.clone();
     let ui_handler = handler.ui_handler.clone();
-    let (video_sender, audio_sender) = start_video_audio_threads(move |data: &mut Vec<u8>| {
+    let (video_sender, audio_sender, video_queue) =
+        start_video_audio_threads(move |data: &mut Vec<u8>| {
         frame_count_cl.fetch_add(1, Ordering::Relaxed);
         ui_handler.on_rgba(data);
     });
 
     let mut remote = Remote::new(
         handler,
+        video_queue,
         video_sender,
         audio_sender,
         receiver,
@@ -1208,6 +1213,9 @@ async fn start_one_port_forward<T: InvokeUiSession>(
         port,
         handler.clone(),
         receiver,
+        handler.lc.clone(),
+        remote_host,
+        remote_port,
     )
     .await
     {

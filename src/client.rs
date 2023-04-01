@@ -14,6 +14,7 @@ use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
     Device, Host, StreamConfig,
 };
+use crossbeam_queue::ArrayQueue;
 use magnum_opus::{Channels::*, Decoder as AudioDecoder};
 #[cfg(not(any(target_os = "android", target_os = "linux")))]
 use ringbuf::{ring_buffer::RbBase, Rb};
@@ -68,7 +69,9 @@ pub mod io_loop;
 
 pub const MILLI1: Duration = Duration::from_millis(1);
 pub const SEC30: Duration = Duration::from_secs(30);
+pub const VIDEO_QUEUE_SIZE: usize = 120;
 
+/// Client of the remote desktop.
 pub struct Client;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -257,7 +260,6 @@ impl Client {
             Err(err) => {
                 // Refresh API
 				hbb_common::api::erase_api().await;
-
                 let err_str = err.to_string();
                 if err_str.starts_with("Failed") {
                     bail!(err_str + ": Please try later");
@@ -401,7 +403,6 @@ impl Client {
         let mut peer_addr = Config::get_any_listen_addr(true);
         let mut peer_public_addr = peer_addr;
         let mut peer_nat_type = NatType::UNKNOWN_NAT;
-
         let my_nat_type = crate::get_nat_type(100).await;
         for i in 1..=3 {
             log::info!("#{} punch attempt with {}, id: {}", i, my_addr, peer);
@@ -505,36 +506,6 @@ impl Client {
 		Ok((conn, relay))
 	}
 
-/*
-    async fn connect_over_turn(
-        peer_id: &str,
-        sender: soketto::Sender<Compat<TcpStream>>,
-        peer_public_addr: SocketAddr,
-    ) -> ResultType<(FramedStream, Arc<impl webrtc_util::Conn>)> {
-        let start = std::time::Instant::now();
-        log::info!("start connecting peer via turn servers");
-        let (relay, conn) = match turn_client::connect_over_turn_servers(
-            &peer_id,
-            peer_public_addr,
-            sender,
-        )
-        .await
-        {
-            Ok((relay_conn, stream)) => {
-                log::info!("connect successfully to peer via TURN servers!");
-                Ok((relay_conn, stream))
-            }
-            Err(err) => {
-                log::warn!("attempt to connect via turn servers faield: {}", err,);
-                Err(err)
-            }
-        }?;
-        let time_used = start.elapsed().as_millis() as u64;
-        log::info!("{}ms used to establish connection", time_used);
-        //Self::secure_connection(peer_id, id_pk, &mut conn).await?;
-        Ok((conn, relay))
-    }
-*/
     async fn connect_directly(peer_id: &str, peer: &Peer) -> ResultType<FramedStream> {
         let connect_timeout = peer.connect_timeout(peer_id).await;
         log::info!("start connecting peer directly: {}", peer.local_addr);
@@ -1725,8 +1696,9 @@ impl LoginConfigHandler {
 
 /// Media data.
 pub enum MediaData {
-    VideoFrame(VideoFrame),
-    AudioFrame(AudioFrame),
+    VideoQueue,
+    VideoFrame(Box<VideoFrame>),
+    AudioFrame(Box<AudioFrame>),
     AudioFormat(AudioFormat),
     Reset,
     RecordScreen(bool, i32, i32, String),
@@ -1740,11 +1712,15 @@ pub type MediaSender = mpsc::Sender<MediaData>;
 /// # Arguments
 ///
 /// * `video_callback` - The callback for video frame. Being called when a video frame is ready.
-pub fn start_video_audio_threads<F>(video_callback: F) -> (MediaSender, MediaSender)
+pub fn start_video_audio_threads<F>(
+    video_callback: F,
+) -> (MediaSender, MediaSender, Arc<ArrayQueue<VideoFrame>>)
 where
     F: 'static + FnMut(&mut Vec<u8>) + Send,
 {
     let (video_sender, video_receiver) = mpsc::channel::<MediaData>();
+    let video_queue = Arc::new(ArrayQueue::<VideoFrame>::new(VIDEO_QUEUE_SIZE));
+    let video_queue_cloned = video_queue.clone();
     let mut video_callback = video_callback;
 
     std::thread::spawn(move || {
@@ -1753,8 +1729,15 @@ where
             if let Ok(data) = video_receiver.recv() {
                 match data {
                     MediaData::VideoFrame(vf) => {
-                        if let Ok(true) = video_handler.handle_frame(vf) {
+                        if let Ok(true) = video_handler.handle_frame(*vf) {
                             video_callback(&mut video_handler.rgb);
+                        }
+                    }
+                    MediaData::VideoQueue => {
+                        if let Some(vf) = video_queue.pop() {
+                            if let Ok(true) = video_handler.handle_frame(vf) {
+                                video_callback(&mut video_handler.rgb);
+                            }
                         }
                     }
                     MediaData::Reset => {
@@ -1772,7 +1755,7 @@ where
         log::info!("Video decoder loop exits");
     });
     let audio_sender = start_audio_thread();
-    return (video_sender, audio_sender);
+    return (video_sender, audio_sender, video_queue_cloned);
 }
 
 /// Start an audio thread
@@ -1785,7 +1768,7 @@ pub fn start_audio_thread() -> MediaSender {
             if let Ok(data) = audio_receiver.recv() {
                 match data {
                     MediaData::AudioFrame(af) => {
-                        audio_handler.handle_frame(af);
+                        audio_handler.handle_frame(*af);
                     }
                     MediaData::AudioFormat(f) => {
                         log::debug!("recved audio format, sample rate={}", f.sample_rate);

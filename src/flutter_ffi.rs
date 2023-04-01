@@ -1364,7 +1364,7 @@ pub fn send_url_scheme(_url: String) {
 
 #[cfg(target_os = "android")]
 pub mod server_side {
-    use hbb_common::log;
+    use hbb_common::{config, log};
     use jni::{
         objects::{JClass, JString},
         sys::jstring,

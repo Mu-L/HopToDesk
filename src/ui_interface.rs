@@ -517,16 +517,6 @@ pub fn store_fav(fav: Vec<String>) {
 }
 
 #[inline]
-pub fn get_recent_sessions() -> Vec<(String, SystemTime, PeerConfig)> {
-    PeerConfig::peers()
-}
-
-#[inline]
-pub fn remove_peer(id: String) {
-    PeerConfig::remove(&id);
-}
-
-#[inline]
 pub fn new_remote(id: String, remote_type: String, password: String) {
     let mut lock = CHILDREN.lock().unwrap();
     let config = PeerConfig::load(&id.clone());
@@ -624,17 +614,17 @@ pub fn is_login_wayland() -> bool {
 }
 
 #[inline]
-pub fn fix_login_wayland() {
-    #[cfg(target_os = "linux")]
-    crate::platform::linux::fix_login_wayland();
-}
-
-#[inline]
 pub fn current_is_wayland() -> bool {
     #[cfg(target_os = "linux")]
     return crate::platform::linux::current_is_wayland();
     #[cfg(not(target_os = "linux"))]
     return false;
+}
+
+#[inline]
+pub fn fix_login_wayland() {
+    #[cfg(target_os = "linux")]
+    crate::platform::linux::fix_login_wayland();
 }
 
 #[inline]
@@ -744,6 +734,7 @@ pub fn post_request(url: String, body: String, header: String) {
 }
 
 #[inline]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn get_request(url: String, header: String) {
     *ASYNC_JOB_STATUS.lock().unwrap() = " ".to_owned();
     std::thread::spawn(move || {
