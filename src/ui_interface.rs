@@ -421,7 +421,7 @@ pub fn is_installed_lower_version() -> bool {
         return a > b;
     }
 }
-/*
+
 #[inline]
 pub fn closing(x: i32, y: i32, w: i32, h: i32) {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -444,7 +444,6 @@ pub fn get_size() -> Vec<i32> {
     v.push(s.3);
     v
 }
-*/
 
 #[inline]
 pub fn get_mouse_time() -> f64 {

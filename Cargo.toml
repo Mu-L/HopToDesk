@@ -1,6 +1,6 @@
 [package]
 name = "hoptodesk"
-version = "1.40.1"
+version = "1.40.2"
 authors = ["hoptodesk <info@hoptodesk.com>"]
 edition = "2021"
 build= "build.rs"
@@ -86,7 +86,7 @@ ringbuf = "0.3"
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 machine-uid = "0.2"
 mac_address = "1.1"
-sciter-rs = { git = "https://github.com/open-trade/rust-sciter", branch = "dyn" }
+sciter-rs = { git = "https://github.com/open-trade/rust-sciter", branch = "dyn_x86" }
 sys-locale = "0.2"
 enigo = { path = "libs/enigo", features = [ "with_serde" ] }
 clipboard = { path = "libs/clipboard" }

@@ -3038,7 +3038,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hoptodesk"
-version = "1.40.1"
+version = "1.40.2"
 dependencies = [
  "android_logger 0.11.3",
  "arboard",
@@ -5653,7 +5653,7 @@ dependencies = [
 [[package]]
 name = "sciter-rs"
 version = "0.5.57"
-source = "git+https://github.com/open-trade/rust-sciter?branch=dyn#82025b9ba77d5ae14543009444033036dbe25917"
+source = "git+https://github.com/open-trade/rust-sciter?branch=dyn_x86#2096f4dbf92503f2391db3a38cbf36dac4d190f8"
 dependencies = [
  "lazy_static",
  "libc",
