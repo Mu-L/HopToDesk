@@ -5,7 +5,7 @@ use std::{
     process::Child,
     sync::{Arc, Mutex},
 };
-use tokio::time::{Duration};
+//use tokio::time::{Duration};
 use sciter::Value;
 
 use hbb_common::{
@@ -809,11 +809,15 @@ struct Version {
     none: String,
 }
 
-async fn get_version_() -> String {
-    match hbb_common::api::call_api().await {
+async fn get_version_(refresh_api: bool) -> String {
+	if refresh_api {
+		hbb_common::api::erase_api().await;
+	}
+	
+	match hbb_common::api::call_api().await {
         Ok(v) => {
-            let body =  serde_json::from_value::<Version>(v).expect("Could not get api_version.");
-            
+			let body =  serde_json::from_value::<Version>(v).expect("Could not get api_version.");
+           
             if cfg!(windows) {
 				return body.winversion
             } else if cfg!(macos) {
@@ -842,13 +846,13 @@ fn copy_text(text: &str) {
 pub fn set_version_sync() {
     let rt = Runtime::new().unwrap();
     rt.block_on(async {
-        Config::set_option("api_version".to_owned(), get_version_().await);
+        Config::set_option("api_version".to_owned(), get_version_(true).await);
     });
 }
 
 #[tokio::main]
 pub async fn set_version() {
-    Config::set_option("api_version".to_owned(), get_version_().await)
+    Config::set_option("api_version".to_owned(), get_version_(false).await)
 }
 
 #[cfg(not(target_os = "linux"))]

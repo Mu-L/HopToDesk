@@ -1,8 +1,9 @@
+use futures::{SinkExt};
 use hbb_common::{
     bail, lazy_static, log,
     tcp::FramedStream,
     tokio::{self, net::TcpStream, sync::mpsc},
-    tokio_util::compat::Compat,
+    //tokio_util::compat::Compat,
     ResultType,
 };
 use std::sync::Mutex;
@@ -11,6 +12,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+use tokio_tungstenite::tungstenite::Message as WsMessage;
 use turn::client::{tcp::TcpSplit, ClientConfig};
 use webrtc_util::conn::Conn;
 
@@ -45,7 +47,7 @@ async fn get_turn_servers() -> Option<Vec<TurnConfig>> {
 pub async fn connect_over_turn_servers(
     peer_id: &str,
     peer_addr: SocketAddr,
-    sender: soketto::Sender<Compat<TcpStream>>,
+    sender: crate::client::WsSender,
 ) -> ResultType<(Arc<impl Conn>, FramedStream)> {
     let turn_servers = match get_turn_servers().await {
         Some(servers) => servers,
@@ -70,7 +72,9 @@ pub async fn connect_over_turn_servers(
                     Ok(relay) => {
                         let conn = relay.0;
                         let relay_addr = relay.1;
-                        if let Ok(stream) = establish_over_relay(&peer_id, turn_client, relay_addr, sender).await {
+                        if let Ok(stream) =
+                            establish_over_relay(&peer_id, turn_client, relay_addr, sender).await
+                        {
                             if tx.send(Some((conn, stream))).await.is_err() {
                                 log::warn!("failed to send result to channel");
                             }
@@ -102,21 +106,24 @@ pub async fn connect_over_turn_servers(
     bail!("Failed to connect via relay server: all candidates are failed!")
 }
 
-
 async fn establish_over_relay(
     peer_id: &str,
     turn_client: TurnClient,
     relay_addr: SocketAddr,
-    sender: Arc<tokio::sync::Mutex<soketto::Sender<Compat<TcpStream>>>>,
+    sender: Arc<tokio::sync::Mutex<crate::client::WsSender>>,
 ) -> ResultType<FramedStream> {
     let mut sender = sender.lock().await;
     sender
-        .send_text(&rendezvous_messages::RelayConnection::new(peer_id, relay_addr).to_json())
+        .send(WsMessage::Text(
+            rendezvous_messages::RelayConnection::new(peer_id, relay_addr).to_json(),
+        ))
         .await?;
     match turn_client.wait_new_connection().await {
         Ok(stream) => {
             sender
-                .send_text(&rendezvous_messages::RelayReady::new(peer_id).to_json())
+                .send(WsMessage::Text(
+                    rendezvous_messages::RelayReady::new(peer_id).to_json(),
+                ))
                 .await?;
             return Ok(stream);
         }
@@ -147,24 +154,24 @@ pub async fn get_public_ip() -> Option<SocketAddr> {
     for config in servers {
         let tx = tx.clone();
         tokio::spawn(async move {
-            log::info!("start retrieve public ip via: {}", config.addr);
+            //log::info!("start retrieve public ip via: {}", config.addr);
             let turn_addr = config.addr.clone();
             if let Ok(turn_client) = TurnClient::new(config).await {
                 if let Ok(addr) = turn_client.get_public_ip().await {
                     //tx.send(Some(addr)).await;
-					match tx.send(Some(addr)).await {
-						Ok(()) => {},
-						Err(_) => {},
-					}
+                    match tx.send(Some(addr)).await {
+                        Ok(()) => {}
+                        Err(_) => {}
+                    }
 
                     log::info!("got public ip: {} via {}", addr, turn_addr);
                     return;
                 }
             }
-			match tx.send(None).await {
-				Ok(()) => {},
-				Err(_) => {},
-			}
+            match tx.send(None).await {
+                Ok(()) => {}
+                Err(_) => {}
+            }
             //tx.send(None).await;
         });
     }

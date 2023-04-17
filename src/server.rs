@@ -284,7 +284,7 @@ async fn create_relay_connection_(
     )
     .await?;
     let mut msg_out = RendezvousMessage::new();
-    let licence_key = crate::get_key(true).await;
+    let licence_key = ""; //crate::get_key(true).await;
     msg_out.set_request_relay(RequestRelay {
         licence_key,
         uuid,
@@ -388,7 +388,7 @@ pub fn check_zombie() {
 /// Otherwise, client will check if there's already a server and start one if not.
 #[cfg(any(target_os = "android", target_os = "ios"))]
 #[tokio::main]
-pub async fn start_server(is_server: bool) {
+pub async fn start_server(_is_server: bool) {
     crate::RendezvousMediator::start_all().await;
 }
 

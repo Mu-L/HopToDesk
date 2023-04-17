@@ -210,24 +210,16 @@ impl<T: InvokeUiSession> Session<T> {
         true
     }
 
-    pub fn supported_hwcodec(&self) -> (bool, bool) {
-        #[cfg(any(feature = "hwcodec", feature = "mediacodec"))]
-        {
-            let decoder = scrap::codec::Decoder::video_codec_state(&self.id);
-            let mut h264 = decoder.score_h264 > 0;
-            let mut h265 = decoder.score_h265 > 0;
-            let (encoding_264, encoding_265) = self
-                .lc
-                .read()
-                .unwrap()
-                .supported_encoding
-                .unwrap_or_default();
-            h264 = h264 && encoding_264;
-            h265 = h265 && encoding_265;
-            return (h264, h265);
-        }
-        #[allow(unreachable_code)]
-        (false, false)
+    pub fn alternative_codecs(&self) -> (bool, bool) {
+        let decoder = scrap::codec::Decoder::supported_decodings(None);
+        //let mut vp8 = decoder.ability_vp8 > 0;
+        let mut h264 = decoder.ability_h264 > 0;
+        let mut h265 = decoder.ability_h265 > 0;
+        let enc = &self.lc.read().unwrap().supported_encoding;
+        //vp8 = vp8 && enc.vp8;
+        h264 = h264 && enc.h264;
+        h265 = h265 && enc.h265;
+        (h264, h265)
     }
 
     pub fn change_prefer_codec(&self) {
@@ -242,7 +234,7 @@ impl<T: InvokeUiSession> Session<T> {
         self.send(Data::Message(msg));
     }
 
-    pub fn get_audit_server(&self, typ: String) -> String {
+    pub fn get_audit_server(&self, _typ: String) -> String {
         return "".to_owned();
         /* 
         if self.lc.read().unwrap().conn_id <= 0
@@ -538,22 +530,22 @@ impl<T: InvokeUiSession> Session<T> {
     pub fn handle_flutter_key_event(
         &self,
         _name: &str,
-        keycode: i32,
-        scancode: i32,
+        platform_code: i32,
+        position_code: i32,
         lock_modes: i32,
         down_or_up: bool,
     ) {
-        if scancode < 0 || keycode < 0 {
+        if position_code < 0 || platform_code < 0 {
             return;
         }
-        let keycode: KeyCode = keycode as _;
-        let scancode: u32 = scancode as _;
+        let platform_code: u32 = platform_code as _;
+        let position_code: KeyCode = position_code as _;
 
         #[cfg(not(target_os = "windows"))]
-        let key = rdev::key_from_code(keycode) as rdev::Key;
+        let key = rdev::key_from_code(position_code) as rdev::Key;
         // Windows requires special handling
         #[cfg(target_os = "windows")]
-        let key = rdev::get_win_key(keycode, scancode);
+        let key = rdev::get_win_key(platform_code, position_code);
 
         let event_type = if down_or_up {
             KeyPress(key)
@@ -563,9 +555,9 @@ impl<T: InvokeUiSession> Session<T> {
         let event = Event {
             time: SystemTime::now(),
             unicode: None,
-            platform_code: keycode as _,
-            position_code: scancode as _,
-            event_type: event_type,
+            platform_code,
+            position_code: position_code as _,
+            event_type,
         };
         keyboard::client::process_event(&event, Some(lock_modes));
     }
@@ -648,13 +640,13 @@ impl<T: InvokeUiSession> Session<T> {
         }
     }
 
-    pub fn reconnect(&self, force_relay: bool) {
-        self.send(Data::Close);
+    pub fn reconnect(&self) {
+		self.send(Data::Close);
         let cloned = self.clone();
         // override only if true
-        if true == force_relay {
-            cloned.lc.write().unwrap().force_relay = true;
-        }
+        //if true == force_relay {
+        //    cloned.lc.write().unwrap().force_relay = true;
+        //}
         let mut lock = self.thread.lock().unwrap();
         lock.take().map(|t| t.join());
         *lock = Some(std::thread::spawn(move || {
@@ -712,7 +704,13 @@ impl<T: InvokeUiSession> Session<T> {
         fs::get_string(&path)
     }
 
-    pub fn login(&self, password: String, remember: bool) {
+    pub fn login(
+        &self,
+        os_username: String,
+        os_password: String,
+        password: String,
+        remember: bool,
+    ) {
         let id = self.get_id();
         if !remember {
             //crate::ipc::set_password_for_file_transfer(password.clone(), id.clone());
@@ -722,7 +720,7 @@ impl<T: InvokeUiSession> Session<T> {
 				Err(e) => log::info!("Error setting password for file transfer {e}"),
 			}
         }
-        self.send(Data::Login((password, remember)));
+        self.send(Data::Login((os_username, os_password, password, remember)));
     }
 
     pub fn new_rdp(&self) {
@@ -730,7 +728,8 @@ impl<T: InvokeUiSession> Session<T> {
     }
 
     pub fn close(&self) {
-        self.send(Data::Close);
+        log::info!("Click close");
+		self.send(Data::Close);
     }
 
     pub fn load_last_jobs(&self) {
@@ -940,7 +939,7 @@ impl<T: InvokeUiSession> Interface for Session<T> {
     }
 
     fn msgbox(&self, msgtype: &str, title: &str, text: &str, link: &str) {
-		log::info!("Message box");
+		//log::info!("Message box");
         let retry = check_if_retry(msgtype, title, text);
         self.ui_handler.msgbox(msgtype, title, text, link, retry);
     }
@@ -955,7 +954,7 @@ impl<T: InvokeUiSession> Interface for Session<T> {
         if pi.current_display as usize >= pi.displays.len() {
             pi.current_display = 0;
         }
-        if get_version_number(&pi.version) < get_version_number("1.1.10") {
+        if get_version_number(&pi.version) < get_version_number("1.33.3") {
             self.set_permission("restart", false);
         }
         if self.is_file_transfer() {
@@ -1015,8 +1014,23 @@ impl<T: InvokeUiSession> Interface for Session<T> {
         handle_hash(self.lc.clone(), pass, hash, self, peer).await;
     }
 
-    async fn handle_login_from_ui(&mut self, password: String, remember: bool, peer: &mut Stream) {
-        handle_login_from_ui(self.lc.clone(), password, remember, peer).await;
+    async fn handle_login_from_ui(
+        &mut self,
+        os_username: String,
+        os_password: String,
+        password: String,
+        remember: bool,
+        peer: &mut Stream,
+    ) {
+        handle_login_from_ui(
+            self.lc.clone(),
+            os_username,
+            os_password,
+            password,
+            remember,
+            peer,
+        )
+        .await;
     }
 
     async fn handle_test_delay(&mut self, t: TestDelay, peer: &mut Stream) {
@@ -1086,7 +1100,7 @@ pub async fn io_loop<T: InvokeUiSession>(handler: Session<T>) {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let (sender, mut receiver) = mpsc::unbounded_channel::<Data>();
     *handler.sender.write().unwrap() = Some(sender.clone());
-    let options = crate::ipc::get_options_async().await;
+    let _options = crate::ipc::get_options_async().await;
     let key = ""; //options.remove("key").unwrap_or("".to_owned());
     let token = ""; // LocalConfig::get_option("access_token");
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -1178,7 +1192,7 @@ pub async fn io_loop<T: InvokeUiSession>(handler: Session<T>) {
     let frame_count = Arc::new(AtomicUsize::new(0));
     let frame_count_cl = frame_count.clone();
     let ui_handler = handler.ui_handler.clone();
-    let (video_sender, audio_sender, video_queue) =
+    let (video_sender, audio_sender, video_queue, decode_fps) =
         start_video_audio_threads(move |data: &mut Vec<u8>| {
         frame_count_cl.fetch_add(1, Ordering::Relaxed);
         ui_handler.on_rgba(data);
@@ -1192,6 +1206,7 @@ pub async fn io_loop<T: InvokeUiSession>(handler: Session<T>) {
         receiver,
         sender,
         frame_count,
+        decode_fps,
     );
     remote.io_loop(&key, &token).await;
     remote.sync_jobs_status_to_local().await;

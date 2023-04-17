@@ -823,7 +823,7 @@ class CanScreenRecording: Reactor.Component {
             <div>{translate('Permissions')}</div>
             <div>{translate('config_screen')}</div>
             <div #screen-recording .link>{translate('Configure')}</div>
-            <div #help-me .link>{translate('Help')}</div>
+            <div #help-me style="display:none" .link>{translate('Help')}</div>
         </div>;
     }
 
@@ -1244,11 +1244,11 @@ if (handler.requires_update()) {
 
 //hophere update
 function updateCheck() {
-    self.timer(3600s, function() {
+	self.timer(3600s, function() {
 		handler.set_version_sync();
 		var el = $(#launch-update);
 		if (handler.requires_update()) {
-            el.style.set{display: "inline-block"};
+			el.style.set{display: "inline-block"};
 		} else {
 			el.style.set{display: "none"};
 		}

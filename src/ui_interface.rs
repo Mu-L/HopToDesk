@@ -19,11 +19,11 @@ use hbb_common::{
 };
 
 use hbb_common::{
-    config::{RENDEZVOUS_PORT, RENDEZVOUS_TIMEOUT},
-    futures::future::join_all,
+    //config::{RENDEZVOUS_PORT, RENDEZVOUS_TIMEOUT},
+    //futures::future::join_all,
     protobuf::Message as _,
-    rendezvous_proto::*,
-    tcp::FramedStream,    
+    //rendezvous_proto::*,
+    //tcp::FramedStream,    
 };
 /*
 #[cfg(feature = "flutter")]
@@ -31,7 +31,7 @@ use crate::hbbs_http::account;
 */
 use crate::{common::SOFTWARE_UPDATE_URL, ipc};
 
-type Message = RendezvousMessage;
+//type Message = RendezvousMessage;
 
 pub type Children = Arc<Mutex<(bool, HashMap<(String, String), Child>)>>;
 type Status = (i32, bool, i64, String); // (status_num, key_confirmed, mouse_time, id)
@@ -78,10 +78,10 @@ pub fn goto_install() {
 pub fn install_me(_options: String, _path: String, _silent: bool, _debug: bool, _nostartup: bool) {
     #[cfg(windows)]
     std::thread::spawn(move || {
-        allow_err!(crate::platform::windows::install_me(
+		allow_err!(crate::platform::windows::install_me(
             &_options, _path, _silent, _debug, _nostartup
         ));
-        std::process::exit(0);
+		std::process::exit(0);
     });
 }
 
@@ -429,7 +429,7 @@ pub fn closing(x: i32, y: i32, w: i32, h: i32) {
     LocalConfig::set_size(x, y, w, h);
 	#[cfg(target_os = "windows")]
 	{
-		let (_, _, _, exe) = crate::platform::get_install_info();
+		let (_, _, _, exe, _dll) = crate::platform::get_install_info();
 		std::process::Command::new(&exe).arg("--tray").spawn().ok();
 	}
 }
@@ -710,7 +710,7 @@ pub fn remove_discovered(id: String) {
 pub fn get_uuid() -> String {
     crate::encode64(hbb_common::get_uuid())
 }
-
+/*
 #[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
 #[inline]
 pub fn change_id(id: String) {
@@ -720,7 +720,7 @@ pub fn change_id(id: String) {
         *ASYNC_JOB_STATUS.lock().unwrap() = change_id_shared(id, old_id).to_owned();
     });
 }
-
+*/
 #[inline]
 pub fn post_request(url: String, body: String, header: String) {
     *ASYNC_JOB_STATUS.lock().unwrap() = " ".to_owned();
@@ -861,6 +861,13 @@ pub fn has_hwcodec() -> bool {
     return false;
     #[cfg(any(feature = "hwcodec", feature = "mediacodec"))]
     return true;
+}
+
+#[cfg(feature = "flutter")]
+#[inline]
+pub fn supported_hwdecodings() -> (bool, bool) {
+    let decoding = scrap::codec::Decoder::supported_decodings(None);
+    (decoding.ability_h264 > 0, decoding.ability_h265 > 0)
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -1033,7 +1040,7 @@ pub(crate) async fn send_to_cm(data: &ipc::Data) {
         c.send(data).await.ok();
     }
 }
-
+/*
 const INVALID_FORMAT: &'static str = "Invalid format";
 const UNKNOWN_ERROR: &'static str = "Unknown error";
 
@@ -1148,7 +1155,7 @@ async fn check_id(
     }
     ""
 }
-
+*/
 // if it's relay id, return id processed, otherwise return original id
 pub fn handle_relay_id(id: String) -> String {
     if id.ends_with(r"\r") || id.ends_with(r"/r") {

@@ -479,12 +479,11 @@ pub mod client {
             )?);
             shutdown_hooks::add_shutdown_hook(drop_portable_service_shared_memory);
         }
-        let mut option = SHMEM.lock().unwrap();
-        let shmem = option.as_mut().unwrap();
-        unsafe {
-            libc::memset(shmem.as_ptr() as _, 0, shmem.len() as _);
+        if let Some(shmem) = SHMEM.lock().unwrap().as_mut() {
+            unsafe {
+                libc::memset(shmem.as_ptr() as _, 0, shmem.len() as _);
+            }
         }
-        drop(option);
         match para {
             StartPara::Direct => {
                 if let Err(e) = crate::platform::run_background(
@@ -495,7 +494,7 @@ pub mod client {
                     bail!("Failed to run portable service process:{}", e);
                 }
             }
-            StartPara::Logon(_username, _password) => {
+            StartPara::Logon(username, password) => {
                 #[allow(unused_mut)]
                 let mut exe = std::env::current_exe()?.to_string_lossy().to_string();
                 #[cfg(feature = "flutter")]
@@ -528,7 +527,6 @@ pub mod client {
                     }
                     None => {}
                 }
-				*SHMEM.lock().unwrap() = None;
 /*
                 if let Err(e) = crate::platform::windows::create_process_with_logon(
                     username.as_str(),
@@ -547,8 +545,11 @@ pub mod client {
     }
 
     pub extern "C" fn drop_portable_service_shared_memory() {
-        log::info!("drop shared memory");
-        *SHMEM.lock().unwrap() = None;
+        let mut lock = SHMEM.lock().unwrap();
+        if lock.is_some() {
+            *lock = None;
+            log::info!("drop shared memory");
+        }
     }
 
     pub fn set_quick_support(v: bool) {
@@ -563,17 +564,18 @@ pub mod client {
             Self: Sized,
         {
             let mut option = SHMEM.lock().unwrap();
-            let shmem = option.as_mut().unwrap();
-            Self::set_para(
-                shmem,
-                CapturerPara {
-                    current_display,
-                    use_yuv,
-                    use_yuv_set: false,
-                    timeout_ms: 33,
-                },
-            );
-            shmem.write(ADDR_CAPTURE_WOULDBLOCK, &utils::i32_to_vec(TRUE));
+            if let Some(shmem) = option.as_mut() {
+                Self::set_para(
+                    shmem,
+                    CapturerPara {
+                        current_display,
+                        use_yuv,
+                        use_yuv_set: false,
+                        timeout_ms: 33,
+                    },
+                );
+                shmem.write(ADDR_CAPTURE_WOULDBLOCK, &utils::i32_to_vec(TRUE));
+            }
             CapturerPortable {}
         }
 
@@ -590,7 +592,7 @@ pub mod client {
     impl TraitCapturer for CapturerPortable {
         fn set_use_yuv(&mut self, use_yuv: bool) {
             let mut option = SHMEM.lock().unwrap();
-            let shmem = option.as_mut().unwrap();
+            if let Some(shmem) = option.as_mut() {
             unsafe {
                 let para_ptr = shmem.as_ptr().add(ADDR_CAPTURER_PARA);
                 let para = para_ptr as *const CapturerPara;
@@ -601,14 +603,18 @@ pub mod client {
                         use_yuv,
                         use_yuv_set: true,
                         timeout_ms: (*para).timeout_ms,
-                    },
-                );
+                        },
+                    );
+                }
             }
         }
 
         fn frame<'a>(&'a mut self, timeout: Duration) -> std::io::Result<Frame<'a>> {
-            let mut option = SHMEM.lock().unwrap();
-            let shmem = option.as_mut().unwrap();
+            let mut lock = SHMEM.lock().unwrap();
+            let shmem = lock.as_mut().ok_or(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "shmem dropped".to_string(),
+            ))?;
             unsafe {
                 let base = shmem.as_ptr();
                 let para_ptr = base.add(ADDR_CAPTURER_PARA);
@@ -804,7 +810,10 @@ pub mod client {
 
     pub fn get_cursor_info(pci: PCURSORINFO) -> BOOL {
         if RUNNING.lock().unwrap().clone() {
-            get_cursor_info_(&mut SHMEM.lock().unwrap().as_mut().unwrap(), pci)
+            let mut option = SHMEM.lock().unwrap();
+            option
+                .as_mut()
+                .map_or(FALSE, |sheme| get_cursor_info_(sheme, pci))
         } else {
             unsafe { winuser::GetCursorInfo(pci) }
         }

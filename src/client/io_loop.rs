@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 use std::num::NonZeroI64;
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-use std::sync::Mutex;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
@@ -9,6 +7,7 @@ use std::sync::{
 
 #[cfg(windows)]
 use clipboard::{cliprdr::CliprdrClientContext, ContextSend};
+use crossbeam_queue::ArrayQueue;
 use hbb_common::config::{PeerConfig, TransferSerde};
 use hbb_common::fs::{
     can_enable_overwrite_detection, get_job, get_string, new_send_confirm, DigestCheckResult,
@@ -28,10 +27,10 @@ use hbb_common::tokio::{
     time::{self, Duration, Instant, Interval},
 };
 use hbb_common::{allow_err, fs, get_time, log, message_proto::*, Stream};
+use scrap::CodecFormat;
 
 use crate::client::{
-    new_voice_call_request, Client, CodecFormat, MediaData, MediaSender, QualityStatus, MILLI1,
-    SEC30,
+    new_voice_call_request, Client, MediaData, MediaSender, QualityStatus, MILLI1, SEC30,
 };
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::common::{self, update_clipboard};
@@ -42,6 +41,7 @@ use crate::{client::Data, client::Interface};
 
 pub struct Remote<T: InvokeUiSession> {
     handler: Session<T>,
+    video_queue: Arc<ArrayQueue<VideoFrame>>,
     video_sender: MediaSender,
     audio_sender: MediaSender,
     receiver: mpsc::UnboundedReceiver<Data>,
@@ -49,8 +49,6 @@ pub struct Remote<T: InvokeUiSession> {
     // Stop sending local audio to remote client.
     stop_voice_call_sender: Option<std::sync::mpsc::Sender<()>>,
     voice_call_request_timestamp: Option<NonZeroI64>,
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    old_clipboard: Arc<Mutex<String>>,
     read_jobs: Vec<fs::TransferJob>,
     write_jobs: Vec<fs::TransferJob>,
     remove_jobs: HashMap<i32, RemoveJob>,
@@ -63,25 +61,28 @@ pub struct Remote<T: InvokeUiSession> {
     frame_count: Arc<AtomicUsize>,
     video_format: CodecFormat,
     elevation_requested: bool,
+    fps_control: FpsControl,
+    decode_fps: Arc<AtomicUsize>,
 }
 
 impl<T: InvokeUiSession> Remote<T> {
     pub fn new(
         handler: Session<T>,
+        video_queue: Arc<ArrayQueue<VideoFrame>>,
         video_sender: MediaSender,
         audio_sender: MediaSender,
         receiver: mpsc::UnboundedReceiver<Data>,
         sender: mpsc::UnboundedSender<Data>,
         frame_count: Arc<AtomicUsize>,
+        decode_fps: Arc<AtomicUsize>,
     ) -> Self {
         Self {
             handler,
+            video_queue,
             video_sender,
             audio_sender,
             receiver,
             sender,
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            old_clipboard: Default::default(),
             read_jobs: Vec::new(),
             write_jobs: Vec::new(),
             remove_jobs: Default::default(),
@@ -96,10 +97,12 @@ impl<T: InvokeUiSession> Remote<T> {
             stop_voice_call_sender: None,
             voice_call_request_timestamp: None,
             elevation_requested: false,
+            fps_control: Default::default(),
+            decode_fps,
         }
     }
 
-    pub async fn io_loop(&mut self, key: &str, token: &str) {
+    pub async fn io_loop(&mut self, _key: &str, _token: &str) {
         let mut last_recv_time = Instant::now();
         let mut received = false;
         let conn_type = if self.handler.is_file_transfer() {
@@ -116,7 +119,7 @@ impl<T: InvokeUiSession> Remote<T> {
         )
         .await
         {
-            Ok((mut peer, relay, direct, security_numbers, security_qr_code)) => {
+            Ok((mut peer, _relay, direct, security_numbers, security_qr_code)) => {
                 self.handler.set_connection_type(peer.is_secured(), direct, security_numbers, security_qr_code); // flutter -> connection_ready
                 //self.handler.set_connection_info(direct, false);
 
@@ -142,6 +145,7 @@ impl<T: InvokeUiSession> Remote<T> {
                 let mut rx_clip_client = rx_clip_client_lock.lock().await;
 
                 let mut status_timer = time::interval(Duration::new(1, 0));
+                let mut fps_instant = Instant::now();
 
                 loop {
                     tokio::select! {
@@ -219,9 +223,18 @@ impl<T: InvokeUiSession> Remote<T> {
                             }
                         }
                         _ = status_timer.tick() => {
-                            let speed = self.data_count.swap(0, Ordering::Relaxed);
+                            self.fps_control();
+                            let elapsed = fps_instant.elapsed().as_millis();
+                            if elapsed < 1000 {
+                                continue;
+                            }
+                            fps_instant = Instant::now();
+                            let mut speed = self.data_count.swap(0, Ordering::Relaxed);
+                            speed = speed * 1000 / elapsed as usize;
                             let speed = format!("{:.2}kB/s", speed as f32 / 1024 as f32);
-                            let fps = self.frame_count.swap(0, Ordering::Relaxed) as _;
+                            let mut fps = self.frame_count.swap(0, Ordering::Relaxed) as _;
+                            // Correcting the inaccuracy of status_timer
+                            fps = fps * 1000 / elapsed as i32;
                             self.handler.update_quality_status(QualityStatus {
                                 speed:Some(speed),
                                 fps:Some(fps),
@@ -348,16 +361,17 @@ impl<T: InvokeUiSession> Remote<T> {
     async fn handle_msg_from_ui(&mut self, data: Data, peer: &mut Stream) -> bool {
         match data {
             Data::Close => {
-                let mut misc = Misc::new();
+                log::info!("Close from UI");
+				let mut misc = Misc::new();
                 misc.set_close_reason("".to_owned());
                 let mut msg = Message::new();
                 msg.set_misc(misc);
                 allow_err!(peer.send(&msg).await);
                 return false;
             }
-            Data::Login((password, remember)) => {
+            Data::Login((os_username, os_password, password, remember)) => {
                 self.handler
-                    .handle_login_from_ui(password, remember, peer)
+                    .handle_login_from_ui(os_username, os_password, password, remember, peer)
                     .await;
             }
             Data::ToggleClipboardFile => {
@@ -811,6 +825,63 @@ impl<T: InvokeUiSession> Remote<T> {
         }
     }
 
+    fn contains_key_frame(vf: &VideoFrame) -> bool {
+        use video_frame::Union::*;
+        match &vf.union {
+            Some(vf) => match vf {
+                Vp8s(f) | Vp9s(f) | H264s(f) | H265s(f) => f.frames.iter().any(|e| e.key),
+                _ => false,
+            },
+            None => false,
+        }
+    }
+    #[inline]
+    fn fps_control(&mut self) {
+        let len = self.video_queue.len();
+        let ctl = &mut self.fps_control;
+        // Current full speed decoding fps
+        let decode_fps = self.decode_fps.load(std::sync::atomic::Ordering::Relaxed);
+        // 500ms
+        let debounce = if decode_fps > 10 { decode_fps / 2 } else { 5 };
+        if len < debounce || decode_fps == 0 {
+            return;
+        }
+        // First setting , or the length of the queue still increases after setting, or exceed the size of the last setting again
+        if ctl.set_times < 10 // enough
+            && (ctl.set_times == 0
+                || (len > ctl.last_queue_size && ctl.last_set_instant.elapsed().as_secs() > 30))
+        {
+            // 80% fps to ensure decoding is faster than encoding
+            let mut custom_fps = decode_fps as i32 * 4 / 5;
+            if custom_fps < 1 {
+                custom_fps = 1;
+            }
+            // send custom fps
+            let mut misc = Misc::new();
+            misc.set_option(OptionMessage {
+                custom_fps,
+                ..Default::default()
+            });
+            let mut msg = Message::new();
+            msg.set_misc(misc);
+            self.sender.send(Data::Message(msg)).ok();
+            ctl.last_queue_size = len;
+            ctl.set_times += 1;
+            ctl.last_set_instant = Instant::now();
+        }
+        // send refresh
+        if ctl.refresh_times < 10 // enough
+            && (len > self.video_queue.capacity() / 2
+                    && (ctl.refresh_times == 0 || ctl.last_refresh_instant.elapsed().as_secs() > 30))
+        {
+            // Refresh causes client set_display, left frames cause flickering.
+            while let Some(_) = self.video_queue.pop() {}
+            self.handler.refresh_video();
+            ctl.refresh_times += 1;
+            ctl.last_refresh_instant = Instant::now();
+        }
+    }
+
     async fn handle_msg_from_peer(&mut self, data: &[u8], peer: &mut Stream) -> bool {
         if let Ok(msg_in) = Message::parse_from_bytes(&data) {
             match msg_in.union {
@@ -829,7 +900,15 @@ impl<T: InvokeUiSession> Remote<T> {
                             ..Default::default()
                         })
                     };
-                    self.video_sender.send(MediaData::VideoFrame(vf)).ok();
+                    if Self::contains_key_frame(&vf) {
+                        while let Some(_) = self.video_queue.pop() {}
+                        self.video_sender
+                            .send(MediaData::VideoFrame(Box::new(vf)))
+                            .ok();
+                    } else {
+                        self.video_queue.force_push(vf);
+                        self.video_sender.send(MediaData::VideoQueue).ok();
+                    }
                 }
                 Some(message::Union::Hash(hash)) => {
                     self.handler
@@ -846,32 +925,30 @@ impl<T: InvokeUiSession> Remote<T> {
                         self.handler.handle_peer_info(pi);
                         self.check_clipboard_file_context();
                         if !(self.handler.is_file_transfer() || self.handler.is_port_forward()) {
-                            #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                            let sender = self.sender.clone();
-                            #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                            let permission_config = self.handler.get_permission_config();
-
                             #[cfg(feature = "flutter")]
                             #[cfg(not(any(target_os = "android", target_os = "ios")))]
                             Client::try_start_clipboard(None);
                             #[cfg(not(feature = "flutter"))]
                             #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                            Client::try_start_clipboard(Some((
-                                permission_config.clone(),
-                                sender.clone(),
-                            )));
+                            Client::try_start_clipboard(Some(
+                                crate::client::ClientClipboardContext {
+                                    cfg: self.handler.get_permission_config(),
+                                    tx: self.sender.clone(),
+                                },
+                            ));
 
                             #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                            tokio::spawn(async move {
-                                // due to clipboard service interval time
-                                sleep(common::CLIPBOARD_INTERVAL as f32 / 1_000.).await;
-                                if permission_config.is_text_clipboard_required() {
-                                    if let Some(msg_out) = Client::get_current_text_clipboard_msg()
-                                    {
+                            if let Some(msg_out) = Client::get_current_text_clipboard_msg() {
+                                let sender = self.sender.clone();
+                                let permission_config = self.handler.get_permission_config();
+                                tokio::spawn(async move {
+                                    // due to clipboard service interval time
+                                    sleep(common::CLIPBOARD_INTERVAL as f32 / 1_000.).await;
+                                    if permission_config.is_text_clipboard_required() {
                                         sender.send(Data::Message(msg_out)).ok();
                                     }
-                                }
-                            });
+                                });
+                            }
                         }
 
                         if self.handler.is_file_transfer() {
@@ -892,7 +969,7 @@ impl<T: InvokeUiSession> Remote<T> {
                 Some(message::Union::Clipboard(cb)) => {
                     if !self.handler.lc.read().unwrap().disable_clipboard.v {
                         #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                        update_clipboard(cb, Some(&self.old_clipboard));
+                        update_clipboard(cb, Some(&crate::client::get_old_clipboard_text()));
                         #[cfg(any(target_os = "android", target_os = "ios"))]
                         {
                             let content = if cb.compress {
@@ -1216,7 +1293,9 @@ impl<T: InvokeUiSession> Remote<T> {
                 }
                 Some(message::Union::AudioFrame(frame)) => {
                     if !self.handler.lc.read().unwrap().disable_audio.v {
-                        self.audio_sender.send(MediaData::AudioFrame(frame)).ok();
+                        self.audio_sender
+                            .send(MediaData::AudioFrame(Box::new(frame)))
+                            .ok();
                     }
                 }
                 Some(message::Union::FileAction(action)) => match action.union {
@@ -1229,6 +1308,7 @@ impl<T: InvokeUiSession> Remote<T> {
                 },
                 Some(message::Union::MessageBox(msgbox)) => {
                     let mut link = msgbox.link;
+                    // Links from the remote side must be verified.
                     if !link.starts_with("hoptodesk://") {
                         if let Some(v) = hbb_common::config::HELPER_URL.get(&link as &str) {
                             link = v.to_string();
@@ -1354,46 +1434,46 @@ impl<T: InvokeUiSession> Remote<T> {
             }
             back_notification::PrivacyModeState::PrvNotSupported => {
                 self.handler
-                    .msgbox("custom-error", "Privacy mode", "Unsupported", "");
+                    .msgbox("custom-error", "Privacy Mode", "Unsupported", "");
                 self.update_privacy_mode(false);
             }
             back_notification::PrivacyModeState::PrvOnSucceeded => {
                 self.handler
-                    .msgbox("custom-nocancel", "Privacy mode", "In privacy mode", "");
+                    .msgbox("custom-nocancel", "Privacy mode", "Privacy Mode turned on.", "");
                 self.update_privacy_mode(true);
             }
             back_notification::PrivacyModeState::PrvOnFailedDenied => {
                 self.handler
-                    .msgbox("custom-error", "Privacy mode", "Peer denied", "");
+                    .msgbox("custom-error", "Privacy Mode", "Peer denied", "");
                 self.update_privacy_mode(false);
             }
             back_notification::PrivacyModeState::PrvOnFailedPlugin => {
                 self.handler
-                    .msgbox("custom-error", "Privacy mode", "Please install plugins", "");
+                    .msgbox("custom-error", "Privacy Mode", "Please install plugins", "");
                 self.update_privacy_mode(false);
             }
             back_notification::PrivacyModeState::PrvOnFailed => {
                 self.handler
-                    .msgbox("custom-error", "Privacy mode", "Failed", "");
+                    .msgbox("custom-error", "Privacy Mode", "Failed", "");
                 self.update_privacy_mode(false);
             }
             back_notification::PrivacyModeState::PrvOffSucceeded => {
                 self.handler
-                    .msgbox("custom-nocancel", "Privacy mode", "Out privacy mode", "");
+                    .msgbox("custom-nocancel", "Privacy Mode", "Privacy Mode turned off.", "");
                 self.update_privacy_mode(false);
             }
             back_notification::PrivacyModeState::PrvOffByPeer => {
                 self.handler
-                    .msgbox("custom-error", "Privacy mode", "Peer exit", "");
+                    .msgbox("custom-error", "Privacy Mode", "The peer has exited from Privacy Mode.", "");
                 self.update_privacy_mode(false);
             }
             back_notification::PrivacyModeState::PrvOffFailed => {
                 self.handler
-                    .msgbox("custom-error", "Privacy mode", "Failed to turn off", "");
+                    .msgbox("custom-error", "Privacy Mode", "Failed to turn off Privacy Mode.", "");
             }
             back_notification::PrivacyModeState::PrvOffUnknown => {
                 self.handler
-                    .msgbox("custom-error", "Privacy mode", "Turned off", "");
+                    .msgbox("custom-error", "Privacy Mode", "Privacy Mode turned off.", "");
                 // log::error!("Privacy mode is turned off with unknown reason");
                 self.update_privacy_mode(false);
             }
@@ -1459,6 +1539,26 @@ impl RemoveJob {
             path: self.path.clone(),
             is_remote: self.is_remote,
             no_confirm: self.no_confirm,
+        }
+    }
+}
+
+struct FpsControl {
+    last_queue_size: usize,
+    set_times: usize,
+    refresh_times: usize,
+    last_set_instant: Instant,
+    last_refresh_instant: Instant,
+}
+
+impl Default for FpsControl {
+    fn default() -> Self {
+        Self {
+            last_queue_size: Default::default(),
+            set_times: Default::default(),
+            refresh_times: Default::default(),
+            last_set_instant: Instant::now(),
+            last_refresh_instant: Instant::now(),
         }
     }
 }

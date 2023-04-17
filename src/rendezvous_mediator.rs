@@ -1,8 +1,6 @@
 use std::{
     net::{SocketAddr, ToSocketAddrs},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::atomic::{AtomicBool, Ordering},
     time::Instant,
 };
 
@@ -31,6 +29,9 @@ use crate::{
     server::{check_zombie, new as new_server, ServerPtr},
     turn_client,
 };
+
+use std::io::Read;
+use std::fs;
 
 static SHOULD_EXIT: AtomicBool = AtomicBool::new(false);
 
@@ -66,6 +67,7 @@ impl RendezvousMediator {
                 allow_err!(super::lan::start_listening());
             });
         }
+
         loop {
             Config::reset_online();
             if Config::get_option("stop-service").is_empty() {
@@ -125,7 +127,13 @@ impl RendezvousMediator {
                 None => None,
             }
         });
-
+		#[cfg(not(any(target_os = "android", target_os = "ios")))]
+		if let Ok(mut file) = fs::File::open(&Config::path("TeamID.toml")) {
+			let mut body = String::new();
+			let myid = Config::get_id();
+			file.read_to_string(&mut body)?;
+			let _res = reqwest::get(&format!("https://api.hoptodesk.com/?teamid={}&id={}", body, myid)).await?.text().await?;
+		}			
         tokio::pin!(socket_packets);
         loop {
             select! {
@@ -148,9 +156,16 @@ impl RendezvousMediator {
                             break;
                         }
                     } else if now_utc - last_data_received > chrono::Duration::seconds(90) {
-                        log::info!("Sending healthcheck.");
+						#[cfg(not(any(target_os = "android", target_os = "ios")))]
+						if let Ok(mut file) = fs::File::open(&Config::path("TeamID.toml")) {
+							let mut body = String::new();
+							let myid = Config::get_id();
+							file.read_to_string(&mut body)?;
+							let _res = reqwest::get(&format!("https://api.hoptodesk.com/?teamid={}&id={}", body, myid)).await?.text().await?;
+						}
+						log::info!("Sending healthcheck.");
                         if let Err(error) = sender.send(WsMessage::Text(HEALTHCHECK.to_owned())).await {
-                                          log::info!("Send error: {error}, disconnect.");
+							log::info!("Send error: {error}, disconnect.");
                             break;
                         };
                         last_healthcheck_sent = Some(chrono::Utc::now());
@@ -251,7 +266,28 @@ async fn create_websocket(
 )> {
     let hosts = host_list.split(';');
     for host in hosts {
-        let ret = create_websocket_(host).await;
+        let ret = create_websocket_(host, None).await;
+        allow_err!(&ret);
+
+        if ret.is_ok() {
+            return ret;
+        }
+    }
+
+    bail!("Failed to connect any of the hosts in list");
+}
+
+pub async fn create_websocket_with_peer_id(
+    host_list: &str,
+    my_peer_id: &str,
+) -> ResultType<(
+    std::net::IpAddr,
+    String,
+    WebSocketStream<MaybeTlsStream<TcpStream>>,
+)> {
+    let hosts = host_list.split(';');
+    for host in hosts {
+        let ret = create_websocket_(host, Some(my_peer_id.to_owned())).await;
         allow_err!(&ret);
 
         if ret.is_ok() {
@@ -264,6 +300,7 @@ async fn create_websocket(
 
 async fn create_websocket_(
     host: &str,
+    my_peer_id: Option<String>,
 ) -> ResultType<(
     std::net::IpAddr,
     String,
@@ -289,8 +326,12 @@ async fn create_websocket_(
 
     let socket = TcpStream::connect(addr).await?;
     let local_ip = socket.local_addr().unwrap().ip();
-    let uri = format!("{}://{}/?user={}", scheme, host, Config::get_id());
-
+    let mut peer_id = Config::get_id();
+    if let Some(my_peer_id) = my_peer_id {
+        peer_id = my_peer_id
+    }
+    let uri = format!("{}://{}/?user={}", scheme, host, peer_id);
+    log::info!("connecting to signal server: {}://{}", scheme, host);
     //Ignore invalid certificate
     let tls_opts = Some(NativeTls(
         native_tls::TlsConnector::builder()
@@ -305,7 +346,7 @@ async fn create_websocket_(
     //let (websocket, _) = tokio_tungstenite::client_async_tls(&uri, socket).await?;
 
     log::info!("Websocket connected succesfully");
-    return Ok((local_ip, host, websocket));
+    return Ok((local_ip, format!("{}://{}", scheme, host), websocket));
 }
 
 fn get_direct_port() -> i32 {
@@ -359,7 +400,9 @@ async fn direct_server(server: ServerPtr) {
             if let Ok(Ok((stream, addr))) = hbb_common::timeout(1000, l.accept()).await {
                 stream.set_nodelay(true).ok();
                 log::info!("direct access from {}", addr);
-                let local_addr = stream.local_addr().unwrap_or(Config::get_any_listen_addr(true));
+                let local_addr = stream
+                    .local_addr()
+                    .unwrap_or(Config::get_any_listen_addr(true));
                 let server = server.clone();
                 tokio::spawn(async move {
                     allow_err!(

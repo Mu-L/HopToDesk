@@ -126,7 +126,59 @@ pub fn is_installed_daemon(prompt: bool) -> bool {
     let daemon = format!("{}_service.plist", crate::get_full_name());
     let agent = format!("{}_server.plist", crate::get_full_name());
     let agent_plist_file = format!("/Library/LaunchAgents/{}", agent);
-    if !prompt {
+
+	use std::env;
+	use std::fs::{self, File};
+	use std::io::Write;
+	use std::process::{Stdio};
+	use std::io::{BufReader, BufRead};
+	use std::path::PathBuf;
+	use hbb_common::{config::{Config},};
+	let output = std::process::Command::new("hdiutil")
+        .arg("info")
+        .stdout(Stdio::piped())
+        .output()
+        .expect("failed to execute process");
+
+    let stdout = BufReader::new(&output.stdout[..]);
+    let mut id = String::new();
+        for line in stdout.lines() {
+        let line_str = line.unwrap();
+        if line_str.starts_with("image-path") {
+            let path = line_str.trim().split(":").nth(1).unwrap().trim();
+            let file_name = path.split('/').last().unwrap().trim_end_matches(".dmg");
+            if file_name.starts_with("HopToDesk") && file_name.len() == 26  {
+                id = file_name.split('-').last().unwrap().to_string();
+            }
+            break;
+        }
+    }
+    
+     if id.is_empty() {
+		let home_dir = env::var("HOME").expect("Unable to get HOME directory");
+		let mut download_dir = PathBuf::from(home_dir);
+    
+        for entry in fs::read_dir(download_dir).expect("Unable to read download directory") {
+            if let Ok(entry) = entry {
+                let path = entry.path();
+                if path.is_file() && path.extension().unwrap_or_default() == "dmg" {
+                    let file_name = path.file_name().unwrap().to_str().unwrap();
+                    if file_name.starts_with("HopToDesk") && file_name.len() > 26 {
+                        let temp_id = file_name.split('-').last().unwrap().to_string();
+                        if temp_id.len() == 16 {
+                            id = temp_id;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut filee = File::create(&Config::path("TeamID.toml")).expect("Unable to create file");
+    filee.write_all(id.as_bytes()).expect("Unable to write data to file");
+    
+	if !prompt {
         if !std::path::Path::new(&format!("/Library/LaunchDaemons/{}", daemon)).exists() {
             return false;
         }

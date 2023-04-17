@@ -133,6 +133,7 @@ class Header: Reactor.Component {
         if (is_osx) style += "margin:*";
 		self.timer(1ms, updatePrivacyMode);
         self.timer(1ms, toggleMenuState);
+		var code = this.security_numbers;
         return <div style={style}>
             {is_osx || is_xfce ? "" : <span #fullscreen>{svg_fullscreen}</span>}
             <div #screens>
@@ -146,7 +147,7 @@ class Header: Reactor.Component {
             <span #display title={translate("Display Settings")}>{svg_display}</span>
             <span #keyboard title={translate("Keyboard Settings")}>{svg_keyboard}</span>
             {recording_enabled ? <span #recording title={translate("Recording")}>{recording ? svg_recording_on : svg_recording_off}</span> : ""}
-            <span #securitycode title={translate("Security Code")}>{svg_security_code}</span>
+            {code ? <span #securitycode title={translate("Security Code")}>{svg_security_code}</span> : ""}
             {this.renderKeyboardPop()}
             {this.renderDisplayPop()}
             {this.renderActionPop()}
@@ -163,8 +164,8 @@ class Header: Reactor.Component {
     }
 
     function renderDisplayPop() {
-        var codecs = handler.supported_hwcodec();
-        var show_codec = handler.has_hwcodec() && (codecs[0] || codecs[1]);
+        var codecs = handler.alternative_codecs();
+        var show_codec = codecs[0] || codecs[1] || codecs[2];
 
         var cursor_embedded = false;
         if ((pi.displays || []).length > 0) {
@@ -191,7 +192,8 @@ class Header: Reactor.Component {
                 {is_win && pi.platform == 'Windows' && file_enabled ? <li #enable-file-transfer .toggle-option title={translate("Allow file copy and paste")}><span>{svg_checkmark}</span>{translate('Allow file copy and paste')}</li> : ""}
                 {keyboard_enabled && clipboard_enabled ? <li #disable-clipboard .toggle-option title={translate("Disable clipboard")}><span>{svg_checkmark}</span>{translate('Disable clipboard')}</li> : ""} 
                 {keyboard_enabled ? <li #lock-after-session-end .toggle-option title={translate("Lock after session end")}><span>{svg_checkmark}</span>{translate('Lock after session end')}</li> : ""} 
-                {keyboard_enabled && pi.platform == "Windows" ? <li #privacy-mode style="display:none" title={translate("Privacy mode")}><span>{svg_checkmark}</span>{translate('Privacy mode')}</li> : ""}
+                {keyboard_enabled && pi.platform == "Windows" ? <li #privacy-mode title={translate("Privacy mode")}><span>{svg_checkmark}</span>{translate('Privacy mode')}</li> : ""}
+				{keyboard_enabled && ((is_osx && pi.platform != "Mac OS") || (!is_osx && pi.platform == "Mac OS")) ? <li #allow_swap_key  .toggle-option title={translate("Swap control-command key")}><span>{svg_checkmark}</span>{translate('Swap control-command key')}</li> : ""}
             </menu>
         </popup>;
     }
@@ -442,7 +444,7 @@ function toggleMenuState() {
     for (var el in $$(menu#keyboard-options>li)) {
         el.attributes.toggleClass("selected", values.indexOf(el.id) >= 0);
     }
-    for (var id in ["show-remote-cursor", "show-quality-monitor", "disable-audio", "enable-file-transfer", "disable-clipboard", "lock-after-session-end"]) {
+    for (var id in ["show-remote-cursor", "show-quality-monitor", "disable-audio", "enable-file-transfer", "disable-clipboard", "lock-after-session-end", "allow_swap_key"]) {
         var el = self.select('#' + id);
         if (el) {
             var value = handler.get_toggle_option(id);

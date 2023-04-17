@@ -72,7 +72,7 @@ impl Drop for WindowHandlers {
 pub fn turn_on_privacy(conn_id: i32) -> ResultType<bool> {
     let exe_file = std::env::current_exe()?;
     if let Some(cur_dir) = exe_file.parent() {
-        if !cur_dir.join("WindowInjection.dll").exists() {
+        if !cur_dir.join("PrivacyMode.dll").exists() {
             return Ok(false);
         }
     } else {
@@ -145,7 +145,7 @@ pub fn start() -> ResultType<()> {
     }
     let cur_dir = exe_file.parent().unwrap();
 
-    let dll_file = cur_dir.join("WindowInjection.dll");
+    let dll_file = cur_dir.join("PrivacyMode.dll");
     if !dll_file.exists() {
         bail!(
             "Failed to find required file {}",

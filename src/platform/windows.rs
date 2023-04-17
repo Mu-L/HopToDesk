@@ -1,20 +1,22 @@
 use super::{CursorData, ResultType};
 //use crate::common::PORTABLE_APPNAME_RUNTIME_ENV_KEY;
 use crate::ipc;
+//use crate::license::*;
 use hbb_common::{
     allow_err, bail,
-    config::{Config},
+    config::{self, Config},
     log,
     message_proto::Resolution,
     sleep, timeout, tokio,
 };
-use std::io::prelude::*;
-use std::ptr::null_mut;
 use std::{
     ffi::OsString,
-    fs, io, mem,
+    fs, io,
+    io::prelude::*,
+    mem,
     os::windows::process::CommandExt,
     path::PathBuf,
+    ptr::null_mut,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -49,6 +51,7 @@ use windows_service::{
 };
 use winreg::enums::*;
 use winreg::RegKey;
+use std::env;
 
 pub fn get_cursor_pos() -> Option<(i32, i32)> {
     unsafe {
@@ -715,7 +718,7 @@ pub fn is_share_rdp() -> bool {
 }
 
 pub fn set_share_rdp(enable: bool) {
-    let (subkey, _, _, _) = get_install_info();
+    let (subkey, _, _, _, _) = get_install_info();
     let cmd = format!(
         "reg add {} /f /v share_rdp /t REG_SZ /d \"{}\"",
         subkey,
@@ -728,6 +731,7 @@ pub fn get_active_username() -> String {
     if !is_root() {
         return crate::username();
     }
+
     extern "C" {
         fn get_active_user(path: *mut u16, n: u32, rdp: BOOL) -> u32;
     }
@@ -756,6 +760,7 @@ pub fn get_active_user_home() -> Option<PathBuf> {
     }
     None
 }
+
 pub fn is_prelogin() -> bool {
     let username = get_active_username();
     username.is_empty() || username == "SYSTEM"
@@ -806,11 +811,11 @@ fn get_valid_subkey() -> String {
     return get_subkey(&app_name, false);
 }
 
-pub fn get_install_info() -> (String, String, String, String) {
+pub fn get_install_info() -> (String, String, String, String, String) {
     get_install_info_with_subkey(get_valid_subkey())
 }
 
-fn get_default_install_info() -> (String, String, String, String) {
+fn get_default_install_info() -> (String, String, String, String, String) {
     get_install_info_with_subkey(get_subkey(&crate::get_app_name(), false))
 }
 
@@ -874,7 +879,7 @@ pub fn check_update_broker_process() -> ResultType<()> {
     Ok(())
 }
 
-fn get_install_info_with_subkey(subkey: String) -> (String, String, String, String) {
+fn get_install_info_with_subkey(subkey: String) -> (String, String, String, String, String) {
     let mut path = get_reg_of(&subkey, "InstallLocation");
     if path.is_empty() {
         path = get_default_install_path();
@@ -885,11 +890,12 @@ fn get_install_info_with_subkey(subkey: String) -> (String, String, String, Stri
         crate::get_app_name()
     );
     let exe = format!("{}\\{}.exe", path, crate::get_app_name());
-    (subkey, path, start_menu, exe)
+    let dll = format!("{}\\sciter.dll", path);
+    (subkey, path, start_menu, exe, dll)
 }
-
+/*
 pub fn update_me() -> ResultType<()> {
-    let (_, path, _, exe) = get_install_info();
+    let (_, path, _, exe, _dll) = get_install_info();
     let src_exe = std::env::current_exe()?.to_str().unwrap_or("").to_owned();
     let cmds = format!(
         "
@@ -917,6 +923,7 @@ pub fn update_me() -> ResultType<()> {
         .spawn()?;
     Ok(())
 }
+*/
 
 fn get_after_install(exe: &str) -> String {
 	let app_name = crate::get_app_name();
@@ -935,21 +942,22 @@ fn get_after_install(exe: &str) -> String {
 	IF NOT %ERRORLEVEL% EQU 0 (
 		 netsh advfirewall firewall add rule name=\"{app_name} Service\" dir=in action=allow program=\"{exe}\" enable=yes
 	)	
-    \"{exe}\"
     sc start {app_name}
     reg add HKEY_LOCAL_MACHINE\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System /f /v SoftwareSASGeneration /t REG_DWORD /d 1
 	", ext=ext, exe=exe, app_name=app_name)
 }
 
 pub fn install_me(options: &str, path: String, silent: bool, debug: bool, no_startup: bool) -> ResultType<()> {
-    let uninstall_str = get_uninstall(false);
+	let uninstall_str = get_uninstall(false);
     let mut path = path.trim_end_matches('\\').to_owned();
-    let (subkey, _path, start_menu, exe) = get_default_install_info();
+    let (subkey, _path, start_menu, exe, dll) = get_default_install_info();
     let mut exe = exe;
+    let mut _dll = dll;
     if path.is_empty() {
         path = _path;
     } else {
         exe = exe.replace(&_path, &path);
+        _dll = _dll.replace(&_path, &path);
     }
     let mut version_major = "0";
     let mut version_minor = "0";
@@ -1059,13 +1067,8 @@ copy /Y \"{tmp_path}\\{app_name}.lnk\" \"{start_menu}\\\"
         format!("copy /Y \"{tmp_path}\\{app_name} Tray.lnk\" \"%PROGRAMDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\\"", app_name = crate::get_app_name())
     };
 
-	use std::env;
     let cpath = env::current_dir()?;
 	let cpathm = cpath.display();
-    // https://docs.microsoft.com/zh-cn/windows/win32/msi/uninstall-registry-key?redirectedfrom=MSDNa
-    // https://www.windowscentral.com/how-edit-registry-using-command-prompt-windows-10
-    // https://www.tenforums.com/tutorials/70903-add-remove-allowed-apps-through-windows-firewall-windows-10-a.html
-    // Note: without if exist, the bat may exit in advance on some Windows7 https://github.com/rustdesk/rustdesk/issues/895
     let cmds = format!(
         "
 {uninstall_str}
@@ -1073,6 +1076,7 @@ chcp 65001
 md \"{path}\"
 copy /Y \"{src_exe}\" \"{exe}\"
 copy /Y \"{cpathm}\\sciter.dll\" \"{path}\\sciter.dll\"
+copy /Y \"{cpathm}\\PrivacyMode.dll\" \"{path}\\PrivacyMode.dll\"
 copy /Y \"{ORIGIN_PROCESS_EXE}\" \"{path}\\{broker_exe}\"
 \"{src_exe}\" --extract \"{path}\"
 //reg add {subkey} /f
@@ -1131,14 +1135,14 @@ sc delete {app_name}
     std::thread::sleep(std::time::Duration::from_millis(2000));
 	if !silent {
 		std::process::Command::new(&exe).spawn()?;
-    	std::process::Command::new(&exe).arg("--tray").spawn()?;
+    	//std::process::Command::new(&exe).arg("--tray").spawn()?;
     	std::thread::sleep(std::time::Duration::from_millis(1000));
 	}
     Ok(())
 }
 
 pub fn run_after_install() -> ResultType<()> {
-    let (_, _, _, exe) = get_install_info();
+    let (_, _, _, exe, _) = get_install_info();
     run_cmds(get_after_install(&exe), true, "after_install")
 }
 
@@ -1172,7 +1176,7 @@ fn get_before_uninstall(kill_self: bool) -> String {
 }
 
 fn get_uninstall(kill_self: bool) -> String {
-    let (subkey, path, start_menu, _) = get_install_info();
+    let (subkey, path, start_menu, _, _) = get_install_info();
     format!(
         "
     {before_uninstall}
@@ -1277,7 +1281,7 @@ pub fn is_installed() -> bool {
         service::ServiceAccess,
         service_manager::{ServiceManager, ServiceManagerAccess},
     };
-    let (_, _, _, exe) = get_install_info();
+    let (_, _, _, exe, _) = get_install_info();
     if !std::fs::metadata(exe).is_ok() {
         return false;
     }
@@ -1293,7 +1297,7 @@ pub fn is_installed() -> bool {
 }
 
 pub fn get_installed_version() -> String {
-    let (_, _, _, exe) = get_install_info();
+    let (_, _, _, exe, _) = get_install_info();
     if let Ok(output) = std::process::Command::new(exe).arg("--version").output() {
         for line in String::from_utf8_lossy(&output.stdout).lines() {
             return line.to_owned();
@@ -1303,7 +1307,7 @@ pub fn get_installed_version() -> String {
 }
 
 fn get_reg(name: &str) -> String {
-    let (subkey, _, _, _) = get_install_info();
+    let (subkey, _, _, _, _) = get_install_info();
     get_reg_of(&subkey, name)
 }
 
@@ -1352,27 +1356,11 @@ pub fn get_license() -> Option<License> {
 pub fn bootstrap() {
     if let Some(lic) = get_license() {
         *config::PROD_RENDEZVOUS_SERVER.write().unwrap() = lic.host.clone();
-        #[cfg(feature = "hbbs")]
-        {
-            if !is_win_server() {
-                return;
-            }
-            crate::hbbs::bootstrap(&lic.key, &lic.host);
-            std::thread::spawn(move || loop {
-                let tmp = Config::get_option("stop-rendezvous-service");
-                if tmp.is_empty() {
-                    crate::hbbs::start();
-                } else {
-                    crate::hbbs::stop();
-                }
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            });
-        }
     }
 }
 
 fn register_licence() -> String {
-    let (subkey, _, _, _) = get_install_info();
+    let (subkey, _, _, _, _) = get_install_info();
     if let Ok(lic) = get_license_from_exe_name() {
         format!(
             "
@@ -1732,8 +1720,11 @@ pub fn send_message_to_hnwd(
 /*
 pub fn create_process_with_logon(user: &str, pwd: &str, exe: &str, arg: &str) -> ResultType<()> {
     let last_error_table = HashMap::from([
-        (ERROR_LOGON_FAILURE, "The user name or password is incorrect."),
-        (ERROR_ACCESS_DENIED, "Access is denied.")
+        (
+            ERROR_LOGON_FAILURE,
+            "The user name or password is incorrect.",
+        ),
+        (ERROR_ACCESS_DENIED, "Access is denied."),
     ]);
 
     unsafe {
@@ -1893,7 +1884,192 @@ pub fn user_accessible_folder() -> ResultType<PathBuf> {
     }
     Ok(dir)
 }
-pub fn get_char_by_vk(vk: u32) -> Option<char> {
+
+/*
+#[inline]
+pub fn install_cert(cert_file: &str) -> ResultType<()> {
+    let exe_file = std::env::current_exe()?;
+    if let Some(cur_dir) = exe_file.parent() {
+        allow_err!(cert::install_cert(cur_dir.join(cert_file)));
+    } else {
+        bail!(
+            "Invalid exe parent for {}",
+            exe_file.to_string_lossy().as_ref()
+        );
+    }
+    Ok(())
+}
+
+mod cert {
+    use hbb_common::{allow_err, bail, log, ResultType};
+    use std::{path::Path, str::from_utf8};
+    use winapi::shared::{
+        minwindef::{BYTE, DWORD, TRUE},
+        ntdef::NULL,
+    };
+    use winapi::um::{
+        errhandlingapi::GetLastError,
+        wincrypt::{
+            CertCloseStore, CertEnumCertificatesInStore, CertNameToStrA, CertOpenSystemStoreA,
+            CryptHashCertificate, ALG_ID, CALG_SHA1, CERT_ID_SHA1_HASH, CERT_X500_NAME_STR,
+            PCCERT_CONTEXT,
+        },
+        winreg::HKEY_LOCAL_MACHINE,
+    };
+    use winreg::{
+        enums::{KEY_WRITE, REG_BINARY},
+        RegKey,
+    };
+
+    const ROOT_CERT_STORE_PATH: &str =
+        "SOFTWARE\\Microsoft\\SystemCertificates\\ROOT\\Certificates\\";
+    const THUMBPRINT_ALG: ALG_ID = CALG_SHA1;
+    const THUMBPRINT_LEN: DWORD = 20;
+
+    #[inline]
+    unsafe fn compute_thumbprint(pb_encoded: *const BYTE, cb_encoded: DWORD) -> (Vec<u8>, String) {
+        let mut size = THUMBPRINT_LEN;
+        let mut thumbprint = [0u8; THUMBPRINT_LEN as usize];
+        if CryptHashCertificate(
+            0,
+            THUMBPRINT_ALG,
+            0,
+            pb_encoded,
+            cb_encoded,
+            thumbprint.as_mut_ptr(),
+            &mut size,
+        ) == TRUE
+        {
+            (
+                thumbprint.to_vec(),
+                hex::encode(thumbprint).to_ascii_uppercase(),
+            )
+        } else {
+            (thumbprint.to_vec(), "".to_owned())
+        }
+    }
+
+    #[inline]
+    unsafe fn open_reg_cert_store() -> ResultType<RegKey> {
+        let hklm = winreg::RegKey::predef(HKEY_LOCAL_MACHINE);
+        Ok(hklm.open_subkey_with_flags(ROOT_CERT_STORE_PATH, KEY_WRITE)?)
+    }
+
+    // https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-gpef/6a9e35fa-2ac7-4c10-81e1-eabe8d2472f1
+    fn create_cert_blob(thumbprint: Vec<u8>, encoded: Vec<u8>) -> Vec<u8> {
+        let mut blob = Vec::new();
+
+        let mut property_id = (CERT_ID_SHA1_HASH as u32).to_le_bytes().to_vec();
+        let mut pro_reserved = [0x01, 0x00, 0x00, 0x00].to_vec();
+        let mut pro_length = (THUMBPRINT_LEN as u32).to_le_bytes().to_vec();
+        let mut pro_val = thumbprint;
+        blob.append(&mut property_id);
+        blob.append(&mut pro_reserved);
+        blob.append(&mut pro_length);
+        blob.append(&mut pro_val);
+
+        let mut blob_reserved = [0x20, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00].to_vec();
+        let mut blob_length = (encoded.len() as u32).to_le_bytes().to_vec();
+        let mut blob_val = encoded;
+        blob.append(&mut blob_reserved);
+        blob.append(&mut blob_length);
+        blob.append(&mut blob_val);
+
+        blob
+    }
+
+    pub fn install_cert<P: AsRef<Path>>(path: P) -> ResultType<()> {
+        let mut cert_bytes = std::fs::read(path)?;
+        unsafe {
+            let thumbprint = compute_thumbprint(cert_bytes.as_mut_ptr(), cert_bytes.len() as _);
+            log::debug!("Thumbprint of cert {}", &thumbprint.1);
+
+            let reg_cert_key = open_reg_cert_store()?;
+            let (cert_key, _) = reg_cert_key.create_subkey(&thumbprint.1)?;
+            let data = winreg::RegValue {
+                vtype: REG_BINARY,
+                bytes: create_cert_blob(thumbprint.0, cert_bytes),
+            };
+            cert_key.set_raw_value("Blob", &data)?;
+        }
+        Ok(())
+    }
+
+    fn get_thumbprints_to_rm() -> ResultType<Vec<String>> {
+        let issuers_to_rm = ["CN=\"WDKTestCert admin,133225435702113567\""];
+
+        let mut thumbprints = Vec::new();
+        let mut buf = [0u8; 1024];
+
+        unsafe {
+            let store_handle = CertOpenSystemStoreA(0 as _, "ROOT\0".as_ptr() as _);
+            if store_handle.is_null() {
+                bail!("Error opening certificate store: {}", GetLastError());
+            }
+
+            let mut cert_ctx: PCCERT_CONTEXT = CertEnumCertificatesInStore(store_handle, NULL as _);
+            while !cert_ctx.is_null() {
+                // https://stackoverflow.com/a/66432736
+                let cb_size = CertNameToStrA(
+                    (*cert_ctx).dwCertEncodingType,
+                    &mut ((*(*cert_ctx).pCertInfo).Issuer) as _,
+                    CERT_X500_NAME_STR,
+                    buf.as_mut_ptr() as _,
+                    buf.len() as _,
+                );
+                if cb_size != 1 {
+                    if let Ok(issuer) = from_utf8(&buf[..cb_size as _]) {
+                        for iss in issuers_to_rm.iter() {
+                            if issuer.contains(iss) {
+                                let (_, thumbprint) = compute_thumbprint(
+                                    (*cert_ctx).pbCertEncoded,
+                                    (*cert_ctx).cbCertEncoded,
+                                );
+                                if !thumbprint.is_empty() {
+                                    thumbprints.push(thumbprint);
+                                }
+                            }
+                        }
+                    }
+                }
+                cert_ctx = CertEnumCertificatesInStore(store_handle, cert_ctx);
+            }
+            CertCloseStore(store_handle, 0);
+        }
+
+        Ok(thumbprints)
+    }
+
+    pub fn uninstall_certs() -> ResultType<()> {
+        let thumbprints = get_thumbprints_to_rm()?;
+        let reg_cert_key = unsafe { open_reg_cert_store()? };
+        for thumbprint in thumbprints.iter() {
+            allow_err!(reg_cert_key.delete_subkey(thumbprint));
+        }
+        Ok(())
+    }
+}
+*/
+
+#[inline]
+pub fn get_char_from_vk(vk: u32) -> Option<char> {
+    get_char_from_unicode(get_unicode_from_vk(vk)?)
+}
+
+pub fn get_char_from_unicode(unicode: u16) -> Option<char> {
+    let buff = [unicode];
+    if let Some(chr) = String::from_utf16(&buff[..1]).ok()?.chars().next() {
+        if chr.is_control() {
+            return None;
+        } else {
+            Some(chr)
+        }
+    } else {
+        None
+    }
+}
+
+pub fn get_unicode_from_vk(vk: u32) -> Option<u16> {
     const BUF_LEN: i32 = 32;
     let mut buff = [0_u16; BUF_LEN as usize];
     let buff_ptr = buff.as_mut_ptr();
@@ -1918,19 +2094,7 @@ pub fn get_char_by_vk(vk: u32) -> Option<char> {
         ToUnicodeEx(vk, 0x00, &state as _, buff_ptr, BUF_LEN, 0, layout)
     };
     if len == 1 {
-        if let Some(chr) = String::from_utf16(&buff[..len as usize])
-            .ok()?
-            .chars()
-            .next()
-        {
-            if chr.is_control() {
-                return None;
-            } else {
-                Some(chr)
-            }
-        } else {
-            None
-        }
+        Some(buff[0])
     } else {
         None
     }
@@ -1953,10 +2117,10 @@ mod tests {
     }
 
     #[test]
-    fn test_get_char_by_vk() {
-        let chr = get_char_by_vk(0x41); // VK_A
+    fn test_get_unicode_char_by_vk() {
+        let chr = get_char_from_vk(0x41); // VK_A
         assert_eq!(chr, Some('a'));
-        let chr = get_char_by_vk(VK_ESCAPE as u32); // VK_ESC
+        let chr = get_char_from_vk(VK_ESCAPE as u32); // VK_ESC
         assert_eq!(chr, None)
     }
 }

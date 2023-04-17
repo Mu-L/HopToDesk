@@ -1,6 +1,6 @@
 [package]
 name = "hoptodesk"
-version = "1.40.2"
+version = "1.40.4"
 authors = ["hoptodesk <info@hoptodesk.com>"]
 edition = "2021"
 build= "build.rs"
@@ -61,7 +61,7 @@ flutter_rust_bridge = { version = "1.61.1", optional = true }
 errno = "0.3"
 rdev = { git = "https://github.com/fufesou/rdev" }
 url = { version = "2.1", features = ["serde"] }
-dlopen = "0.1"
+#dlopen = "0.1"
 crossbeam-queue = "0.3"
 hex = "0.4"
 reqwest = { version = "0.11", features = ["blocking", "json", "rustls-tls"], default-features=false }
@@ -80,13 +80,13 @@ tokio-tungstenite = { version = "^0.17.2", features = ["native-tls"] }
 native-tls = "0.2.10"
 
 [target.'cfg(not(any(target_os = "android", target_os = "linux")))'.dependencies]
-cpal = "0.14"
+cpal = "0.15"
 ringbuf = "0.3"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 machine-uid = "0.2"
 mac_address = "1.1"
-sciter-rs = { git = "https://github.com/open-trade/rust-sciter", branch = "dyn_x86" }
+sciter-rs = { git = "https://github.com/open-trade/rust-sciter", branch = "dyn" }
 sys-locale = "0.2"
 enigo = { path = "libs/enigo", features = [ "with_serde" ] }
 clipboard = { path = "libs/clipboard" }
@@ -100,7 +100,7 @@ system_shutdown = "4.0"
 trayicon = { git = "https://github.com/open-trade/trayicon-rs", features = ["winit"] }
 winit = "0.26"
 winapi = { version = "0.3", features = ["winuser", "wincrypt"] }
-winreg = "0.10"
+winreg = "0.50"
 windows-service = "0.4"
 virtual_display = { path = "libs/virtual_display" }
 impersonate_system = { git = "https://github.com/21pages/impersonate-system" }
@@ -114,7 +114,7 @@ dispatch = "0.2"
 core-foundation = "0.9"
 core-graphics = "0.22"
 include_dir = "0.7"
-dark-light = "1.0"
+#dark-light = "1.0"
 fruitbasket = "0.10"
 objc_id = "0.1"
 
@@ -171,7 +171,7 @@ hound = "3.5"
 name = "HopToDesk"
 identifier = "com.hoptodesk.hoptodesk"
 icon = ["res/32x32.png", "res/128x128.png", "res/128x128@2x.png"]
-deb_depends = ["libgtk-3-0", "libxcb-randr0", "libxdo3", "libxfixes3", "libxcb-shape0", "libxcb-xfixes0", "libasound2", "libsystemd0", "curl", "libvdpau1", "libva2"]
+deb_depends = ["libgtk-3-0", "libxcb-randr0", "libxdo3", "libxfixes3", "libxcb-shape0", "libxcb-xfixes0", "libasound2", "libsystemd0", "curl", "libva-drm2", "libva-x11-2", "libvdpau1", "libgstreamer-plugins-base1.0-0", "libpam0g"]
 osx_minimum_system_version = "10.14"
 osx_frameworks = ["libsciter"]
 resources = ["res/mac-tray.png"]

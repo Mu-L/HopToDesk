@@ -3,7 +3,10 @@ use std::{
     net::SocketAddr,
     ops::Deref,
     str::FromStr,
-    sync::{mpsc, Arc, Mutex, RwLock},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        mpsc, Arc, Mutex, RwLock,
+    },
     time::UNIX_EPOCH,
 };
 
@@ -15,6 +18,8 @@ use cpal::{
     Device, Host, StreamConfig,
 };
 use crossbeam_queue::ArrayQueue;
+use futures::{stream::SplitSink, SinkExt, StreamExt};
+use tokio_tungstenite::{tungstenite::Message as WsMessage, MaybeTlsStream, WebSocketStream};
 use magnum_opus::{Channels::*, Decoder as AudioDecoder};
 #[cfg(not(any(target_os = "android", target_os = "linux")))]
 use ringbuf::{ring_buffer::RbBase, Rb};
@@ -22,6 +27,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 pub use file_trait::FileManager;
+#[cfg(not(feature = "flutter"))]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use hbb_common::tokio::sync::mpsc::UnboundedSender;
 use hbb_common::{
@@ -38,16 +44,17 @@ use hbb_common::{
     sodiumoxide::crypto::{box_, secretbox, sign},
     tcp::FramedStream,
     timeout,
-    tokio::time::Duration,    
+    tokio::time::Duration,
     tokio::{self, net::TcpStream},
-    tokio_util::compat::{Compat, TokioAsyncReadCompatExt},
-    AddrMangle, ResultType, Stream,
+    //tokio_util::compat::{Compat, TokioAsyncReadCompatExt},
+    //AddrMangle, 
+    ResultType, Stream,
 };
 pub use helper::*;
 use scrap::{
-    codec::{Decoder, DecoderCfg},
+    codec::Decoder,
     record::{Recorder, RecorderContext},
-    ImageFormat, VpxDecoderConfig, VpxVideoCodecId,
+    ImageFormat,
 };
 
 use crate::{
@@ -56,10 +63,10 @@ use crate::{
 };
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-use crate::{
-    common::{check_clipboard, ClipboardContext, CLIPBOARD_INTERVAL},
-    ui_session_interface::SessionPermissionConfig,
-};
+use crate::common::{check_clipboard, ClipboardContext, CLIPBOARD_INTERVAL};
+#[cfg(not(feature = "flutter"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use crate::ui_session_interface::SessionPermissionConfig;
 
 pub use super::lang::*;
 
@@ -73,6 +80,8 @@ pub const VIDEO_QUEUE_SIZE: usize = 120;
 
 /// Client of the remote desktop.
 pub struct Client;
+
+pub type WsSender = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, WsMessage>;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 struct TextClipboardState {
@@ -95,6 +104,12 @@ lazy_static::lazy_static! {
     static ref ENIGO: Arc<Mutex<enigo::Enigo>> = Arc::new(Mutex::new(enigo::Enigo::new()));
     static ref OLD_CLIPBOARD_TEXT: Arc<Mutex<String>> = Default::default();
     static ref TEXT_CLIPBOARD_STATE: Arc<Mutex<TextClipboardState>> = Arc::new(Mutex::new(TextClipboardState::new()));
+}
+
+#[inline]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub fn get_old_clipboard_text() -> &'static Arc<Mutex<String>> {
+    &OLD_CLIPBOARD_TEXT
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -259,7 +274,7 @@ impl Client {
         match Self::_start(peer, conn_type).await {
             Err(err) => {
                 // Refresh API
-				hbb_common::api::erase_api().await;
+                hbb_common::api::erase_api().await;
                 let err_str = err.to_string();
                 if err_str.starts_with("Failed") {
                     bail!(err_str + ": Please try later");
@@ -284,11 +299,13 @@ impl Client {
     )> {
         let mut security_numbers = String::new();
         let mut security_qr_code = String::new();
-
+		
         match Self::get_peer_info(peer_id).await {
             Ok((peer, sender)) => {
-                let (mut conn, relay, direct) = Self::_connect_both(peer_id, &peer, sender, conn_type).await?;
-                (security_numbers, security_qr_code) = Self::secure_connection(peer_id, peer.id_pk, &mut conn).await?;
+                let (mut conn, relay, direct) =
+                    Self::_connect_both(peer_id, &peer, sender, conn_type).await?;
+                (security_numbers, security_qr_code) =
+                    Self::secure_connection(peer_id, peer.id_pk, &mut conn).await?;
 
                 Ok((conn, relay, direct, security_numbers, security_qr_code))
             }
@@ -296,7 +313,8 @@ impl Client {
                 log::info!("get peer info failed with error {}, may be no internet access, try access directly.",err);
                 let peer = Peer::from_peer_id(peer_id)?;
                 let mut conn = Self::connect_directly(peer_id, &peer).await?;
-                (security_numbers, security_qr_code) = Self::secure_connection(peer_id, peer.id_pk, &mut conn).await?;
+                (security_numbers, security_qr_code) =
+                    Self::secure_connection(peer_id, peer.id_pk, &mut conn).await?;
                 Ok((conn, None, true, security_numbers, security_qr_code))
             }
         }
@@ -305,7 +323,7 @@ impl Client {
     async fn _connect_both(
         peer_id: &str,
         peer: &Peer,
-        sender: soketto::Sender<Compat<TcpStream>>,
+        sender: WsSender,
         conn_type: ConnType,
     ) -> ResultType<(FramedStream, Option<Arc<impl webrtc_util::Conn>>, bool)> {
         let (tx, mut rx) = tokio::sync::mpsc::channel(2);
@@ -317,16 +335,16 @@ impl Client {
             tokio::spawn(async move {
                 match Self::connect_directly(&peer_id, &peer).await {
                     Ok(stream) => {
-						match tx.send(Ok((stream, None, true))).await {
-							Ok(()) => {},
-							Err(e) => log::info!("Error while connecting to TURN server {e}"),
-						}
+                        match tx.send(Ok((stream, None, true))).await {
+                            Ok(()) => {}
+                            Err(e) => log::info!("Error while connecting to TURN server {e}"),
+                        }
                         //tx.send(Ok((stream, None, true))).await;
                     }
                     Err(err) => {
-						tx.send(Err(err)).await.unwrap_or_else(|e| {
-						    log::info!("Error while connecting to TURN server {e}");
-						});
+                        tx.send(Err(err)).await.unwrap_or_else(|e| {
+                            log::info!("Error while connecting to TURN server {e}");
+                        });
 
                         //tx.send(Err(err)).await;
                     }
@@ -341,21 +359,20 @@ impl Client {
             tokio::spawn(async move {
                 match Self::connect_over_turn(&peer_id, sender, peer.peer_public_addr).await {
                     Ok((stream, relay)) => {
-						tx.send(Ok((stream, Some(relay), true))).await.unwrap_or_else(|e| {
-						    log::info!("Error while connecting to TURN server {e}");
-						});
+                        tx.send(Ok((stream, Some(relay), true)))
+                            .await
+                            .unwrap_or_else(|e| {
+                                log::info!("Error while connecting to TURN server {e}");
+                            });
 
                         //tx.send(Ok((stream, Some(relay), true))).await;
                     }
                     Err(err) => {
                         //tx.send(Err(err)).await;
-						match tx.send(Err(err)).await {
-							Ok(_) => {},
-							Err(err) => {
-
-							}
-							//Err(e) => {  }
-						}						
+                        match tx.send(Err(err)).await {
+                            Ok(_) => {}
+                            Err(err) => {} //Err(e) => {  }
+                        }
                     }
                 };
             });
@@ -375,7 +392,7 @@ impl Client {
         unreachable!()
     }
 
-    async fn get_peer_info(peer: &str) -> ResultType<(Peer, soketto::Sender<Compat<TcpStream>>)> {
+    async fn get_peer_info(peer: &str) -> ResultType<(Peer, WsSender)> {
         let rendezvous_server = match crate::get_rendezvous_server(1_000).await {
             Some(server) => server,
             None => bail!("Failed to retrieve rendez-vous server address"),
@@ -387,17 +404,14 @@ impl Client {
             .as_secs()
             .to_string();
         let start = std::time::Instant::now();
-        let socket = TcpStream::connect(&rendezvous_server).await?;
-        let my_addr = socket.local_addr()?;
-        let resource = format!("/?user={}", my_peer_id);
-        let mut websocket_client =
-            soketto::handshake::Client::new(socket.compat(), &rendezvous_server, &resource);
-        let (mut sender, mut receiver) = match websocket_client.handshake().await? {
-            soketto::handshake::ServerResponse::Accepted { protocol: _ } => {
-                websocket_client.into_builder().finish()
-            }
-            _ => bail!("Websocket handshake failed"),
-        };
+        log::info!("get peer info via signal {}", rendezvous_server);
+        let (my_addr, _, websocket_client) =
+            crate::rendezvous_mediator::create_websocket_with_peer_id(
+                &rendezvous_server,
+                &my_peer_id,
+            )
+            .await?;
+        let (mut sender, mut receiver) = websocket_client.split();
 
         let mut id_pk = Vec::new();
         let mut peer_addr = Config::get_any_listen_addr(true);
@@ -407,38 +421,30 @@ impl Client {
         for i in 1..=3 {
             log::info!("#{} punch attempt with {}, id: {}", i, my_addr, peer);
             sender
-                .send_text(&rendezvous_messages::ConnectRequest::new(peer, &my_peer_id).to_json())
+                .send(WsMessage::Text(
+                    rendezvous_messages::ConnectRequest::new(peer, &my_peer_id).to_json(),
+                ))
                 .await?;
             use hbb_common::protobuf::Enum;
-            let mut receive_buff = Vec::new();
-            match timeout(RENDEZVOUS_TIMEOUT, receiver.receive_data(&mut receive_buff)).await {
-                Ok(r) => match r {
-                    Ok(soketto::Data::Text(n)) => {
-                        if let Ok(msg) = std::str::from_utf8(&receive_buff[..n]) {
-                            if let Ok(listening) =
-                                serde_json::from_str::<rendezvous_messages::Listening>(msg)
-                            {
-                                if let Ok(raw_pk) = crate::decode64(listening.pk) {
-                                    id_pk = raw_pk;
-                                    peer_addr = listening.addr;
-                                    peer_public_addr = listening.public_addr;
-                                    peer_nat_type = NatType::from_i32(listening.nat_type)
-                                        .unwrap_or(peer_nat_type);
-                                    break;
-                                }
+            match timeout(RENDEZVOUS_TIMEOUT, receiver.next()).await? {
+                Some(r) => {
+                    let msg = r?;
+                    if let WsMessage::Text(m) = msg {
+                        if let Ok(listening) =
+                            serde_json::from_str::<rendezvous_messages::Listening>(&m)
+                        {
+                            if let Ok(raw_pk) = crate::decode64(listening.pk) {
+                                id_pk = raw_pk;
+                                peer_addr = listening.addr;
+                                peer_public_addr = listening.public_addr;
+                                peer_nat_type =
+                                    NatType::from_i32(listening.nat_type).unwrap_or(peer_nat_type);
+                                break;
                             }
                         }
-                        receive_buff.clear();
                     }
-                    Err(e) => {
-                        //log::info!("error no text: {}", e);
-                        //bail!("Failed to receive next {}", e)
-                    }
-                    _ => {
-                        bail!("Received binary message from signal server")
-                    }
-                },
-                Err(_) => log::info!("timed out connection to signal server"),
+                }
+                None => log::info!("timed out connection to signal server"),
             }
         }
         if peer_addr.port() == 0 {
@@ -463,7 +469,7 @@ impl Client {
 
         Ok((
             Peer {
-                local_addr: my_addr,
+                local_addr: SocketAddr::new(my_addr, 0),
                 peer_addr,
                 peer_public_addr,
                 peer_nat_type,
@@ -475,36 +481,37 @@ impl Client {
         ))
     }
 
-	async fn connect_over_turn(
-		peer_id: &str,
-		sender: soketto::Sender<Compat<TcpStream>>,
-		peer_public_addr: SocketAddr,
-	) -> ResultType<(FramedStream, Arc<impl webrtc_util::Conn>)> {
-		let start = std::time::Instant::now();
-		log::info!("start connecting peer via turn servers");
+    async fn connect_over_turn(
+        peer_id: &str,
+        sender: WsSender,
+        peer_public_addr: SocketAddr,
+    ) -> ResultType<(FramedStream, Arc<impl webrtc_util::Conn>)> {
+        let start = std::time::Instant::now();
+        log::info!("start connecting peer via turn servers");
 
-		let (relay, conn) = match turn_client::connect_over_turn_servers(
-			&peer_id,
-			peer_public_addr,
-			sender,
-		)
-		.await {
-			Ok((relay_conn, stream)) => {
-				log::info!("connect successfully to peer via TURN servers!");
-				(relay_conn, stream)
-			}
-			Err(err) => {
-				log::warn!("attempt to connect via turn servers failed: {}", err);
-				return Err(err.into());
-			}
-		};
+        let (relay, conn) = match turn_client::connect_over_turn_servers(
+            &peer_id,
+            peer_public_addr,
+            sender,
+        )
+        .await
+        {
+            Ok((relay_conn, stream)) => {
+                log::info!("connect successfully to peer via TURN servers!");
+                (relay_conn, stream)
+            }
+            Err(err) => {
+                log::warn!("attempt to connect via turn servers failed: {}", err);
+                return Err(err.into());
+            }
+        };
 
-		let time_used = start.elapsed().as_millis() as u64;
-		log::info!("{}ms used to establish connection", time_used);
+        let time_used = start.elapsed().as_millis() as u64;
+        log::info!("{}ms used to establish connection", time_used);
 
-		//Self::secure_connection(peer_id, id_pk, &mut conn).await?;
-		Ok((conn, relay))
-	}
+        //Self::secure_connection(peer_id, id_pk, &mut conn).await?;
+        Ok((conn, relay))
+    }
 
     async fn connect_directly(peer_id: &str, peer: &Peer) -> ResultType<FramedStream> {
         let connect_timeout = peer.connect_timeout(peer_id).await;
@@ -588,8 +595,16 @@ impl Client {
                                 });
                                 timeout(CONNECT_TIMEOUT, conn.send(&msg_out)).await??;
                                 conn.set_key(key);
-                                security_numbers = hbb_common::password_security::compute_security_code(&out_sk_b,&their_pk_b,);
-                                log::info!("Connection is secured: {}, and Security Code is: {}", conn.is_secured(), security_numbers);
+                                security_numbers =
+                                    hbb_common::password_security::compute_security_code(
+                                        &out_sk_b,
+                                        &their_pk_b,
+                                    );
+                                log::info!(
+                                    "Connection is secured: {}, and Security Code is: {}",
+                                    conn.is_secured(),
+                                    security_numbers
+                                );
                             } else {
                                 log::error!("Handshake failed: sign failure");
                                 conn.send(&Message::new()).await?;
@@ -617,7 +632,6 @@ impl Client {
         Ok((security_numbers, security_qr_code))
     }
 
-
     #[inline]
     #[cfg(feature = "flutter")]
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -635,7 +649,7 @@ impl Client {
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    fn try_start_clipboard(_conf_tx: Option<(SessionPermissionConfig, UnboundedSender<Data>)>) {
+    fn try_start_clipboard(_ctx: Option<ClientClipboardContext>) {
         let mut clipboard_lock = TEXT_CLIPBOARD_STATE.lock().unwrap();
         if clipboard_lock.running {
             return;
@@ -662,9 +676,9 @@ impl Client {
                             #[cfg(feature = "flutter")]
                             crate::flutter::send_text_clipboard_msg(msg);
                             #[cfg(not(feature = "flutter"))]
-                            if let Some((cfg, tx)) = &_conf_tx {
-                                if cfg.is_text_clipboard_required() {
-                                    let _ = tx.send(Data::Message(msg));
+                            if let Some(ctx) = &_ctx {
+                                if ctx.cfg.is_text_clipboard_required() {
+                                    let _ = ctx.tx.send(Data::Message(msg));
                                 }
                             }
                         }
@@ -678,6 +692,7 @@ impl Client {
         }
     }
 
+    #[inline]
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     fn get_current_text_clipboard_msg() -> Option<Message> {
         let txt = &*OLD_CLIPBOARD_TEXT.lock().unwrap();
@@ -788,14 +803,23 @@ impl AudioHandler {
         let mut config: StreamConfig = config.into();
         config.channels = format0.channels as _;
         match sample_format {
-            cpal::SampleFormat::F32 => self.build_output_stream::<f32>(&config, &device)?,
+            cpal::SampleFormat::I8 => self.build_output_stream::<i8>(&config, &device)?,
             cpal::SampleFormat::I16 => self.build_output_stream::<i16>(&config, &device)?,
+            cpal::SampleFormat::I32 => self.build_output_stream::<i32>(&config, &device)?,
+            cpal::SampleFormat::I64 => self.build_output_stream::<i64>(&config, &device)?,
+            cpal::SampleFormat::U8 => self.build_output_stream::<u8>(&config, &device)?,
             cpal::SampleFormat::U16 => self.build_output_stream::<u16>(&config, &device)?,
+            cpal::SampleFormat::U32 => self.build_output_stream::<u32>(&config, &device)?,
+            cpal::SampleFormat::U64 => self.build_output_stream::<u64>(&config, &device)?,
+            cpal::SampleFormat::F32 => self.build_output_stream::<f32>(&config, &device)?,
+            cpal::SampleFormat::F64 => self.build_output_stream::<f64>(&config, &device)?,
+            f => bail!("unsupported audio format: {:?}", f),
         }
         self.sample_rate = (format0.sample_rate, config.sample_rate.0);
         Ok(())
     }
 
+    /// Handle audio format and create an audio decoder.
     pub fn handle_format(&mut self, f: AudioFormat) {
         match AudioDecoder::new(f.sample_rate, if f.channels > 1 { Stereo } else { Mono }) {
             Ok(d) => {
@@ -866,7 +890,7 @@ impl AudioHandler {
 
     /// Build audio output stream for current device.
     #[cfg(not(any(target_os = "android", target_os = "linux")))]
-    fn build_output_stream<T: cpal::Sample>(
+    fn build_output_stream<T: cpal::Sample + cpal::SizedSample + cpal::FromSample<f32>>(
         &mut self,
         config: &StreamConfig,
         device: &Device,
@@ -877,6 +901,7 @@ impl AudioHandler {
         };
         let audio_buffer = self.audio_buffer.0.clone();
         let ready = self.ready.clone();
+        let timeout = None;
         let stream = device.build_output_stream(
             config,
             move |data: &mut [T], _: &_| {
@@ -894,12 +919,13 @@ impl AudioHandler {
                 let mut input = elems.into_iter();
                 for sample in data.iter_mut() {
                     *sample = match input.next() {
-                        Some(x) => T::from(&x),
-                        _ => T::from(&0.),
+                        Some(x) => T::from_sample(x),
+                        _ => T::from_sample(0.),
                     };
                 }
             },
             err_fn,
+            timeout,
         )?;
         stream.play()?;
         self.audio_stream = Some(Box::new(stream));
@@ -919,12 +945,7 @@ impl VideoHandler {
     /// Create a new video handler.
     pub fn new() -> Self {
         VideoHandler {
-            decoder: Decoder::new(DecoderCfg {
-                vpx: VpxDecoderConfig {
-                    codec: VpxVideoCodecId::VP9,
-                    num_threads: (num_cpus::get() / 2) as _,
-                },
-            }),
+            decoder: Decoder::new(),
             rgb: Default::default(),
             recorder: Default::default(),
             record: false,
@@ -956,12 +977,7 @@ impl VideoHandler {
 
     /// Reset the decoder.
     pub fn reset(&mut self) {
-        self.decoder = Decoder::new(DecoderCfg {
-            vpx: VpxDecoderConfig {
-                codec: VpxVideoCodecId::VP9,
-                num_threads: 1,
-            },
-        });
+        self.decoder = Decoder::new();
     }
 
     /// Start or stop screen record.
@@ -975,13 +991,14 @@ impl VideoHandler {
                 filename: "".to_owned(),
                 width: w as _,
                 height: h as _,
-                codec_id: scrap::record::RecordCodecID::VP9,
+                format: scrap::CodecFormat::VP9,
                 tx: None,
             })
             .map_or(Default::default(), |r| Arc::new(Mutex::new(Some(r))));
         } else {
             self.recorder = Default::default();
         }
+
         self.record = start;
     }
 }
@@ -1000,7 +1017,7 @@ pub struct LoginConfigHandler {
     pub conn_id: i32,
     features: Option<Features>,
     session_id: u64,
-    pub supported_encoding: Option<(bool, bool)>,
+    pub supported_encoding: SupportedEncoding,
     pub restarting_remote_device: bool,
     pub force_relay: bool,
     switch_uuid: Option<String>,
@@ -1046,14 +1063,14 @@ impl LoginConfigHandler {
         self.remember = !config.password.is_empty();
         self.config = config;
         self.session_id = rand::random();
-        self.supported_encoding = None;
+        self.supported_encoding = Default::default();
         self.restarting_remote_device = false;
         self.force_relay = !self.get_option("force-always-relay").is_empty() || force_relay;
         self.switch_uuid = switch_uuid;
         self.success_time = None;
         self.direct_error_counter = 0;
     }
-
+/*
     // XXX: fix conflicts between with config that introduces by Deref.
     pub fn set_reconnect_password(&mut self, password: Vec<u8>) {
         self.password = password
@@ -1063,7 +1080,7 @@ impl LoginConfigHandler {
     pub fn get_reconnect_password(&self) -> Vec<u8> {
         return self.password.clone();
     }
-
+*/
     pub fn should_auto_login(&self) -> String {
         let l = self.lock_after_session_end.v;
         let a = !self.get_option("auto-login").is_empty();
@@ -1102,6 +1119,8 @@ impl LoginConfigHandler {
         self.save_config(config);
     }
 
+    //to-do: too many dup code below.
+    
     /// Save view style to the current config.
     ///
     /// # Arguments
@@ -1160,6 +1179,7 @@ impl LoginConfigHandler {
             "".to_owned()
         }
     }
+
     /// Toggle an option in the handler.
     ///
     /// # Arguments
@@ -1303,10 +1323,11 @@ impl LoginConfigHandler {
                 config.custom_image_quality[0]
             };
             msg.custom_image_quality = quality << 8;
+            #[cfg(feature = "flutter")]
+            if let Some(custom_fps) = self.options.get("custom-fps") {
+                msg.custom_fps = custom_fps.parse().unwrap_or(30);
+            }
             n += 1;
-        }
-        if let Some(custom_fps) = self.options.get("custom-fps") {
-            msg.custom_fps = custom_fps.parse().unwrap_or(30);
         }
         let view_only = self.get_toggle_option("view-only");
         if view_only {
@@ -1333,8 +1354,8 @@ impl LoginConfigHandler {
             msg.disable_clipboard = BoolOption::Yes.into();
             n += 1;
         }
-        let state = Decoder::video_codec_state(&self.id);
-        msg.video_codec_state = hbb_common::protobuf::MessageField::some(state);
+        msg.supported_decoding =
+            hbb_common::protobuf::MessageField::some(Decoder::supported_decodings(Some(&self.id)));
         n += 1;
 
         if n > 0 {
@@ -1599,10 +1620,7 @@ impl LoginConfigHandler {
         self.conn_id = pi.conn_id;
         // no matter if change, for update file time
         self.save_config(config);
-        #[cfg(any(feature = "hwcodec", feature = "mediacodec"))]
-        {
-            self.supported_encoding = Some((pi.encoding.h264, pi.encoding.h265));
-        }
+		self.supported_encoding = pi.encoding.clone().unwrap_or_default();
     }
 
     pub fn get_remote_dir(&self) -> String {
@@ -1624,7 +1642,13 @@ impl LoginConfigHandler {
         serde_json::to_string::<HashMap<String, String>>(&x).unwrap_or_default()
     }
 
-    fn create_login_msg(&self, password: Vec<u8>) -> Message {
+    /// Create a [`Message`] for login.
+    fn create_login_msg(
+        &self,
+        os_username: String,
+        os_password: String,
+        password: Vec<u8>,
+    ) -> Message {
         #[cfg(any(target_os = "android", target_os = "ios"))]
         let my_id = Config::get_id_or(crate::common::DEVICE_ID.lock().unwrap().clone());
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -1637,6 +1661,12 @@ impl LoginConfigHandler {
             option: self.get_option_message(true).into(),
             session_id: self.session_id,
             version: crate::VERSION.to_string(),
+            os_login: Some(OSLogin {
+                username: os_username,
+                password: os_password,
+                ..Default::default()
+            })
+            .into(),
             ..Default::default()
         };
         match self.conn_type {
@@ -1659,10 +1689,10 @@ impl LoginConfigHandler {
     }
 
     pub fn change_prefer_codec(&self) -> Message {
-        let state = scrap::codec::Decoder::video_codec_state(&self.id);
+        let decoding = scrap::codec::Decoder::supported_decodings(Some(&self.id));
         let mut misc = Misc::new();
         misc.set_option(OptionMessage {
-            video_codec_state: hbb_common::protobuf::MessageField::some(state),
+            supported_decoding: hbb_common::protobuf::MessageField::some(decoding),
             ..Default::default()
         });
         let mut msg_out = Message::new();
@@ -1677,21 +1707,21 @@ impl LoginConfigHandler {
         msg_out.set_misc(misc);
         msg_out
     }
-/*
+    /*
 
-    pub fn set_force_relay(&mut self, direct: bool, received: bool) {
-        self.force_relay = false;
-        if direct && !received {
-            let errno = errno::errno().0;
-            log::info!("errno is {}", errno);
-            // TODO: check mac and ios
-            if cfg!(windows) && errno == 10054 || !cfg!(windows) && errno == 104 {
-                self.force_relay = true;
-                self.set_option("force-always-relay".to_owned(), "Y".to_owned());
+        pub fn set_force_relay(&mut self, direct: bool, received: bool) {
+            self.force_relay = false;
+            if direct && !received {
+                let errno = errno::errno().0;
+                log::info!("errno is {}", errno);
+                // TODO: check mac and ios
+                if cfg!(windows) && errno == 10054 || !cfg!(windows) && errno == 104 {
+                    self.force_relay = true;
+                    self.set_option("force-always-relay".to_owned(), "Y".to_owned());
+                }
             }
         }
-    }
-*/    
+    */
 }
 
 /// Media data.
@@ -1714,7 +1744,12 @@ pub type MediaSender = mpsc::Sender<MediaData>;
 /// * `video_callback` - The callback for video frame. Being called when a video frame is ready.
 pub fn start_video_audio_threads<F>(
     video_callback: F,
-) -> (MediaSender, MediaSender, Arc<ArrayQueue<VideoFrame>>)
+) -> (
+    MediaSender,
+    MediaSender,
+    Arc<ArrayQueue<VideoFrame>>,
+    Arc<AtomicUsize>,
+)
 where
     F: 'static + FnMut(&mut Vec<u8>) + Send,
 {
@@ -1722,21 +1757,48 @@ where
     let video_queue = Arc::new(ArrayQueue::<VideoFrame>::new(VIDEO_QUEUE_SIZE));
     let video_queue_cloned = video_queue.clone();
     let mut video_callback = video_callback;
+    let mut duration = std::time::Duration::ZERO;
+    let mut count = 0;
+    let fps = Arc::new(AtomicUsize::new(0));
+    let decode_fps = fps.clone();
+    let mut skip_beginning = 0;
 
     std::thread::spawn(move || {
         let mut video_handler = VideoHandler::new();
         loop {
             if let Ok(data) = video_receiver.recv() {
                 match data {
-                    MediaData::VideoFrame(vf) => {
-                        if let Ok(true) = video_handler.handle_frame(*vf) {
+                    MediaData::VideoFrame(_) | MediaData::VideoQueue => {
+                        let vf = if let MediaData::VideoFrame(vf) = data {
+                            *vf
+                        } else {
+                            if let Some(vf) = video_queue.pop() {
+                                vf
+                            } else {
+                                continue;
+                            }
+                        };
+                        let start = std::time::Instant::now();
+                        if let Ok(true) = video_handler.handle_frame(vf) {
                             video_callback(&mut video_handler.rgb);
-                        }
-                    }
-                    MediaData::VideoQueue => {
-                        if let Some(vf) = video_queue.pop() {
-                            if let Ok(true) = video_handler.handle_frame(vf) {
-                                video_callback(&mut video_handler.rgb);
+                            // fps calculation
+                            // The first frame will be very slow
+                            if skip_beginning < 5 {
+                                skip_beginning += 1;
+                                continue;
+                            }
+                            duration += start.elapsed();
+                            count += 1;
+                            if count % 10 == 0 {
+                                fps.store(
+                                    (count * 1000 / duration.as_millis()) as usize,
+                                    Ordering::Relaxed,
+                                );
+                            }
+                            // Clear to get real-time fps
+                            if count > 300 {
+                                count = 0;
+                                duration = Duration::ZERO;
                             }
                         }
                     }
@@ -1755,7 +1817,7 @@ where
         log::info!("Video decoder loop exits");
     });
     let audio_sender = start_audio_thread();
-    return (video_sender, audio_sender, video_queue_cloned);
+    return (video_sender, audio_sender, video_queue_cloned, decode_fps);
 }
 
 /// Start an audio thread
@@ -1936,6 +1998,73 @@ fn _input_os_password(p: String, activate: bool, interface: impl Interface) {
     interface.send(Data::Message(msg_out));
 }
 
+#[derive(Copy, Clone)]
+struct LoginErrorMsgBox {
+    msgtype: &'static str,
+    title: &'static str,
+    text: &'static str,
+    link: &'static str,
+    try_again: bool,
+}
+
+lazy_static::lazy_static! {
+    static ref LOGIN_ERROR_MAP: Arc<HashMap<&'static str, LoginErrorMsgBox>> = {
+        //use hbb_common::config::LINK_HEADLESS_LINUX_SUPPORT;
+        let map = HashMap::from([(crate::server::LOGIN_MSG_DESKTOP_SESSION_NOT_READY, LoginErrorMsgBox{
+            msgtype: "session-login",
+            title: "",
+            text: "",
+            link: "",
+            try_again: true,
+        }), (crate::server::LOGIN_MSG_DESKTOP_XSESSION_FAILED, LoginErrorMsgBox{
+            msgtype: "session-re-login",
+            title: "",
+            text: "",
+            link: "",
+            try_again: true,
+        }), (crate::server::LOGIN_MSG_DESKTOP_SESSION_ANOTHER_USER, LoginErrorMsgBox{
+            msgtype: "info-nocancel",
+            title: "another_user_login_title_tip",
+            text: "another_user_login_text_tip",
+            link: "",
+            try_again: false,
+/*        
+		}), (crate::server::LOGIN_MSG_DESKTOP_XORG_NOT_FOUND, LoginErrorMsgBox{
+            msgtype: "info-nocancel",
+            title: "xorg_not_found_title_tip",
+            text: "xorg_not_found_text_tip",
+            link: LINK_HEADLESS_LINUX_SUPPORT,
+            try_again: true,
+        }), (crate::server::LOGIN_MSG_DESKTOP_NO_DESKTOP, LoginErrorMsgBox{
+            msgtype: "info-nocancel",
+            title: "no_desktop_title_tip",
+            text: "no_desktop_text_tip",
+            link: LINK_HEADLESS_LINUX_SUPPORT,
+            try_again: true,
+*/			
+        }), (crate::server::LOGIN_MSG_DESKTOP_SESSION_NOT_READY_PASSWORD_EMPTY, LoginErrorMsgBox{
+            msgtype: "session-login-password",
+            title: "",
+            text: "",
+            link: "",
+            try_again: true,
+        }), (crate::server::LOGIN_MSG_DESKTOP_SESSION_NOT_READY_PASSWORD_WRONG, LoginErrorMsgBox{
+            msgtype: "session-login-re-password",
+            title: "",
+            text: "",
+            link: "",
+            try_again: true,
+        }), (crate::server::LOGIN_MSG_NO_PASSWORD_ACCESS, LoginErrorMsgBox{
+            msgtype: "wait-remote-accept-nook",
+            title: "Prompt",
+            text: "Please wait for the remote side to accept your session request...",
+            link: "",
+            try_again: true,
+        })]);
+        Arc::new(map)
+    };
+}
+
 /// Handle login error.
 /// Return true if the password is wrong, return false if there's an actual error.
 pub fn handle_login_error(
@@ -1943,19 +2072,27 @@ pub fn handle_login_error(
     err: &str,
     interface: &impl Interface,
 ) -> bool {
-    if err == "Wrong Password" {
+    if err == crate::server::LOGIN_MSG_PASSWORD_EMPTY {
+        lc.write().unwrap().password = Default::default();
+        interface.msgbox("input-password", "Password Required", "", "");
+        true
+    } else if err == crate::server::LOGIN_MSG_PASSWORD_WRONG {
         lc.write().unwrap().password = Default::default();
         interface.msgbox("re-input-password", err, "Do you want to enter again?", "");
         true
-    } else if err == "No Password Access" {
-        lc.write().unwrap().password = Default::default();
-        interface.msgbox(
-            "wait-remote-accept-nook",
-            "Prompt",
-            "Please wait for the remote side to accept your session request...",
-            "",
-        );
-        true
+    } else if LOGIN_ERROR_MAP.contains_key(err) {
+        if let Some(msgbox_info) = LOGIN_ERROR_MAP.get(err) {
+            interface.msgbox(
+                msgbox_info.msgtype,
+                msgbox_info.title,
+                msgbox_info.text,
+                msgbox_info.link,
+            );
+            msgbox_info.try_again
+        } else {
+            // unreachable!
+            false
+        }
     } else {
         if err.contains(SCRAP_X11_REQUIRED) {
             interface.msgbox("error", "Login Error", err, SCRAP_X11_REF_URL);
@@ -1990,7 +2127,8 @@ pub async fn handle_hash(
             return;
         }
     }
-    let mut password = lc.read().unwrap().get_reconnect_password();
+    //let mut password = lc.read().unwrap().get_reconnect_password();
+    let mut password = lc.read().unwrap().password.clone();
     if password.is_empty() {
         if !password_preset.is_empty() {
             let mut hasher = Sha256::new();
@@ -2003,16 +2141,21 @@ pub async fn handle_hash(
     if password.is_empty() {
         password = lc.read().unwrap().config.password.clone();
     }
-    if password.is_empty() {
+    let password = if password.is_empty() {
         // login without password, the remote side can click accept
-        send_login(lc.clone(), Vec::new(), peer).await;
         interface.msgbox("input-password", "Password Required", "", "");
+        Vec::new()
     } else {
         let mut hasher = Sha256::new();
         hasher.update(&password);
         hasher.update(&hash.challenge);
-        send_login(lc.clone(), hasher.finalize()[..].into(), peer).await;
-    }
+        hasher.finalize()[..].into()
+    };
+
+    let os_username = lc.read().unwrap().get_option("os-username");
+    let os_password = lc.read().unwrap().get_option("os-password");
+
+    send_login(lc.clone(), os_username, os_password, password, peer).await;
     lc.write().unwrap().hash = hash;
 }
 
@@ -2021,10 +2164,21 @@ pub async fn handle_hash(
 /// # Arguments
 ///
 /// * `lc` - Login config.
+/// * `os_username` - OS username.
+/// * `os_password` - OS password.
 /// * `password` - Password.
 /// * `peer` - [`Stream`] for communicating with peer.
-async fn send_login(lc: Arc<RwLock<LoginConfigHandler>>, password: Vec<u8>, peer: &mut Stream) {
-    let msg_out = lc.read().unwrap().create_login_msg(password);
+async fn send_login(
+    lc: Arc<RwLock<LoginConfigHandler>>,
+    os_username: String,
+    os_password: String,
+    password: Vec<u8>,
+    peer: &mut Stream,
+) {
+    let msg_out = lc
+        .read()
+        .unwrap()
+        .create_login_msg(os_username, os_password, password);
     allow_err!(peer.send(&msg_out).await);
 }
 
@@ -2033,25 +2187,41 @@ async fn send_login(lc: Arc<RwLock<LoginConfigHandler>>, password: Vec<u8>, peer
 /// # Arguments
 ///
 /// * `lc` - Login config.
+/// * `os_username` - OS username.
+/// * `os_password` - OS password.
 /// * `password` - Password.
 /// * `remember` - Whether to remember password.
 /// * `peer` - [`Stream`] for communicating with peer.
 pub async fn handle_login_from_ui(
     lc: Arc<RwLock<LoginConfigHandler>>,
+    os_username: String,
+    os_password: String,
     password: String,
     remember: bool,
     peer: &mut Stream,
 ) {
-    let mut hasher = Sha256::new();
-    hasher.update(password);
-    hasher.update(&lc.read().unwrap().hash.salt);
-    let res = hasher.finalize();
-    lc.write().unwrap().remember = remember;
-    lc.write().unwrap().set_reconnect_password(res[..].into());
+    let mut hash_password = if password.is_empty() {
+        let mut password2 = lc.read().unwrap().password.clone();
+        if password2.is_empty() {
+            password2 = lc.read().unwrap().config.password.clone();
+        }
+        password2
+    } else {
+	    let mut hasher = Sha256::new();
+	    hasher.update(password);
+	    hasher.update(&lc.read().unwrap().hash.salt);
+	    let res = hasher.finalize();
+	    lc.write().unwrap().remember = remember;
+	    //lc.write().unwrap().set_reconnect_password(res[..].into());
+	    lc.write().unwrap().password = res[..].into();
+        res[..].into()
+    };
     let mut hasher2 = Sha256::new();
-    hasher2.update(&res[..]);
+    hasher2.update(&hash_password[..]);
     hasher2.update(&lc.read().unwrap().hash.challenge);
-    send_login(lc.clone(), hasher2.finalize()[..].into(), peer).await;
+    hash_password = hasher2.finalize()[..].to_vec();
+
+    send_login(lc.clone(), os_username, os_password, hash_password, peer).await;
 }
 
 async fn send_switch_login_request(
@@ -2065,7 +2235,7 @@ async fn send_switch_login_request(
         lr: hbb_common::protobuf::MessageField::some(
             lc.read()
                 .unwrap()
-                .create_login_msg(vec![])
+                .create_login_msg("".to_owned(), "".to_owned(), vec![])
                 .login_request()
                 .to_owned(),
         ),
@@ -2088,7 +2258,14 @@ pub trait Interface: Send + Clone + 'static + Sized {
     }
     fn is_force_relay(&self) -> bool;
     async fn handle_hash(&mut self, pass: &str, hash: Hash, peer: &mut Stream);
-    async fn handle_login_from_ui(&mut self, password: String, remember: bool, peer: &mut Stream);
+    async fn handle_login_from_ui(
+        &mut self,
+        os_username: String,
+        os_password: String,
+        password: String,
+        remember: bool,
+        peer: &mut Stream,
+    );
     async fn handle_test_delay(&mut self, t: TestDelay, peer: &mut Stream);
 
     fn get_login_config_handler(&self) -> Arc<RwLock<LoginConfigHandler>>;
@@ -2100,7 +2277,7 @@ pub trait Interface: Send + Clone + 'static + Sized {
 #[derive(Clone)]
 pub enum Data {
     Close,
-    Login((String, bool)),
+    Login((String, String, String, bool)),
     Message(Message),
     SendFiles((i32, String, String, i32, bool, bool)),
     RemoveDirAll((i32, String, bool, bool)),
@@ -2275,7 +2452,7 @@ pub fn check_if_retry(msgtype: &str, title: &str, text: &str) -> bool {
                 && !text.to_lowercase().contains("resolve")
                 && !text.to_lowercase().contains("mismatch")
                 && !text.to_lowercase().contains("manually")
-                && !text.to_lowercase().contains("as expected")                
+                && !text.to_lowercase().contains("as expected")
                 && !text.to_lowercase().contains("closed the session")
                 && !text.to_lowercase().contains("not allowed")))
 }
@@ -2310,4 +2487,15 @@ fn decode_id_pk(signed: &[u8], key: &sign::PublicKey) -> ResultType<(String, [u8
     } else {
         bail!("Wrong public length");
     }
+}
+
+#[cfg(feature = "flutter")]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub(crate) struct ClientClipboardContext;
+
+#[cfg(not(feature = "flutter"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub(crate) struct ClientClipboardContext {
+    pub cfg: SessionPermissionConfig,
+    pub tx: UnboundedSender<Data>,
 }

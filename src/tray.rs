@@ -128,13 +128,18 @@ pub fn make_tray() -> hbb_common::ResultType<()> {
         menu::{Menu, MenuEvent, MenuItem},
         ClickEvent, TrayEvent, TrayIconBuilder,
     };
-    let mode = dark_light::detect();
+    /*
+	let mode = dark_light::detect();
     const LIGHT: &[u8] = include_bytes!("../res/mac-tray-light-x2.png");
     const DARK: &[u8] = include_bytes!("../res/mac-tray-dark-x2.png");
     let icon = match mode {
         dark_light::Mode::Dark => LIGHT,
-        _ => DARK,
+        _ => LIGHT,
     };
+	*/
+	const LIGHT: &[u8] = include_bytes!("../res/mac-tray-light-x2.png");
+	let icon = LIGHT;
+	
     let (icon_rgba, icon_width, icon_height) = {
         let image = image::load_from_memory(icon)
             .context("Failed to open icon path")?

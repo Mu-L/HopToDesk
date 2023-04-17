@@ -1,5 +1,8 @@
+#[cfg(not(debug_assertions))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::platform::breakdown_callback;
 use hbb_common::log;
+#[cfg(not(debug_assertions))]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use hbb_common::platform::register_breakdown_handler;
 
@@ -39,6 +42,7 @@ pub fn core_main() -> Option<Vec<String>> {
         }
         i += 1;
     }
+    #[cfg(not(debug_assertions))]
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     register_breakdown_handler(breakdown_callback);
     #[cfg(target_os = "linux")]
@@ -113,9 +117,9 @@ pub fn core_main() -> Option<Vec<String>> {
                     log::error!("Failed to before-uninstall: {}", err);
                 }
                 return None;
-            } else if args[0] == "--update" {
-                hbb_common::allow_err!(platform::update_me());
-                return None;
+//            } else if args[0] == "--update" {
+//                hbb_common::allow_err!(platform::update_me());
+//                return None;
             } else if args[0] == "--reinstall" {
                  hbb_common::allow_err!(platform::uninstall_me(false));
                  hbb_common::allow_err!(platform::install_me(
@@ -127,7 +131,8 @@ pub fn core_main() -> Option<Vec<String>> {
                 ));
                 return None;
             } else if args[0] == "--silent-install" {
-                hbb_common::allow_err!(platform::install_me(
+			
+				hbb_common::allow_err!(platform::install_me(
                     "desktopicon startmenu",
                     "".to_owned(),
                     true,
@@ -160,7 +165,21 @@ pub fn core_main() -> Option<Vec<String>> {
                 return None;
             }
         }
-        if args[0] == "--remove" {
+		if args[0] == "--connect" {
+			let input = &args[1];
+			if input.starts_with("hoptodesk://connect/") {
+				if let Some(id) = input.strip_prefix("hoptodesk://connect/").map(str::to_owned) {
+					args[1] = id.to_string();
+				}
+			} else if input.starts_with("hoptodesk://filetransfer/") {
+				if let Some(id) = input.strip_prefix("hoptodesk://filetransfer/").map(str::to_owned) {
+					args[1] = id.to_string();
+					args[0] = "--file-transfer".to_string();
+				}
+			}
+		}
+	
+		if args[0] == "--remove" {
             if args.len() == 2 {
                 // sleep a while so that process of removed exe exit
                 std::thread::sleep(std::time::Duration::from_secs(1));
@@ -226,6 +245,11 @@ pub fn core_main() -> Option<Vec<String>> {
             // call connection manager to establish connections
             // meanwhile, return true to call flutter window to show control panel
             crate::ui_interface::start_option_status_sync();
+        } else if args[0] == "--cm-no-ui" {
+            #[cfg(feature = "flutter")]
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            crate::flutter::connection_manager::start_cm_no_ui();
+            return None;
         }
     }
     //_async_logger_holder.map(|x| x.flush());

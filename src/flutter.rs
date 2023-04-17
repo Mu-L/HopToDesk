@@ -3,17 +3,18 @@ use crate::{
     flutter_ffi::EventToUI,
     ui_session_interface::{io_loop, InvokeUiSession, Session},
 };
-#[cfg(feature = "flutter_texture_render")]
-use dlopen::{
-    symbor::{Library, Symbol},
-    Error as LibError,
-};
 use flutter_rust_bridge::StreamSink;
-#[cfg(feature = "flutter_texture_render")]
-use hbb_common::libc::c_void;
 use hbb_common::{
     bail, config::LocalConfig, log, message_proto::*,
     rendezvous_proto::ConnType, ResultType,
+};
+#[cfg(feature = "flutter_texture_render")]
+use hbb_common::{
+    dlopen::{
+        symbor::{Library, Symbol},
+        Error as LibError,
+    },
+    libc::c_void,
 };
 use serde_json::json;
 
@@ -218,7 +219,7 @@ impl VideoRenderer {
     }
 
     pub fn on_rgba(&self, rgba: &Vec<u8>) {
-        if self.ptr == usize::default() {
+        if self.ptr == usize::default() || self.width == 0 || self.height == 0 {
             return;
         }
         if let Some(func) = &self.on_rgba_func {
@@ -815,8 +816,20 @@ pub mod connection_manager {
         }
     }
 
+    #[inline]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    pub fn start_cm_no_ui() {
+        start_listen_ipc(false);
+    }
+
+    #[inline]
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pub fn start_listen_ipc_thread() {
+        start_listen_ipc(true);
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    fn start_listen_ipc(new_thread: bool) {
         use crate::ui_cm_interface::{start_ipc, ConnectionManager};
 
         #[cfg(target_os = "linux")]
@@ -825,7 +838,11 @@ pub mod connection_manager {
         let cm = ConnectionManager {
             ui_handler: FlutterHandler {},
         };
-        std::thread::spawn(move || start_ipc(cm));
+        if new_thread {
+            std::thread::spawn(move || start_ipc(cm));
+        } else {
+            start_ipc(cm);
+        }
     }
 
     #[cfg(target_os = "android")]

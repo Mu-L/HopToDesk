@@ -6,12 +6,12 @@ mod cn;
 mod cs;
 mod da;
 mod de;
+mod el;
 mod en;
 mod eo;
 mod es;
 mod fa;
 mod fr;
-mod el;
 mod hu;
 mod id;
 mod it;
@@ -33,6 +33,7 @@ mod tr;
 mod tw;
 mod ua;
 mod vn;
+mod lt;
 
 
 lazy_static::lazy_static! {
@@ -52,6 +53,7 @@ lazy_static::lazy_static! {
             ("da", "Dansk"),
             ("sv", "Svenska"),
             ("pl", "Polski"),
+            ("lt", "Lietuvių"),
             ("sr", "Srpski"),
             ("sq", "Shqip"),
             ("sk", "Slovenčina"),
