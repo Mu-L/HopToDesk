@@ -9,10 +9,10 @@ use std::{
 use sciter::Value;
 
 use hbb_common::{
-    allow_err, api,
-    config::{self, Config, LocalConfig, PeerConfig},
+    allow_err,
+    config::{Config, PeerConfig},
     log,
-    rendezvous_proto::*,
+    //rendezvous_proto::*,
     tokio::{self},
 };
 
@@ -213,7 +213,8 @@ impl UI {
     }
 
     fn update_temporary_password(&self) {
-        update_temporary_password()
+		update_temporary_password();
+		
     }
 
     fn permanent_password(&self) -> String {
@@ -518,17 +519,21 @@ impl UI {
     fn modify_default_login(&mut self) -> String {
         modify_default_login()
     }
-
-//    fn get_software_update_url(&self) -> String {
-//        get_software_update_url()
-//    }
-
+/*
+    fn get_software_update_url(&self) -> String {
+        get_software_update_url()
+    }
+*/
     fn get_new_version(&self) -> String {
         get_new_version()
     }
 
     fn get_version(&self) -> String {
         get_version()
+    }
+
+    fn get_fingerprint(&self) -> String {
+        get_fingerprint()
     }
 
     fn get_app_name(&self) -> String {
@@ -741,6 +746,7 @@ impl sciter::EventHandler for UI {
         //fn get_software_update_url();
         fn get_new_version();
         fn get_version();
+        fn get_fingerprint();
         fn update_me(String);
         fn show_run_without_install();
         fn run_without_install();

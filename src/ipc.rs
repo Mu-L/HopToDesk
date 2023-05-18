@@ -1,5 +1,3 @@
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-use crate::two_factor_auth::sockets::AuthAnswer;
 use std::{collections::HashMap, sync::atomic::Ordering};
 #[cfg(not(windows))]
 use std::{fs::File, io::prelude::*};
@@ -35,6 +33,8 @@ pub enum PrivacyModeState {
     OffByPeer,
     OffUnknown,
 }
+// IPC actions here.
+pub const IPC_ACTION_CLOSE: &str = "close";
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "t", content = "c")]
@@ -144,7 +144,7 @@ pub enum DataPortableService {
     Ping,
     Pong,
     ConnCount(Option<usize>),
-    Mouse(Vec<u8>),
+    Mouse((Vec<u8>, i32)),
     Key(Vec<u8>),
     RequestStart,
     WillClose,
@@ -175,7 +175,7 @@ pub enum Data {
         recording: bool,
         from_switch: bool,        
         security_numbers: String,
-        security_qr_code: String,
+        avatar_image: String,
     },
     ChatMessage {
         text: String,
@@ -378,7 +378,7 @@ async fn handle(data: Data, stream: &mut Connection) {
                 if name == "id" {
                     value = Some(Config::get_id());
                 } else if name == "temporary-password" {
-                    value = Some(password::temporary_password());
+					value = Some(password::temporary_password());
                 } else if name == "permanent-password" {
                     value = Some(Config::get_permanent_password());
                 } else if name == "salt" {
@@ -404,7 +404,7 @@ async fn handle(data: Data, stream: &mut Connection) {
                     Config::set_key_confirmed(false);
                     Config::set_id(&value);
                 } else if name == "temporary-password" {
-                    password::update_temporary_password();
+					password::update_temporary_password();
                 } else if name == "permanent-password" {
                     Config::set_permanent_password(&value);
                 } else if name == "salt" {
@@ -707,6 +707,12 @@ pub fn get_permanent_password() -> String {
     }
 }
 
+pub fn get_fingerprint() -> String {
+    get_config("fingerprint")
+        .unwrap_or_default()
+        .unwrap_or_default()
+}
+
 pub fn set_permanent_password(v: String) -> ResultType<()> {
     Config::set_permanent_password(&v);
     set_config("permanent-password", v)
@@ -887,6 +893,14 @@ pub async fn send_url_scheme(url: String) -> ResultType<()> {
         .send(&Data::UrlLink(url))
         .await?;
     Ok(())
+}
+
+// Emit `close` events to ipc.
+pub fn close_all_instances() -> ResultType<bool> {
+    match crate::ipc::send_url_scheme(IPC_ACTION_CLOSE.to_owned()) {
+        Ok(_) => Ok(true),
+        Err(err) => Err(err),
+    }
 }
 
 #[cfg(test)]

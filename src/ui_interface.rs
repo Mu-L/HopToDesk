@@ -2,7 +2,6 @@ use std::{
     collections::HashMap,
     process::Child,
     sync::{Arc, Mutex},
-    time::SystemTime,
 };
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
@@ -17,22 +16,21 @@ use hbb_common::{
     sleep,
     tokio::{sync::mpsc, time},
 };
-
-use hbb_common::{
-    //config::{RENDEZVOUS_PORT, RENDEZVOUS_TIMEOUT},
-    //futures::future::join_all,
-    protobuf::Message as _,
-    //rendezvous_proto::*,
-    //tcp::FramedStream,    
-};
 /*
-#[cfg(feature = "flutter")]
-use crate::hbbs_http::account;
+use hbb_common::{
+    config::{RENDEZVOUS_PORT, RENDEZVOUS_TIMEOUT},
+    futures::future::join_all,
+    protobuf::Message as _,
+    rendezvous_proto::*,
+};
 */
-use crate::{common::SOFTWARE_UPDATE_URL, ipc};
+use crate::{common::SOFTWARE_UPDATE_URL};
+//#[cfg(feature = "flutter")]
+//use crate::hbbs_http::account;
+#[cfg(not(any(target_os = "ios")))]
+use crate::ipc;
 
 //type Message = RendezvousMessage;
-
 pub type Children = Arc<Mutex<(bool, HashMap<(String, String), Child>)>>;
 type Status = (i32, bool, i64, String); // (status_num, key_confirmed, mouse_time, id)
 
@@ -430,7 +428,9 @@ pub fn closing(x: i32, y: i32, w: i32, h: i32) {
 	#[cfg(target_os = "windows")]
 	{
 		let (_, _, _, exe, _dll) = crate::platform::get_install_info();
-		std::process::Command::new(&exe).arg("--tray").spawn().ok();
+	    if crate::platform::is_installed() {
+			std::process::Command::new(&exe).arg("--tray").spawn().ok();
+		}
 	}
 }
 
@@ -478,7 +478,7 @@ pub fn temporary_password() -> String {
 
 #[inline]
 pub fn update_temporary_password() {
-    #[cfg(any(target_os = "android", target_os = "ios"))]
+	#[cfg(any(target_os = "android", target_os = "ios"))]
     password_security::update_temporary_password();
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     allow_err!(ipc::update_temporary_password());
@@ -518,7 +518,7 @@ pub fn store_fav(fav: Vec<String>) {
 #[inline]
 pub fn new_remote(id: String, remote_type: String, password: String) {
     let mut lock = CHILDREN.lock().unwrap();
-    let config = PeerConfig::load(&id.clone());
+    let _config = PeerConfig::load(&id.clone());
     let args = if !password.is_empty() {
         vec![format!("--{}", remote_type), id.clone(), password.clone()]
     } else {
@@ -633,12 +633,6 @@ pub fn modify_default_login() -> String {
     #[cfg(not(target_os = "linux"))]
     return "".to_owned();
 }
-/*
-#[inline]
-pub fn get_software_update_url() -> String {
-    SOFTWARE_UPDATE_URL.lock().unwrap().clone()
-}
-*/
 #[inline]
 pub fn get_new_version() -> String {
     hbb_common::get_version_from_url(&*SOFTWARE_UPDATE_URL.lock().unwrap())
@@ -664,6 +658,7 @@ pub fn create_shortcut(_id: String) {
 #[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
 #[inline]
 pub fn discover() {
+    #[cfg(not(any(target_os = "ios")))]
     std::thread::spawn(move || {
         allow_err!(crate::lan::discover());
     });
@@ -853,8 +848,6 @@ pub fn get_api_server() -> String {
     )
 }
 */
-
-
 #[inline]
 pub fn has_hwcodec() -> bool {
     #[cfg(not(any(feature = "hwcodec", feature = "mediacodec")))]
@@ -862,6 +855,7 @@ pub fn has_hwcodec() -> bool {
     #[cfg(any(feature = "hwcodec", feature = "mediacodec"))]
     return true;
 }
+
 
 #[cfg(feature = "flutter")]
 #[inline]
@@ -959,6 +953,18 @@ pub fn get_user_default_option(key: String) -> String {
     UserDefaultConfig::load().get(&key)
 }
 
+pub fn get_fingerprint() -> String {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    if Config::get_key_confirmed() {
+        return "".to_owned();
+		//return crate::common::pk_to_fingerprint(Config::get_key_pair().1);
+    } else {
+        return "".to_owned();
+    }
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    return ipc::get_fingerprint();
+}
+
 // notice: avoiding create ipc connecton repeatly,
 // because windows named pipe has serious memory leak issue.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -1033,7 +1039,8 @@ pub fn option_synced() -> bool {
     OPTION_SYNCED.lock().unwrap().clone()
 }
 
-#[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
+#[cfg(any(target_os = "android", feature = "flutter"))]
+#[cfg(not(any(target_os = "ios")))]
 #[tokio::main(flavor = "current_thread")]
 pub(crate) async fn send_to_cm(data: &ipc::Data) {
     if let Ok(mut c) = ipc::connect(1000, "_cm").await {
@@ -1099,11 +1106,9 @@ async fn check_id(
     id: String,
     uuid: String,
 ) -> &'static str {
-    let any_addr = Config::get_any_listen_addr(true);
-    if let Ok(mut socket) = FramedStream::new(
+    if let Ok(mut socket) = hbb_common::socket_client::connect_tcp(
         crate::check_port(rendezvous_server, RENDEZVOUS_PORT),
-        any_addr,
-        RENDEZVOUS_TIMEOUT,
+        CONNECT_TIMEOUT,
     )
     .await
     {
@@ -1116,9 +1121,10 @@ async fn check_id(
         });
         let mut ok = false;
         if socket.send(&msg_out).await.is_ok() {
-            if let Some(Ok(bytes)) = socket.next_timeout(3_000).await {
-                if let Ok(msg_in) = RendezvousMessage::parse_from_bytes(&bytes) {
-                    match msg_in.union {
+            if let Some(msg_in) =
+                crate::common::get_next_nonkeyexchange_msg(&mut socket, None).await
+            {
+                match msg_in.union {
                         Some(rendezvous_message::Union::RegisterPkResponse(rpr)) => {
                             match rpr.result.enum_value_or_default() {
                                 register_pk_response::Result::OK => {
@@ -1146,7 +1152,6 @@ async fn check_id(
                     }
                 }
             }
-        }
         if !ok {
             return UNKNOWN_ERROR;
         }

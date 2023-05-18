@@ -269,8 +269,6 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Note", "Not"),
         ("Connection", "Bağlantı"),
         ("Share Screen", "Ekranı Paylaş"),
-        ("CLOSE", "KAPAT"),
-        ("OPEN", "AÇ"),
         ("Chat", "Mesajlaş"),
         ("Total", "Toplam"),
         ("items", "öğeler"),
@@ -294,7 +292,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Overwrite", "üzerine yaz"),
         ("This file exists, skip or overwrite this file?", "Bu dosya var, bu dosya atlansın veya üzerine yazılsın mı?"),
         ("Quit", "Çıkış"),
-		("Language", "Dilim (Language)"),
+		("Language", "Dilim"),
         ("doc_mac_permission", ""),
         ("Help", "Yardım"),
         ("Failed", "Arızalı"),
@@ -386,7 +384,6 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Other", "Diğer"),
         ("Confirm before closing multiple tabs", "Çoklu sekmeleri kapatmadan önce onayla"),
         ("Keyboard Settings", "Klavye Ayarları"),
-        ("Custom", "Özel"),
         ("Full Access", "Tam Erişim"),
         ("Screen Share", "Ekran Paylaşımı"),
         ("Wayland requires Ubuntu 21.04 or higher version.", "Wayland, Ubuntu 21.04 veya daha yüksek bir sürüm gerektirir."),
@@ -465,5 +462,6 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("You will need to confirm the 2FA on the secondary device with you when trying to connect to this desktop.", "Bu masaüstüne bağlanmaya çalışırken, ikincil cihazdaki 2FA'yı yanınızda onaylamanız gerekecektir."),		
 		("ID (Click to Copy)", "Kimlik (Kopyalamak için tıklayın)"),		
 		("Password (Click to Copy)", "Şifre (Kopyalamak için tıklayın)"),		
+		("Unattended Access", "Katılımsız Erişim"),								
     ].iter().cloned().collect();
 }

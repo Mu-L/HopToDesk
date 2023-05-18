@@ -6,6 +6,11 @@ use hbb_common::log;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use hbb_common::platform::register_breakdown_handler;
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use hbb_common::{
+    config::{Config},
+};
+
 /// shared by flutter and sciter main function
 ///
 /// [Note]
@@ -175,6 +180,16 @@ pub fn core_main() -> Option<Vec<String>> {
 				if let Some(id) = input.strip_prefix("hoptodesk://filetransfer/").map(str::to_owned) {
 					args[1] = id.to_string();
 					args[0] = "--file-transfer".to_string();
+				}
+			} else if input.starts_with("hoptodesk://sync/") {
+				if let Some(id) = input.strip_prefix("hoptodesk://sync/").map(str::to_owned) {
+					args[1] = id.to_string();
+					Config::set_option("custom-api-url".to_owned(), format!("https://api.hoptodesk.com/?n={}",args[1]));
+					/*match ipc::set_config("custom-api-url",  format!("https://api.hoptodesk.com/?n={}",args[1])) {
+						Ok(()) => {},
+						Err(e) => log::info!("Could not set custom API URL {e}"),
+					}*/
+					std::process::exit(0);
 				}
 			}
 		}

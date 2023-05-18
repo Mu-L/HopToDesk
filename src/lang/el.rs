@@ -484,6 +484,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("View Mode", "Λειτουργία προβολής"),
 		("Enable Wake On LAN", "Ενεργοποιήστε το Wake On LAN"),
 		("Enable 2FA", "Ενεργοποιήστε το 2FA"),
+        ("Enable 2FA Auto Accept", "Ενεργοποιήστε το 2FA Auto-Accept"),		
         ("Scan this QR code with a camera on a secondary device such as a phone to set it up as your 2FA authenticator.", "Σαρώστε αυτόν τον κωδικό QR με μια κάμερα σε μια δευτερεύουσα συσκευή, όπως ένα τηλέφωνο, για να τον ορίσετε ως τον 2FA authenticator σας."),
         ("You will need to confirm the 2FA on the secondary device with you when trying to connect to this desktop.", "Θα χρειαστεί να επιβεβαιώσετε το 2FA στη δευτερεύουσα συσκευή μαζί σας όταν προσπαθείτε να συνδεθείτε σε αυτήν την επιφάνεια εργασίας."),
 		("Choose Network", "Επιλέξτε Δίκτυο"),

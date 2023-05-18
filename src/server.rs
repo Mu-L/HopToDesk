@@ -1,6 +1,5 @@
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::two_factor_auth::sockets::AuthAnswer;
-
 use std::{
     collections::HashMap,
     net::SocketAddr,
@@ -158,7 +157,7 @@ pub async fn create_tcp_connection(
     let (sk, pk) = Config::get_key_pair();
     log::info!("create tcp connection {} - {} - {}",secure,pk.len(),sk.len());
     let mut security_numbers = String::new();
-    let mut security_qr_code = String::new();
+    let avatar_image = String::new();
     if secure && pk.len() == sign::PUBLICKEYBYTES && sk.len() == sign::SECRETKEYBYTES {
         log::info!("create secure tcp connection");
         let mut sk_ = [0u8; sign::SECRETKEYBYTES];
@@ -234,7 +233,7 @@ pub async fn create_tcp_connection(
             .ok();
         log::info!("wake up macos");
     }
-    Connection::start(addr,stream,id,Arc::downgrade(&server),security_numbers,security_qr_code).await;
+    Connection::start(addr,stream,id,Arc::downgrade(&server),security_numbers,avatar_image).await;
     Ok(())
 }
 
@@ -284,7 +283,7 @@ async fn create_relay_connection_(
     )
     .await?;
     let mut msg_out = RendezvousMessage::new();
-    let licence_key = ""; //crate::get_key(true).await;
+    let licence_key = crate::get_key(true).await;
     msg_out.set_request_relay(RequestRelay {
         licence_key,
         uuid,

@@ -77,7 +77,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Do you want to enter again?", "Vil du forbinde igen?"),
         ("Connection Error", "Forbindelsesfejl"),
         ("Error", "Fejl"),
-        ("Reset by the peer", "Nulstillet ved modparten"),
+        ("Connection lost", "Nulstillet ved modparten"),
         ("Connecting...", "Opretter forbindelse..."),
         ("Connection in progress. Please wait.", "Forbindelsen er etableret. Vent venligst."),
         ("Please try 1 minute later", "Prøv igen om et minut"),
@@ -312,7 +312,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Turned off", "Slukket"),
         ("In privacy mode", "I privatlivstilstand"),
         ("Out privacy mode", "Privatlivstilstand fra"),
-		("Language", "Sprog (Language)"),
+		("Language", "Sprog"),
         ("Keep HopToDesk background service", "Behold HopToDesk baggrundstjeneste"),
         ("Ignore Battery Optimizations", "Ignorér betteri optimeringer"),
         ("android_open_battery_optimizations_tip", ""),
@@ -499,6 +499,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("No need to elevate", ""),        
 		("Enable Wake On LAN", "Aktiver Wake On LAN"),
 		("Enable 2FA", "Aktiver 2FA"),
+        ("Enable 2FA Auto Accept", "Aktiver 2FA Auto-Accept"),		
         ("2FA QR code", "2FA QR-kode"),
         ("Scan this QR code with a camera on a secondary device such as a phone to set it up as your 2FA authenticator.", "Scan denne QR-kode med et kamera på en sekundær enhed, såsom en telefon, for at konfigurere den som din 2FA-godkendelse."),
         ("You will need to confirm the 2FA on the secondary device with you when trying to connect to this desktop.", "Du skal bekræfte 2FA på den sekundære enhed med dig, når du forsøger at oprette forbindelse til dette skrivebord."),		
@@ -511,5 +512,6 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
 		("Your Security Code", "Din sikkerhedskode"),
 		("ID (Click to Copy)", "ID (klik for at kopiere)"),		
 		("Password (Click to Copy)", "Adgangskode (klik for at kopiere)"),
+		("Unattended Access", "Uovervåget Adgang"),						
     ].iter().cloned().collect();
 }

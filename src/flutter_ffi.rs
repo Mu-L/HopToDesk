@@ -10,6 +10,7 @@ use crate::{
 };
 use flutter_rust_bridge::{StreamSink, SyncReturn};
 use hbb_common::{
+	allow_err,
     config::{self, LocalConfig, PeerConfig, PeerInfoSerde, ONLINE},
     fs, log,
     message_proto::KeyboardMode,
@@ -31,7 +32,7 @@ fn initialize(app_dir: &str) {
     {
         android_logger::init_once(
             android_logger::Config::default()
-                .with_min_level(log::Level::Debug) // limit log level
+                .with_max_level(log::LevelFilter::Debug) // limit log level
                 .with_tag("ffi"), // logs will show under mytag tag
         );
         #[cfg(feature = "mediacodec")]
@@ -47,30 +48,18 @@ fn initialize(app_dir: &str) {
     }
 }
 
+#[inline]
+pub fn start_global_event_stream(s: StreamSink<String>, app_type: String) -> ResultType<()> {
+    super::flutter::start_global_event_stream(s, app_type)
+}
+
+#[inline]
+pub fn stop_global_event_stream(app_type: String) {
+    super::flutter::stop_global_event_stream(app_type)
+}
 pub enum EventToUI {
     Event(String),
     Rgba,
-}
-
-pub fn start_global_event_stream(s: StreamSink<String>, app_type: String) -> ResultType<()> {
-    if let Some(_) = flutter::GLOBAL_EVENT_STREAM
-        .write()
-        .unwrap()
-        .insert(app_type.clone(), s)
-    {
-        log::warn!(
-            "Global event stream of type {} is started before, but now removed",
-            app_type
-        );
-    }
-    Ok(())
-}
-
-pub fn stop_global_event_stream(app_type: String) {
-    let _ = flutter::GLOBAL_EVENT_STREAM
-        .write()
-        .unwrap()
-        .remove(&app_type);
 }
 
 pub fn host_stop_system_key_propagate(_stopped: bool) {
@@ -84,6 +73,7 @@ pub fn session_add_sync(
     id: String,
     is_file_transfer: bool,
     is_port_forward: bool,
+    is_rdp: bool,
     switch_uuid: String,
     force_relay: bool,
     password: String,
@@ -92,6 +82,7 @@ pub fn session_add_sync(
         &id,
         is_file_transfer,
         is_port_forward,
+        is_rdp,
         &switch_uuid,
         force_relay,
         password,
@@ -168,7 +159,7 @@ pub fn session_record_screen(id: String, start: bool, width: usize, height: usiz
 
 pub fn session_reconnect(id: String, force_relay: bool) {
     if let Some(session) = SESSIONS.read().unwrap().get(&id) {
-        session.reconnect(force_relay);
+        session.reconnect();
     }
 }
 
@@ -337,7 +328,13 @@ pub fn session_handle_flutter_key_event(
     down_or_up: bool,
 ) {
     if let Some(session) = SESSIONS.read().unwrap().get(&id) {
-        session.handle_flutter_key_event(&name, platform_code, position_code, lock_modes, down_or_up);
+        session.handle_flutter_key_event(
+            &name,
+            platform_code,
+            position_code,
+            lock_modes,
+            down_or_up,
+        );
     }
 }
 
@@ -539,7 +536,7 @@ pub fn session_change_resolution(id: String, width: i32, height: i32) {
     }
 }
 
-pub fn session_set_size(_id: String, _width: i32, _height: i32) {
+pub fn session_set_size(_id: String, _width: usize, _height: usize) {
     #[cfg(feature = "flutter_texture_render")]
     if let Some(session) = SESSIONS.write().unwrap().get_mut(&_id) {
         session.set_size(_width, _height);
@@ -564,7 +561,7 @@ pub fn main_get_hostname() -> SyncReturn<String> {
     SyncReturn(crate::common::hostname())
 }
 
-pub fn main_change_id(new_id: String) {
+pub fn main_change_id(new_id: String) -> String {
     //change_id(new_id)
     "".to_owned()	
 }
@@ -745,27 +742,46 @@ pub fn main_load_recent_peers() {
             .drain(..)
             .map(|(id, _, p)| peer_to_map(id, p))
             .collect();
-        if let Some(s) = flutter::GLOBAL_EVENT_STREAM
-            .read()
-            .unwrap()
-            .get(flutter::APP_TYPE_MAIN)
-        {
-            let data = HashMap::from([
-                ("name", "load_recent_peers".to_owned()),
-                (
-                    "peers",
-                    serde_json::ser::to_string(&peers).unwrap_or("".to_owned()),
-                ),
-            ]);
-            s.add(serde_json::ser::to_string(&data).unwrap_or("".to_owned()));
-        };
+
+        let data = HashMap::from([
+            ("name", "load_recent_peers".to_owned()),
+            (
+                "peers",
+                serde_json::ser::to_string(&peers).unwrap_or("".to_owned()),
+            ),
+        ]);
+        let _res = flutter::push_global_event(
+            flutter::APP_TYPE_MAIN,
+            serde_json::ser::to_string(&data).unwrap_or("".to_owned()),
+        );
     }
 }
 
 pub fn main_load_fav_peers() {
     if !config::APP_DIR.read().unwrap().is_empty() {
         let favs = get_fav();
-        let peers: Vec<HashMap<&str, String>> = PeerConfig::peers()
+        let mut recent = PeerConfig::peers();
+        let mut lan = config::LanPeers::load()
+            .peers
+            .iter()
+            .filter(|d| recent.iter().all(|r| r.0 != d.id))
+            .map(|d| {
+                (
+                    d.id.clone(),
+                    SystemTime::UNIX_EPOCH,
+                    PeerConfig {
+                        info: PeerInfoSerde {
+                            username: d.username.clone(),
+                            hostname: d.hostname.clone(),
+                            platform: d.platform.clone(),
+                        },
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect();
+        recent.append(&mut lan);
+        let peers: Vec<HashMap<&str, String>> = recent
             .into_iter()
             .filter_map(|(id, _, p)| {
                 if favs.contains(&id) {
@@ -775,38 +791,33 @@ pub fn main_load_fav_peers() {
                 }
             })
             .collect();
-        if let Some(s) = flutter::GLOBAL_EVENT_STREAM
-            .read()
-            .unwrap()
-            .get(flutter::APP_TYPE_MAIN)
-        {
-            let data = HashMap::from([
-                ("name", "load_fav_peers".to_owned()),
-                (
-                    "peers",
-                    serde_json::ser::to_string(&peers).unwrap_or("".to_owned()),
-                ),
-            ]);
-            s.add(serde_json::ser::to_string(&data).unwrap_or("".to_owned()));
-        };
+
+        let data = HashMap::from([
+            ("name", "load_fav_peers".to_owned()),
+            (
+                "peers",
+                serde_json::ser::to_string(&peers).unwrap_or("".to_owned()),
+            ),
+        ]);
+        let _res = flutter::push_global_event(
+            flutter::APP_TYPE_MAIN,
+            serde_json::ser::to_string(&data).unwrap_or("".to_owned()),
+        );
     }
 }
 
 pub fn main_load_lan_peers() {
-    if let Some(s) = flutter::GLOBAL_EVENT_STREAM
-        .read()
-        .unwrap()
-        .get(flutter::APP_TYPE_MAIN)
-    {
-        let data = HashMap::from([
-            ("name", "load_lan_peers".to_owned()),
-            (
-                "peers",
-                serde_json::to_string(&get_lan_peers()).unwrap_or_default(),
-            ),
-        ]);
-        s.add(serde_json::ser::to_string(&data).unwrap_or("".to_owned()));
-    };
+    let data = HashMap::from([
+        ("name", "load_lan_peers".to_owned()),
+        (
+            "peers",
+            serde_json::to_string(&get_lan_peers()).unwrap_or_default(),
+        ),
+    ]);
+    let _res = flutter::push_global_event(
+        flutter::APP_TYPE_MAIN,
+        serde_json::ser::to_string(&data).unwrap_or("".to_owned()),
+    );
 }
 
 pub fn main_remove_discovered(id: String) {
@@ -820,20 +831,21 @@ fn main_broadcast_message(data: &HashMap<&str, &str>) {
         flutter::APP_TYPE_DESKTOP_PORT_FORWARD,
     ];
 
+    let event = serde_json::ser::to_string(&data).unwrap_or("".to_owned());
     for app in apps {
-        if let Some(s) = flutter::GLOBAL_EVENT_STREAM.read().unwrap().get(app) {
-            s.add(serde_json::ser::to_string(data).unwrap_or("".to_owned()));
-        };
+        let _res = flutter::push_global_event(app, event.clone());
     }
 }
 
 pub fn main_change_theme(dark: String) {
     main_broadcast_message(&HashMap::from([("name", "theme"), ("dark", &dark)]));
+    #[cfg(not(any(target_os = "ios")))]
     send_to_cm(&crate::ipc::Data::Theme(dark));
 }
 
 pub fn main_change_language(lang: String) {
     main_broadcast_message(&HashMap::from([("name", "language"), ("lang", &lang)]));
+    #[cfg(not(any(target_os = "ios")))]
     send_to_cm(&crate::ipc::Data::Language(lang));
 }
 
@@ -918,6 +930,10 @@ pub fn main_get_temporary_password() -> String {
 
 pub fn main_get_permanent_password() -> String {
     ui_interface::permanent_password()
+}
+
+pub fn main_get_fingerprint() -> String {
+    get_fingerprint()
 }
 
 pub fn main_get_online_statue() -> i64 {
@@ -1054,9 +1070,7 @@ pub fn session_send_note(id: String, note: String) {
 
 pub fn session_alternative_codecs(id: String) -> String {
     if let Some(session) = SESSIONS.read().unwrap().get(&id) {
-        //let (vp8, h264, h265) = session.alternative_codecs();
         let (h264, h265) = session.alternative_codecs();
-        //let msg = HashMap::from([("vp8", vp8), ("h264", h264), ("h265", h265)]);
         let msg = HashMap::from([("h264", h264), ("h265", h265)]);
         serde_json::ser::to_string(&msg).unwrap_or("".to_owned())
     } else {
@@ -1125,6 +1139,8 @@ pub fn main_get_mouse_time() -> f64 {
 }
 
 pub fn main_wol(id: String) {
+    // TODO: move send_wol outside.
+    #[cfg(not(any(target_os = "ios")))]
      crate::lan::send_wol(id)
 }
 
@@ -1134,10 +1150,12 @@ pub fn main_create_shortcut(_id: String) {
 }
 
 pub fn cm_send_chat(conn_id: i32, msg: String) {
+    #[cfg(not(any(target_os = "ios")))]
     crate::ui_cm_interface::send_chat(conn_id, msg);
 }
 
 pub fn cm_login_res(conn_id: i32, res: bool) {
+    #[cfg(not(any(target_os = "ios")))]
     if res {
         crate::ui_cm_interface::authorize(conn_id);
     } else {
@@ -1146,22 +1164,29 @@ pub fn cm_login_res(conn_id: i32, res: bool) {
 }
 
 pub fn cm_close_connection(conn_id: i32) {
+    #[cfg(not(any(target_os = "ios")))]
     crate::ui_cm_interface::close(conn_id);
 }
 
 pub fn cm_remove_disconnected_connection(conn_id: i32) {
+    #[cfg(not(any(target_os = "ios")))]
     crate::ui_cm_interface::remove(conn_id);
 }
 
 pub fn cm_check_click_time(conn_id: i32) {
+    #[cfg(not(any(target_os = "ios")))]
     crate::ui_cm_interface::check_click_time(conn_id)
 }
 
 pub fn cm_get_click_time() -> f64 {
-    crate::ui_cm_interface::get_click_time() as _
+    #[cfg(not(any(target_os = "ios")))]
+    return crate::ui_cm_interface::get_click_time() as _;
+    #[cfg(any(target_os = "ios"))]
+    return 0 as _;
 }
 
 pub fn cm_switch_permission(conn_id: i32, name: String, enabled: bool) {
+    #[cfg(not(any(target_os = "ios")))]
     crate::ui_cm_interface::switch_permission(conn_id, name, enabled)
 }
 
@@ -1170,10 +1195,12 @@ pub fn cm_can_elevate() -> SyncReturn<bool> {
 }
 
 pub fn cm_elevate_portable(conn_id: i32) {
+    #[cfg(not(any(target_os = "ios")))]
     crate::ui_cm_interface::elevate_portable(conn_id);
 }
 
 pub fn cm_switch_back(conn_id: i32) {
+    #[cfg(not(any(target_os = "ios")))]
     crate::ui_cm_interface::switch_back(conn_id);
 }
 
@@ -1194,21 +1221,19 @@ unsafe extern "C" fn translate(name: *const c_char, locale: *const c_char) -> *c
 }
 /*
 fn handle_query_onlines(onlines: Vec<String>, offlines: Vec<String>) {
-    if let Some(s) = flutter::GLOBAL_EVENT_STREAM
-        .read()
-        .unwrap()
-        .get(flutter::APP_TYPE_MAIN)
-    {
-        let data = HashMap::from([
-            ("name", "callback_query_onlines".to_owned()),
-            ("onlines", onlines.join(",")),
-            ("offlines", offlines.join(",")),
-        ]);
-        s.add(serde_json::ser::to_string(&data).unwrap_or("".to_owned()));
-    };
+    let data = HashMap::from([
+        ("name", "callback_query_onlines".to_owned()),
+        ("onlines", onlines.join(",")),
+        ("offlines", offlines.join(",")),
+    ]);
+    let _res = flutter::push_global_event(
+        flutter::APP_TYPE_MAIN,
+        serde_json::ser::to_string(&data).unwrap_or("".to_owned()),
+    );
 }
 */
 pub fn query_onlines(ids: Vec<String>) {
+    //#[cfg(not(any(target_os = "ios")))]
     // crate::rendezvous_mediator::query_online_states(ids, handle_query_onlines)
 }
 
@@ -1396,7 +1421,8 @@ pub mod server_side {
         app_dir: JString,
     ) {
         log::debug!("startServer from jvm");
-        if let Ok(app_dir) = env.get_string(app_dir) {
+        let mut env = env;
+        if let Ok(app_dir) = env.get_string(&app_dir) {
             *config::APP_DIR.write().unwrap() = app_dir.into();
         }
         std::thread::spawn(move || start_server(true));
@@ -1409,14 +1435,16 @@ pub mod server_side {
         locale: JString,
         input: JString,
     ) -> jstring {
-        let res = if let (Ok(input), Ok(locale)) = (env.get_string(input), env.get_string(locale)) {
+        let mut env = env;
+        let res = if let (Ok(input), Ok(locale)) = (env.get_string(&input), env.get_string(&locale))
+        {
             let input: String = input.into();
             let locale: String = locale.into();
             crate::client::translate_locale(input, &locale)
         } else {
             "".into()
         };
-        return env.new_string(res).unwrap_or(input).into_inner();
+        return env.new_string(res).unwrap_or(input).into_raw();
     }
 
     #[no_mangle]

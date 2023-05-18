@@ -13,11 +13,9 @@ import Flutter
   }
     
   public func dummyMethodToEnforceBundling() {
-//    get_rgba();
-//    free_rgba(nil);
-    get_by_name("", "");
-    set_by_name("", "");
-    let dummy = dummy_method_to_enforce_bundling();
-    print(dummy);
+    get_rgba();
+  //  free_rgba(nil);
+  //  get_by_name("", "");
+  //  set_by_name("", "");
   }
 }

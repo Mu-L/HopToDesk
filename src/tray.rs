@@ -74,8 +74,6 @@ pub fn start_tray() {
             Event::UserEvent(e) => match e {
                 Events::DoubleClickTrayIcon | Events::Restore => {
                     crate::run_me(Vec::<&str>::new()).ok();
-
-                    // Prevent following Click/DoubleClick events
                     std::process::exit(0);
                 }
                 Events::StopService => {
@@ -92,7 +90,6 @@ pub fn start_tray() {
         }
     });
 }
-
 
 /// Check if service is stoped.
 /// Return [`true`] if service is stoped, [`false`] otherwise.
@@ -152,10 +149,6 @@ pub fn make_tray() -> hbb_common::ResultType<()> {
         .context("Failed to open icon")?;
 
     let event_loop = EventLoopBuilder::new().build();
-
-    unsafe {
-        crate::platform::delegate::set_delegate(None);
-    }
 
     let tray_menu = Menu::new();
     let quit_i = MenuItem::new(crate::client::translate("Exit".to_owned()), true, None);

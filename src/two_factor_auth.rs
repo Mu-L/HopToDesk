@@ -9,7 +9,6 @@ pub mod utils {
     use crate::two_factor_auth::api_access;
     use hbb_common::config::Config;
     use hbb_common::rand::random;
-    //use image::{Rgba};
     use qrcode::QrCode;
 	use qrcode::render::svg;
     use sha2::{Digest, Sha256, Sha512};
@@ -31,47 +30,12 @@ pub mod utils {
         QrCode::new(link).unwrap()
     }
 
-pub fn qr_code_to_raw_img(qr: QrCode) -> String {
-    
-	let svg_string = qr.render::<svg::Color>().build();
-	
-	/*let svg_string = qr.render()
-                      .min_dimensions(200, 200)
-                      .dark_color(SvgColor::new(0, 0, 0))
-                      .light_color(SvgColor::new(255, 255, 255))
-                      .build();*/
-    svg_string
-	
-	//base64::encode(&svg_string)
-	
-/*
-    let tmp_dir = std::env::temp_dir();
-    let path = tmp_dir.join("secret_qr.png");
+	pub fn qr_code_to_raw_img(qr: QrCode) -> String {
+   
+		let svg_string = qr.render::<svg::Color>().build();
+	    svg_string
+	}
 
-    let image = qr.render::<Rgba<u8>>().build();
-    image.save(&path).unwrap();
-
-    let base64 = image_base64::to_base64(path.to_str().unwrap());
-
-    base64
-*/	
-}
-
-/*
-    pub fn qr_code_to_raw_img(qr: QrCode) -> String {
-        let tmp_dir = tempfile::tempdir().unwrap();
-        let path = tmp_dir.path().join("secret_qr.png");
-
-        let image = qr.render::<Rgba<u8>>().build();
-        image.save(&path).unwrap();
-
-        let base64 = image_base64::to_base64(path.to_str().unwrap());
-
-        tmp_dir.close().unwrap();
-
-        base64
-    }
-*/
     pub fn get_secret() -> String {
         Config::get_option("2fa-secret")
     }
@@ -191,7 +155,7 @@ pub mod sockets {
 
     pub async fn create_socket() -> WebSocketStream<MaybeTlsStream<TcpStream>> {
         let websockets_uri = api_access::get_ws_uri().await;
-        let (socket, _) = tokio_tungstenite::connect_async(&websockets_uri)
+        let (_socket, _) = tokio_tungstenite::connect_async(&websockets_uri)
             .await
             .unwrap();
         //Ignore invalid certificate
@@ -521,7 +485,7 @@ pub mod ui {
     struct Enable2FA;
 
     impl EventHandler for Enable2FA {
-        fn on_script_call(&mut self, _root: HELEMENT, name: &str, args: &[Value]) -> Option<Value> {
+        fn on_script_call(&mut self, _root: HELEMENT, name: &str, _args: &[Value]) -> Option<Value> {
             match name {
                 "is_2fa_enabled" => Some(Value::from(is_2fa_enabled())),
                 "enable_2fa" => {

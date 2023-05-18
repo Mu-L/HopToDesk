@@ -258,8 +258,6 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Note", "Shënime"),
         ("Connection", "Lidhja"),
         ("Share Screen", "Ndaj ekranin"),
-        ("CLOSE", "Mbyll"),
-        ("OPEN", "Hap"),
         ("Chat", "Biseda"),
         ("Total", "Total"),
         ("items", "artikuj"),
@@ -399,10 +397,13 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Hide connection management window", "Fshih dritaren e menaxhimit të lidhjes"),
         ("hide_cm_tip", "Kjo është e mundur vetëm nëse aksesi bëhet nëpërmjet një fjalëkalimi të përhershëm"),
 		("Your Security Code", "Kodi juaj i sigurisë"),
+		("Choose Network", "Zgjidhni Rrjetin"),		
 		("Enable 2FA", "Aktivizo 2FA"),
+        ("Enable 2FA Auto Accept", "Aktivizo 2FA Auto-Accept"),				
 		("Enable Wake On LAN", "Aktivizo Wake On LAN"),
 		("2FA QR code", "Kodi QR 2FA"),		
         ("Scan this QR code with a camera on a secondary device such as a phone to set it up as your 2FA authenticator.", "Skanoni këtë kod QR me një kamerë në një pajisje dytësore, si p.sh. një telefon, për ta konfiguruar si vërtetuesin tuaj 2FA."),
         ("You will need to confirm the 2FA on the secondary device with you when trying to connect to this desktop.", "Ju do të duhet të konfirmoni 2FA në pajisjen dytësore me ju kur përpiqeni të lidheni me këtë desktop."),		
+		("Unattended Access", "Qasje e Pambikëqyrur"),						
     ].iter().cloned().collect();
 }

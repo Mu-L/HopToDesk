@@ -42,9 +42,9 @@ lazy_static::lazy_static! {
             ("en", "English"),
             ("fr", "Français"),
             ("es", "Español"),
+            ("it", "Italiano"),
             ("de", "Deutsch"),
             ("nl", "Nederlands"),
-            ("it", "Italiano"),
             ("pt", "Português (Brazil)"),
             ("ca", "Català"),
             ("eo", "Esperanto"),
@@ -59,7 +59,7 @@ lazy_static::lazy_static! {
             ("sk", "Slovenčina"),
             ("sl", "Slovenščina"),
             ("ro", "Română"),            			
-            ("gr", "Ελληνικά"),
+            ("el", "Ελληνικά"),
             ("tr", "Türkçe"),
             ("ru", "Русский"),
             ("ua", "Українська"),
@@ -68,8 +68,8 @@ lazy_static::lazy_static! {
             ("id", "Indonesia"),
             ("ko", "한국어"),
             ("ja", "日本語"),
-            ("cn", "简体中文"),
-            ("tw", "繁體中文"),
+            ("zh-cn", "简体中文"),
+            ("zh-tw", "繁體中文"),
             ("vn", "Tiếng Việt"),
             ("th", "ไทย"),			
         ]);
@@ -137,6 +137,7 @@ pub fn translate_locale(name: String, locale: &str) -> String {
         "th" => th::T.deref(),		
         "sl" => sl::T.deref(),
         "ro" => ro::T.deref(),
+        "lt" => lt::T.deref(),
         _ => en::T.deref(),
     };
     if let Some(v) = m.get(&name as &str) {

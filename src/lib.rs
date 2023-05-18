@@ -2,6 +2,7 @@ mod keyboard;
 #[cfg(not(any(target_os = "ios")))]
 /// cbindgen:ignore
 pub mod platform;
+mod rendezvous_ws;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub use platform::{get_cursor, get_cursor_data, get_cursor_pos, start_os_service};
 #[cfg(not(any(target_os = "ios")))]
@@ -18,7 +19,7 @@ mod rendezvous_mediator;
 pub use self::rendezvous_mediator::*;
 /// cbindgen:ignore
 pub mod common;
-#[cfg(not(any( target_os = "ios")))]
+#[cfg(not(any(target_os = "ios")))]
 pub mod ipc;
 #[cfg(not(any(
     target_os = "android",
@@ -48,19 +49,18 @@ mod port_forward;
 
 mod tray;
 
+mod rendezvous_messages;
+mod turn_client;
 mod ui_cm_interface;
 mod ui_interface;
 mod ui_session_interface;
-mod turn_client;
-mod rendezvous_messages;
+
 //mod hbbs_http;
 
 #[cfg(windows)]
 pub mod clipboard_file;
 
-#[cfg(all(windows, feature = "with_rc"))]
-pub mod rc;
-#[cfg(target_os = "windows")]
-pub mod win_privacy;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod two_factor_auth;
+#[cfg(target_os = "windows")]
+pub mod win_privacy;

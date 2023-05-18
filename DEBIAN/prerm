@@ -1,4 +1,4 @@
-!/bin/bash
+#!/bin/bash
 
 set -e
 
@@ -12,6 +12,8 @@ case $1 in
                 elif [ "init" == "${INITSYS}" ]; then
                         service hoptodesk stop || true
                         systemctl disable hoptodesk || true
+						command -v systemctl >/dev/null 2>&1 && systemctl disable hoptodesk || true
+						pkill -3 hoptodesk || true
                         insserv -rv hoptodesk || true
                 fi
         ;;

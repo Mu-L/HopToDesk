@@ -17,6 +17,11 @@ if [ "$1" = configure ]; then
 		systemctl enable hoptodesk
 		systemctl start hoptodesk
 	elif [ "init" == "$INITSYS" ]; then
+        if [ -e /etc/init.d/hoptodesk ]; then
+            rm -f /etc/init.d/hoptodesk
+        fi
+		cp /usr/share/hoptodesk/files/sysvinit/hoptodesk.init /etc/init.d/hoptodesk
+		chmod +x /etc/init.d/hoptodesk
 		insserv -dv hoptodesk
 		service hoptodesk start
     fi

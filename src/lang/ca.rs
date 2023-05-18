@@ -266,8 +266,6 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Note", "Nota"),
         ("Connection", "connexió"),
         ("Share Screen", "Compartir pantalla"),
-        ("CLOSE", "TANCAR"),
-        ("OPEN", "OBRIR"),
         ("Chat", "Xat"),
         ("Total", "Total"),
         ("items", "ítems"),
@@ -381,7 +379,6 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Other", "Altre"),
         ("Confirm before closing multiple tabs", "Confirmar abans de tancar múltiples pestanyes"),
         ("Keyboard Settings", "Ajustaments de teclat"),
-        ("Custom", "Personalitzat"),
         ("Full Access", "Acces complet"),
         ("Screen Share", "Compartir pantalla"),
         ("Wayland requires Ubuntu 21.04 or higher version.", "Wayland requereix Ubuntu 21.04 o una versió superior."),
@@ -489,6 +486,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("No need to elevate", ""),                
 		("Enable Wake On LAN", "Activa Wake On LAN"),
         ("Enable 2FA", "Activa 2FA"),
+        ("Enable 2FA Auto Accept", "Activa l'acceptació automàtica de 2FA"),
         ("2FA QR code", "Codi QR 2FA"),
         ("Scan this QR code with a camera on a secondary device such as a phone to set it up as your 2FA authenticator.", "Escaneja aquest codi QR amb una càmera en un dispositiu secundari, com ara un telèfon, per configurar-lo com a autenticador 2FA."),
         ("You will need to confirm the 2FA on the secondary device with you when trying to connect to this desktop.", "Deberá confirmar la 2FA en el dispositivo secundario con usted cuando intente conectarse a este escritorio."),		
@@ -501,5 +499,6 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
 		("Your Security Code", "El teu codi de seguretat"),
 		("ID (Click to Copy)", "ID (Feu clic per copiar)"),		
 		("Password (Click to Copy)", "Contrasenya (feu clic per copiar)"),
+		("Unattended Access", "Accés Sense Vigilància"),		
     ].iter().cloned().collect();
 }

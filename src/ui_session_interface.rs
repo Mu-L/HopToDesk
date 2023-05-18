@@ -1,23 +1,27 @@
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-use std::collections::HashMap;
-use std::ops::{Deref, DerefMut};
-use std::str::FromStr;
-use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
-    Arc, Mutex, RwLock,
+use std::{collections::HashMap, sync::atomic::AtomicBool};
+use std::{
+    ops::{Deref, DerefMut},
+    str::FromStr,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex, RwLock,
+    },
+    time::{SystemTime},
 };
-use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use rdev::{Event, EventType::*, KeyCode};
 use uuid::Uuid;
 
-use hbb_common::config::{Config, LocalConfig, PeerConfig};
+use hbb_common::config::{Config, PeerConfig};
+#[cfg(not(feature = "flutter"))]
+use hbb_common::fs;
 use hbb_common::rendezvous_proto::ConnType;
 use hbb_common::tokio::{self, sync::mpsc};
 use hbb_common::{allow_err, message_proto::*};
-use hbb_common::{fs, get_version_number, log, Stream};
+use hbb_common::{get_version_number, log, Stream};
 
 use crate::client::io_loop::Remote;
 use crate::client::{
@@ -25,10 +29,12 @@ use crate::client::{
     input_os_password, load_config, send_mouse, start_video_audio_threads, FileManager, Key,
     LoginConfigHandler, QualityStatus, KEY_MAP,
 };
-use crate::common::{self, GrabState};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use crate::common::GrabState;
 use crate::keyboard;
 use crate::{client::Data, client::Interface};
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub static IS_IN: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Default)]
@@ -53,6 +59,7 @@ pub struct SessionPermissionConfig {
     pub server_clipboard_enabled: Arc<RwLock<bool>>,
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 impl SessionPermissionConfig {
     pub fn is_text_clipboard_required(&self) -> bool {
         *self.server_clipboard_enabled.read().unwrap()
@@ -62,6 +69,7 @@ impl SessionPermissionConfig {
 }
 
 impl<T: InvokeUiSession> Session<T> {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pub fn get_permission_config(&self) -> SessionPermissionConfig {
         SessionPermissionConfig {
             lc: self.lc.clone(),
@@ -80,13 +88,14 @@ impl<T: InvokeUiSession> Session<T> {
     }
 
     pub fn is_port_forward(&self) -> bool {
-        self.lc
+        let conn_type = self.lc
             .read()
             .unwrap()
-            .conn_type
-            .eq(&ConnType::PORT_FORWARD)
+            .conn_type;
+        conn_type == ConnType::PORT_FORWARD || conn_type == ConnType::RDP
     }
 
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pub fn is_rdp(&self) -> bool {
         self.lc.read().unwrap().conn_type.eq(&ConnType::RDP)
     }
@@ -149,10 +158,12 @@ impl<T: InvokeUiSession> Session<T> {
         self.lc.read().unwrap().get_toggle_option(&name)
     }
 
+    #[cfg(not(feature = "flutter"))]
     pub fn is_privacy_mode_supported(&self) -> bool {
         self.lc.read().unwrap().is_privacy_mode_supported()
     }
 
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pub fn is_text_clipboard_required(&self) -> bool {
         *self.server_clipboard_enabled.read().unwrap()
             && *self.server_keyboard_enabled.read().unwrap()
@@ -192,6 +203,7 @@ impl<T: InvokeUiSession> Session<T> {
         self.lc.read().unwrap().remember
     }
 
+    #[cfg(not(feature = "flutter"))]
     pub fn set_write_override(
         &mut self,
         job_id: i32,
@@ -261,15 +273,15 @@ impl<T: InvokeUiSession> Session<T> {
         });
     }
 
+    #[cfg(not(feature = "flutter"))]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pub fn is_xfce(&self) -> bool {
-        crate::platform::is_xfce()
+        #[cfg(not(any(target_os = "ios")))]
+        return crate::platform::is_xfce();
+        #[cfg(any(target_os = "ios"))]
+        false
     }
 
-    pub fn get_supported_keyboard_modes(&self) -> Vec<KeyboardMode> {
-        let version = self.get_peer_version();
-        common::get_supported_keyboard_modes(version)
-    }
-    
     pub fn remove_port_forward(&self, port: i32) {
         let mut config = self.load_config();
         config.port_forwards = config
@@ -298,6 +310,7 @@ impl<T: InvokeUiSession> Session<T> {
         self.send(Data::AddPortForward(pf));
     }
 
+    //#[cfg(not(feature = "flutter"))]
     pub fn get_id(&self) -> String {
         self.id.clone()
     }
@@ -357,6 +370,7 @@ impl<T: InvokeUiSession> Session<T> {
         input_os_password(pass, activate, self.clone());
     }
 
+    #[cfg(not(feature = "flutter"))]
     pub fn get_chatbox(&self) -> String {
         #[cfg(feature = "inline")]
         return crate::ui::inline::get_chatbox();
@@ -365,7 +379,6 @@ impl<T: InvokeUiSession> Session<T> {
     }
 
     pub fn swab_modifier_key(&self, msg: &mut KeyEvent) {
-
         let allow_swap_key = self.get_toggle_option("allow_swap_key".to_string());
         if allow_swap_key {
             if let Some(key_event::Union::ControlKey(ck)) = msg.union {
@@ -438,7 +451,6 @@ impl<T: InvokeUiSession> Session<T> {
                 msg.set_chr(key);
             }
         }
-
     }
 
     pub fn send_key_event(&self, evt: &KeyEvent) {
@@ -473,6 +485,7 @@ impl<T: InvokeUiSession> Session<T> {
         self.send(Data::Message(msg_out));
     }
 
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pub fn enter(&self) {
         #[cfg(target_os = "windows")]
         {
@@ -487,6 +500,7 @@ impl<T: InvokeUiSession> Session<T> {
         keyboard::client::change_grab_status(GrabState::Run);
     }
 
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pub fn leave(&self) {
         #[cfg(target_os = "windows")]
         {
@@ -527,6 +541,18 @@ impl<T: InvokeUiSession> Session<T> {
         self.send(Data::Message(msg_out));
     }
 
+    #[cfg(any(target_os = "ios"))]
+    pub fn handle_flutter_key_event(
+        &self,
+        _name: &str,
+        platform_code: i32,
+        position_code: i32,
+        lock_modes: i32,
+        down_or_up: bool,
+    ) {
+    }
+
+    #[cfg(not(any(target_os = "ios")))]
     pub fn handle_flutter_key_event(
         &self,
         _name: &str,
@@ -654,6 +680,7 @@ impl<T: InvokeUiSession> Session<T> {
         }));
     }
 
+    #[cfg(not(feature = "flutter"))]
     pub fn get_icon_path(&self, file_type: i32, ext: String) -> String {
         let mut path = Config::icon_path();
         if file_type == FileType::DirLink as i32 {
@@ -711,10 +738,12 @@ impl<T: InvokeUiSession> Session<T> {
         password: String,
         remember: bool,
     ) {
-        let id = self.get_id();
-        if !remember {
+        #[cfg(not(any(target_os = "ios")))]
+		if !remember {
+            let id = self.get_id();
             //crate::ipc::set_password_for_file_transfer(password.clone(), id.clone());
 			log::info!("Logging in...");
+			#[cfg(not(any(target_os = "ios")))]
 			match crate::ipc::set_password_for_file_transfer(password.clone(), id.clone()) {
 				Ok(()) => {},
 				Err(e) => log::info!("Error setting password for file transfer {e}"),
@@ -766,6 +795,10 @@ impl<T: InvokeUiSession> Session<T> {
         self.send(Data::ElevateWithLogon(username, password));
     }
 
+    #[cfg(any(target_os = "ios"))]
+    pub fn switch_sides(&self) {}
+
+    #[cfg(not(any(target_os = "ios")))]
     #[tokio::main(flavor = "current_thread")]
     pub async fn switch_sides(&self) {
         match crate::ipc::connect(1000, "").await {
@@ -868,7 +901,8 @@ pub trait InvokeUiSession: Send + Sync + Clone + 'static + Sized + Default {
     fn set_permission(&self, name: &str, value: bool);
     fn close_success(&self);
     fn update_quality_status(&self, qs: QualityStatus);
-    fn set_connection_type(&self, is_secured: bool, direct: bool, security_numbers: String, security_qr_code: String);
+    fn set_connection_type(&self, is_secured: bool, direct: bool, security_numbers: String, avatar_image: String);
+    fn set_fingerprint(&self, fingerprint: String);
     fn job_error(&self, id: i32, err: String, file_num: i32);
     fn job_done(&self, id: i32, file_num: i32);
     fn clear_all_jobs(&self);
@@ -895,7 +929,7 @@ pub trait InvokeUiSession: Send + Sync + Clone + 'static + Sized + Default {
     fn update_block_input_state(&self, on: bool);
     fn job_progress(&self, id: i32, file_num: i32, speed: f64, finished_size: f64);
     fn adapt_size(&self);
-    fn on_rgba(&self, data: &mut Vec<u8>);
+    fn on_rgba(&self, rgba: &mut scrap::ImageRgb);
     fn msgbox(&self, msgtype: &str, title: &str, text: &str, link: &str, retry: bool);
     #[cfg(any(target_os = "android", target_os = "ios"))]
     fn clipboard(&self, content: String);
@@ -1100,7 +1134,7 @@ pub async fn io_loop<T: InvokeUiSession>(handler: Session<T>) {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let (sender, mut receiver) = mpsc::unbounded_channel::<Data>();
     *handler.sender.write().unwrap() = Some(sender.clone());
-    let _options = crate::ipc::get_options_async().await;
+    //let _options = crate::ipc::get_options_async().await;
     let key = ""; //options.remove("key").unwrap_or("".to_owned());
     let token = ""; // LocalConfig::get_option("access_token");
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -1193,7 +1227,7 @@ pub async fn io_loop<T: InvokeUiSession>(handler: Session<T>) {
     let frame_count_cl = frame_count.clone();
     let ui_handler = handler.ui_handler.clone();
     let (video_sender, audio_sender, video_queue, decode_fps) =
-        start_video_audio_threads(move |data: &mut Vec<u8>| {
+        start_video_audio_threads(move |data: &mut scrap::ImageRgb| {
         frame_count_cl.fetch_add(1, Ordering::Relaxed);
         ui_handler.on_rgba(data);
     });

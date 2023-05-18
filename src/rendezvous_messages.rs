@@ -46,7 +46,7 @@ impl<'a> Listening<'a> {
             endpoint,
             addr,
             public_addr,
-            pk: base64::encode(pk),
+            pk: crate::encode64(pk),
             nat_type,
         }
     }
