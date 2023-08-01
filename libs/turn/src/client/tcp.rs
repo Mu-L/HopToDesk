@@ -1,34 +1,103 @@
-use std::{net::SocketAddr, convert::TryInto, fmt::Display};
-
+use std::{net::SocketAddr, convert::TryInto, fmt::{Display, Debug}, sync::Arc, io, pin::Pin, task::{Context, Poll}};
 use async_trait::async_trait;
 use stun::{message::{Getter, Setter}, attributes::ATTR_CONNECTION_ID};
-use tokio::{net::{TcpStream, tcp::{OwnedWriteHalf, OwnedReadHalf, ReuniteError}}, io::{AsyncReadExt, AsyncWriteExt}, sync::RwLock};
-use util::{Conn};
+use tokio::{net::TcpStream, io::{split, ReadBuf, AsyncReadExt, AsyncWriteExt, AsyncRead, AsyncWrite, ReadHalf, WriteHalf}, sync::RwLock};
+use tokio_rustls::{client::TlsStream, TlsConnector, rustls::{ClientConfig, ServerName}};
+use util::Conn;
+
 
 #[derive(Debug)]
-pub struct TcpSplit {
-    reader: RwLock<Option<OwnedReadHalf>>,
-    writer: RwLock<Option<OwnedWriteHalf>>,
+pub enum MaybeTlsStream {
+    Plain(TcpStream),
+    Rustls(TlsStream<TcpStream>),
 }
 
-impl TcpSplit {
-    pub async fn into_stream(&self) -> Result<TcpStream, ReuniteError> {
-        self.reader.write().await.take().unwrap().reunite(self.writer.write().await.take().unwrap())
-    }
-}
-
-impl From<TcpStream> for TcpSplit {
-    fn from(stream: TcpStream) -> Self {
-        let (reader, writer) = stream.into_split();
-        Self {
-            reader: RwLock::new(Some(reader)),
-            writer: RwLock::new(Some(writer)),
+impl AsyncRead for MaybeTlsStream {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            MaybeTlsStream::Plain(ref mut s) => Pin::new(s).poll_read(cx, buf),
+            MaybeTlsStream::Rustls(s) => Pin::new(s).poll_read(cx, buf),
         }
     }
 }
 
+impl AsyncWrite for MaybeTlsStream {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<Result<usize, std::io::Error>> {
+        match self.get_mut() {
+            MaybeTlsStream::Plain(ref mut s) => Pin::new(s).poll_write(cx, buf),
+            MaybeTlsStream::Rustls(s) => Pin::new(s).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), std::io::Error>> {
+        match self.get_mut() {
+            MaybeTlsStream::Plain(ref mut s) => Pin::new(s).poll_flush(cx),
+            MaybeTlsStream::Rustls(s) => Pin::new(s).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<(), std::io::Error>> {
+        match self.get_mut() {
+            MaybeTlsStream::Plain(ref mut s) => Pin::new(s).poll_shutdown(cx),
+            MaybeTlsStream::Rustls(s) => Pin::new(s).poll_shutdown(cx),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct TcpTurn {
+    reader: RwLock<Option<ReadHalf<MaybeTlsStream>>>,
+    writer: RwLock<Option<WriteHalf<MaybeTlsStream>>>,
+    local_addr: SocketAddr,
+    peer_addr: Option<SocketAddr>,
+}
+
+impl From<TcpStream> for TcpTurn {
+    fn from(stream: TcpStream) -> Self {
+        let local_addr = stream.local_addr().unwrap();
+        let peer_addr = stream.peer_addr().ok();
+        let (reader, writer) = split(MaybeTlsStream::Plain(stream));
+        Self {
+            reader: RwLock::new(Some(reader)),
+            writer: RwLock::new(Some(writer)),
+            local_addr,
+            peer_addr,
+        }
+    }
+}
+
+impl TcpTurn {
+    pub async fn new_tls(config: Arc<ClientConfig>, stream: TcpStream, domain: ServerName) -> io::Result<Self> {
+        let local_addr = stream.local_addr()?;
+        let peer_addr = stream.peer_addr().ok();
+        let tls_stream = TlsConnector::from(config).connect(domain, stream).await?;
+        let (reader, writer) = split(MaybeTlsStream::Rustls(tls_stream));
+        Ok(Self {
+            reader: RwLock::new(Some(reader)),
+            writer: RwLock::new(Some(writer)),
+            local_addr,
+            peer_addr,
+        })
+    }
+
+    pub async fn into_stream(&self) -> MaybeTlsStream {
+        self.reader.write().await.take().unwrap().unsplit(self.writer.write().await.take().unwrap())
+    }
+}
+
 #[async_trait]
-impl Conn for TcpSplit {
+impl Conn for TcpTurn {
     async fn connect(&self, _: SocketAddr) -> util::Result<()> {
         unimplemented!();
     }
@@ -38,7 +107,7 @@ impl Conn for TcpSplit {
     }
 
     async fn recv_from(&self, buf: &mut [u8]) -> util::Result<(usize, SocketAddr)> {
-        Ok((self.recv(buf).await?, self.reader.read().await.as_ref().unwrap().peer_addr()?))
+        Ok((self.recv(buf).await?, self.peer_addr.ok_or(util::Error::ErrNoRemAddr)?))
     }
 
     async fn send(&self, buf: &[u8]) -> util::Result<usize> {
@@ -49,12 +118,12 @@ impl Conn for TcpSplit {
         self.send(buf).await
     }
 
-    async fn local_addr(&self) -> util::Result<SocketAddr> {
-        Ok(self.reader.read().await.as_ref().unwrap().local_addr()?)
+    fn local_addr(&self) -> util::Result<SocketAddr> {
+        Ok(self.local_addr)
     }
 
-    async fn remote_addr(&self) -> Option<SocketAddr> {
-        self.reader.read().await.as_ref().unwrap().peer_addr().ok()
+    fn remote_addr(&self) -> Option<SocketAddr> {
+        self.peer_addr
     }
 
     async fn close(&self) -> util::Result<()> {

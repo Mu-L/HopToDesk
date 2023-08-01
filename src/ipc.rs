@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::atomic::Ordering};
+use std::{
+    collections::HashMap,
+    sync::atomic::{AtomicBool, Ordering},
+};
 #[cfg(not(windows))]
 use std::{fs::File, io::prelude::*};
 
@@ -8,6 +11,9 @@ use parity_tokio_ipc::{
 };
 use serde_derive::{Deserialize, Serialize};
 
+#[cfg(all(feature = "flutter", feature = "plugin_framework"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use crate::plugin::ipc::Plugin;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub use clipboard::ClipboardFile;
 use hbb_common::{
@@ -35,6 +41,7 @@ pub enum PrivacyModeState {
 }
 // IPC actions here.
 pub const IPC_ACTION_CLOSE: &str = "close";
+pub static EXIT_RECV_CLOSE: AtomicBool = AtomicBool::new(true);
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "t", content = "c")]
@@ -145,6 +152,7 @@ pub enum DataPortableService {
     Pong,
     ConnCount(Option<usize>),
     Mouse((Vec<u8>, i32)),
+    Pointer((Vec<u8>, i32)),
     Key(Vec<u8>),
     RequestStart,
     WillClose,
@@ -186,9 +194,14 @@ pub enum Data {
     },
     SystemInfo(Option<String>),
     ClickTime(i64),
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     MouseMoveTime(i64),
     Authorize,
     Close,
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+	ListSessions {
+        id: String,
+    },
     SAS,
     OnlineStatus(Option<(i64, bool)>),
     Config((String, Option<String>)),
@@ -224,6 +237,9 @@ pub enum Data {
     StartVoiceCall,
     VoiceCallResponse(bool),
     CloseVoiceCall(String),
+    #[cfg(all(feature = "flutter", feature = "plugin_framework"))]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    Plugin(Plugin),
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -239,7 +255,7 @@ pub async fn start(postfix: &str) -> ResultType<()> {
                         loop {
                             match stream.next().await {
                                 Err(err) => {
-                                    log::trace!("ipc{} connection closed: {}", postfix, err);
+                                    log::trace!("ipc '{}' connection closed: {}", postfix, err);
                                     break;
                                 }
                                 Ok(Some(data)) => {
@@ -328,16 +344,27 @@ async fn handle(data: Data, stream: &mut Connection) {
             let t = crate::server::CLICK_TIME.load(Ordering::SeqCst);
             allow_err!(stream.send(&Data::ClickTime(t)).await);
         }
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         Data::MouseMoveTime(_) => {
             let t = crate::server::MOUSE_MOVE_TIME.load(Ordering::SeqCst);
             allow_err!(stream.send(&Data::MouseMoveTime(t)).await);
         }
         Data::Close => {
             log::info!("Receive close message");
-            #[cfg(not(target_os = "android"))]
-            crate::server::input_service::fix_key_down_timeout_at_exit();
-            std::process::exit(0);
+            if EXIT_RECV_CLOSE.load(Ordering::SeqCst) {
+                #[cfg(not(target_os = "android"))]
+                crate::server::input_service::fix_key_down_timeout_at_exit();
+                std::process::exit(0);
+            }
         }
+        /*Data::CloseID(id) => {
+            log::info!("Receive closeid message: {:?}", id);
+            if EXIT_RECV_CLOSE.load(Ordering::SeqCst) {
+                #[cfg(not(target_os = "android"))]
+                crate::server::input_service::fix_key_down_timeout_at_exit();
+                std::process::exit(0);
+            }
+        }		*/
         Data::OnlineStatus(_) => {
             let x = config::ONLINE
                 .lock()
@@ -448,7 +475,9 @@ async fn handle(data: Data, stream: &mut Connection) {
         Data::SyncConfig(None) => {
             allow_err!(
                 stream
-                    .send(&Data::SyncConfig(Some((Config::get(), Config2::get()))))
+                    .send(&Data::SyncConfig(Some(
+                        (Config::get(), Config2::get()).into()
+                    )))
                     .await
             );
         }

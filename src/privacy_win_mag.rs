@@ -5,7 +5,6 @@ use crate::{
 use hbb_common::{allow_err, bail, lazy_static, log, tokio, ResultType};
 use std::{
     ffi::CString,
-    os::windows::process::CommandExt,
     sync::Mutex,
     time::{Duration, Instant},
 };
@@ -25,17 +24,31 @@ use winapi::{
             CreateProcessAsUserW, GetCurrentThreadId, QueueUserAPC, ResumeThread,
             PROCESS_INFORMATION, STARTUPINFOW,
         },
-        winbase::{
-            WTSGetActiveConsoleSessionId, CREATE_NO_WINDOW, CREATE_SUSPENDED, DETACHED_PROCESS,
-        },
+		winbase::{WTSGetActiveConsoleSessionId, CREATE_SUSPENDED, DETACHED_PROCESS},
         winnt::{MEM_COMMIT, PAGE_READWRITE},
         winuser::*,
     },
 };
 
+#[cfg(feature = "standalone")]
+use std::{env, fs};
+
+#[cfg(feature = "standalone")]
+use crate::ui::get_dllpm_bytes;
+
+#[cfg(target_arch = "x86")]
+pub const ORIGIN_PROCESS_EXE: &'static str = "C:\\Windows\\sysnative\\RuntimeBroker.exe";
+
+#[cfg(target_arch = "x86_64")]
 pub const ORIGIN_PROCESS_EXE: &'static str = "C:\\Windows\\System32\\RuntimeBroker.exe";
-pub const INJECTED_PROCESS_EXE: &'static str = "RuntimeBroker_hoptodesk.exe";
+pub const WIN_MAG_INJECTED_PROCESS_EXE: &'static str = "RuntimeBroker_hoptodesk.exe";
+pub const INJECTED_PROCESS_EXE: &'static str = WIN_MAG_INJECTED_PROCESS_EXE;
 pub const PRIVACY_WINDOW_NAME: &'static str = "HopToDeskPrivacyWindow";
+
+pub const OCCUPIED: &'static str = "Privacy occupied by another one";
+pub const TURN_OFF_OTHER_ID: &'static str =
+    "Failed to turn off privacy mode that belongs to someone else";
+pub const NO_DISPLAYS: &'static str = "No displays";
 
 pub const GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT: u32 = 2;
 pub const GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS: u32 = 4;
@@ -71,10 +84,23 @@ impl Drop for WindowHandlers {
 
 pub fn turn_on_privacy(conn_id: i32) -> ResultType<bool> {
     let exe_file = std::env::current_exe()?;
-    if let Some(cur_dir) = exe_file.parent() {
-        if !cur_dir.join("PrivacyMode.dll").exists() {
+    if let Some(_cur_dir) = exe_file.parent() {
+        #[cfg(not(feature = "standalone"))]
+		if !_cur_dir.join("PrivacyMode.dll").exists() {
             return Ok(false);
         }
+		#[cfg(feature = "standalone")]
+		{
+			let dll_bytes = get_dllpm_bytes();
+			let dll_path = env::temp_dir().join("PrivacyMode.dll");
+			if fs::metadata(&dll_path).is_err() {
+				fs::write(&dll_path, dll_bytes).expect("Failed to write DLL file");
+			}
+	
+			if !env::temp_dir().join("PrivacyMode.dll").exists() {
+				return Ok(false);
+			}
+		}
     } else {
         bail!(
             "Invalid exe parent for {}",
@@ -143,9 +169,14 @@ pub fn start() -> ResultType<()> {
     if exe_file.parent().is_none() {
         bail!("Cannot get parent of current exe file");
     }
-    let cur_dir = exe_file.parent().unwrap();
+    #[cfg(not(feature = "standalone"))]
+	let cur_dir = exe_file.parent().unwrap();
+	
+	#[cfg(feature = "standalone")]
+	let cur_dir = env::temp_dir();
 
-    let dll_file = cur_dir.join("PrivacyMode.dll");
+	let dll_file = cur_dir.join("PrivacyMode.dll");
+
     if !dll_file.exists() {
         bail!(
             "Failed to find required file {}",
@@ -315,14 +346,6 @@ fn wait_find_privacy_hwnd(msecs: u128) -> ResultType<HWND> {
 
         std::thread::sleep(Duration::from_millis(100));
     }
-}
-
-pub fn is_process_consent_running() -> ResultType<bool> {
-    let output = std::process::Command::new("cmd")
-        .args(&["/C", "tasklist | findstr consent.exe"])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()?;
-    Ok(output.status.success() && !output.stdout.is_empty())
 }
 
 #[tokio::main(flavor = "current_thread")]

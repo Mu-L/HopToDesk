@@ -6,10 +6,8 @@ use hbb_common::log;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use hbb_common::platform::register_breakdown_handler;
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-use hbb_common::{
-    config::{Config},
-};
+use std::fs::write;
+use hbb_common::{config::{Config},};
 
 /// shared by flutter and sciter main function
 ///
@@ -27,12 +25,11 @@ pub fn core_main() -> Option<Vec<String>> {
     let mut _is_flutter_connect = false;
     let mut arg_exe = Default::default();
     for arg in std::env::args() {
-        // to-do: how to pass to flutter?
         if i == 0 {
             arg_exe = arg;
         } else if i > 0 {
             #[cfg(feature = "flutter")]
-            if arg == "--connect" {
+            if arg == "--connect" || arg == "--play" {
                 _is_flutter_connect = true;
             }
             if arg == "--elevate" {
@@ -46,6 +43,14 @@ pub fn core_main() -> Option<Vec<String>> {
             }
         }
         i += 1;
+    }
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    if args.is_empty() {
+        if crate::check_process("--server", false) && !crate::check_process("--tray", true) {
+            #[cfg(target_os = "linux")]
+            hbb_common::allow_err!(crate::platform::check_autostart_config());
+            hbb_common::allow_err!(crate::run_me(vec!["--tray"]));
+        }
     }
     #[cfg(not(debug_assertions))]
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -84,6 +89,13 @@ pub fn core_main() -> Option<Vec<String>> {
         }
     }
     hbb_common::init_log(false, &log_name);
+
+    // linux uni (url) go here.
+    #[cfg(all(target_os = "linux", feature = "flutter"))]
+    if args.len() > 0 && args[0].starts_with("hoptodesk:") {
+        return try_send_by_dbus(args[0].clone());
+    }
+
     #[cfg(windows)]
     if !crate::platform::is_installed()
         && args.is_empty()
@@ -101,7 +113,12 @@ pub fn core_main() -> Option<Vec<String>> {
         crate::platform::elevate_or_run_as_system(click_setup, _is_elevate, _is_run_as_system);
         return None;
     }
+    #[cfg(all(feature = "flutter", feature = "plugin_framework"))]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    init_plugins(&args);
     if args.is_empty() {
+        #[cfg(windows)]
+        clipboard::ContextSend::enable(true);
         std::thread::spawn(move || crate::start_server(false));
     } else {
         #[cfg(windows)]
@@ -122,21 +139,7 @@ pub fn core_main() -> Option<Vec<String>> {
                     log::error!("Failed to before-uninstall: {}", err);
                 }
                 return None;
-//            } else if args[0] == "--update" {
-//                hbb_common::allow_err!(platform::update_me());
-//                return None;
-            } else if args[0] == "--reinstall" {
-                 hbb_common::allow_err!(platform::uninstall_me(false));
-                 hbb_common::allow_err!(platform::install_me(
-                    "desktopicon startmenu",
-                    "".to_owned(),
-                    false,
-                    false,
-					false
-                ));
-                return None;
             } else if args[0] == "--silent-install" {
-			
 				hbb_common::allow_err!(platform::install_me(
                     "desktopicon startmenu",
                     "".to_owned(),
@@ -172,28 +175,50 @@ pub fn core_main() -> Option<Vec<String>> {
         }
 		if args[0] == "--connect" {
 			let input = &args[1];
-			if input.starts_with("hoptodesk://connect/") {
-				if let Some(id) = input.strip_prefix("hoptodesk://connect/").map(str::to_owned) {
-					args[1] = id.to_string();
-				}
-			} else if input.starts_with("hoptodesk://filetransfer/") {
-				if let Some(id) = input.strip_prefix("hoptodesk://filetransfer/").map(str::to_owned) {
-					args[1] = id.to_string();
-					args[0] = "--file-transfer".to_string();
-				}
-			} else if input.starts_with("hoptodesk://sync/") {
-				if let Some(id) = input.strip_prefix("hoptodesk://sync/").map(str::to_owned) {
-					args[1] = id.to_string();
-					Config::set_option("custom-api-url".to_owned(), format!("https://api.hoptodesk.com/?n={}",args[1]));
-					/*match ipc::set_config("custom-api-url",  format!("https://api.hoptodesk.com/?n={}",args[1])) {
-						Ok(()) => {},
-						Err(e) => log::info!("Could not set custom API URL {e}"),
-					}*/
-					std::process::exit(0);
+				
+			if input != "hoptodesk:///" {
+
+				if input.starts_with("hoptodesk://connect/") {
+
+					let id_with_password = input.strip_prefix("hoptodesk://connect/").unwrap();
+					let mut new_args = args.clone();  // Create a new vector to modify
+
+					let mut parts = id_with_password.splitn(4, '/');
+					if let Some(id) = parts.next().map(str::to_owned) {
+						new_args[1] = id.to_string();
+					}
+					if let Some(password) = parts.next() {
+						new_args.push(password.to_owned());
+						
+					}
+					if let Some(teamid) = parts.next() {
+						if teamid.len() == 16 {
+							write(&Config::path("TeamID.toml"), teamid).expect("Failed to write teamid to file");
+						}
+					}					
+					if let Some(tokenex) = parts.next() {
+						write(&Config::path("LastToken.toml"), tokenex).expect("Failed to write tokenex to file");
+					}					
+					
+					args = new_args;  // Assign the modified vector back to args
+				} else if input.starts_with("hoptodesk://filetransfer/") {
+					if let Some(id) = input.strip_prefix("hoptodesk://filetransfer/").map(str::to_owned) {
+						args[1] = id.to_string();
+						args[0] = "--file-transfer".to_string();
+					}
+				} else if input.starts_with("hoptodesk://sync/") {
+					if let Some(id) = input.strip_prefix("hoptodesk://sync/").map(str::to_owned) {
+						args[1] = id.to_string();
+						if args[1].is_empty() {
+							hbb_common::config::Config::set_option("custom-api-url".to_owned(), "".to_owned());
+						} else {
+							hbb_common::config::Config::set_option("custom-api-url".to_owned(), format!("https://api.hoptodesk.com/?n={}", args[1]));
+						}
+						std::process::exit(0);
+					}
 				}
 			}
 		}
-	
 		if args[0] == "--remove" {
             if args.len() == 2 {
                 // sleep a while so that process of removed exe exit
@@ -202,7 +227,9 @@ pub fn core_main() -> Option<Vec<String>> {
                 return None;
             }
         } else if args[0] == "--tray" {
-            crate::tray::start_tray();
+            if !crate::check_process("--tray", true) {
+                crate::tray::start_tray();
+            }
             return None;
         } else if args[0] == "--service" {
             log::info!("start --service");
@@ -246,12 +273,14 @@ pub fn core_main() -> Option<Vec<String>> {
             }
             return None;
         } else if args[0] == "--get-id" {
-            if crate::platform::is_root() {
+            println!("{}", crate::ipc::get_id());
+			std::process::exit(0);
+/*			if crate::platform::is_root() {
                 println!("{}", crate::ipc::get_id());
             } else {
-                println!("Permission denied!");
-            }
-            return None;
+				println!("Permission denied!");
+            }			
+            return None;*/
         } else if args[0] == "--check-hwcodec-config" {
             #[cfg(feature = "hwcodec")]
             scrap::hwcodec::check_config();
@@ -265,6 +294,22 @@ pub fn core_main() -> Option<Vec<String>> {
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             crate::flutter::connection_manager::start_cm_no_ui();
             return None;
+        } else {
+            #[cfg(all(feature = "flutter", feature = "plugin_framework"))]
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            if args[0] == "--plugin-install" {
+                if args.len() == 2 {
+                    crate::plugin::change_uninstall_plugin(&args[1], false);
+                } else if args.len() == 3 {
+                    crate::plugin::install_plugin_with_url(&args[1], &args[2]);
+                }
+                return None;
+            } else if args[0] == "--plugin-uninstall" {
+                if args.len() == 2 {
+                    crate::plugin::change_uninstall_plugin(&args[1], true);
+                }
+                return None;
+            }
         }
     }
     //_async_logger_holder.map(|x| x.flush());
@@ -272,6 +317,23 @@ pub fn core_main() -> Option<Vec<String>> {
     return Some(flutter_args);
     #[cfg(not(feature = "flutter"))]
     return Some(args);
+}
+
+#[inline]
+#[cfg(all(feature = "flutter", feature = "plugin_framework"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn init_plugins(args: &Vec<String>) {
+    if args.is_empty() || "--server" == (&args[0] as &str) {
+        #[cfg(debug_assertions)]
+        let load_plugins = true;
+        #[cfg(not(debug_assertions))]
+        let load_plugins = crate::platform::is_installed();
+        if load_plugins {
+            crate::plugin::init();
+        }
+    } else if "--service" == (&args[0] as &str) {
+        hbb_common::allow_err!(crate::plugin::remove_uninstalled());
+    }
 }
 
 fn import_config(path: &str) {
@@ -309,12 +371,17 @@ fn import_config(path: &str) {
 #[cfg(feature = "flutter")]
 fn core_main_invoke_new_connection(mut args: std::env::Args) -> Option<Vec<String>> {
     args.position(|element| {
-        return element == "--connect";
+        return element == "--connect" || element == "--play";
     })?;
-    let peer_id = args.next().unwrap_or("".to_string());
+    let mut peer_id = args.next().unwrap_or("".to_string());
     if peer_id.is_empty() {
         eprintln!("please provide a valid peer id");
         return None;
+    }
+    let app_name = crate::get_app_name();
+    let ext = format!(".{}", app_name.to_lowercase());
+    if peer_id.ends_with(&ext) {
+        peer_id = peer_id.replace(&ext, "");
     }
     let mut switch_uuid = None;
     while let Some(item) = args.next() {
@@ -337,20 +404,8 @@ fn core_main_invoke_new_connection(mut args: std::env::Args) -> Option<Vec<Strin
     );
 
     #[cfg(target_os = "linux")]
-    {
-        use crate::dbus::invoke_new_connection;
+    return try_send_by_dbus(uni_links);
 
-        match invoke_new_connection(uni_links) {
-            Ok(()) => {
-                return None;
-            }
-            Err(err) => {
-                log::error!("{}", err.as_ref());
-                // return Some to invoke this new connection by self
-                return Some(Vec::new());
-            }
-        }
-    }
     #[cfg(windows)]
     {
         use winapi::um::winuser::WM_USER;
@@ -370,5 +425,21 @@ fn core_main_invoke_new_connection(mut args: std::env::Args) -> Option<Vec<Strin
         } else {
             None
         };
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "flutter"))]
+fn try_send_by_dbus(uni_links: String) -> Option<Vec<String>> {
+    use crate::dbus::invoke_new_connection;
+
+    match invoke_new_connection(uni_links) {
+        Ok(()) => {
+            return None;
+        }
+        Err(err) => {
+            log::error!("{}", err.as_ref());
+            // return Some to invoke this url by self
+            return Some(Vec::new());
+        }
     }
 }

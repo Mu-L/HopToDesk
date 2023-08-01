@@ -1,6 +1,28 @@
 #[cfg(test)]
 mod request_test;
 
+use std::collections::HashMap;
+use std::marker::{Send, Sync};
+use std::net::SocketAddr;
+#[cfg(feature = "metrics")]
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::time::SystemTime;
+
+use md5::{Digest, Md5};
+use stun::agent::*;
+use stun::attributes::*;
+use stun::error_code::*;
+use stun::fingerprint::*;
+use stun::integrity::*;
+use stun::message::*;
+use stun::textattrs::*;
+use stun::uattrs::*;
+use stun::xoraddr::*;
+use tokio::sync::Mutex;
+use tokio::time::{Duration, Instant};
+use util::Conn;
+
 use crate::allocation::allocation_manager::*;
 use crate::allocation::channel_bind::ChannelBind;
 use crate::allocation::five_tuple::*;
@@ -17,28 +39,6 @@ use crate::proto::relayaddr::RelayedAddress;
 use crate::proto::reqtrans::RequestedTransport;
 use crate::proto::rsrvtoken::ReservationToken;
 use crate::proto::*;
-
-use stun::agent::*;
-use stun::attributes::*;
-use stun::error_code::*;
-use stun::fingerprint::*;
-use stun::integrity::*;
-use stun::message::*;
-use stun::textattrs::*;
-use stun::uattrs::*;
-use stun::xoraddr::*;
-
-use util::Conn;
-
-use std::collections::HashMap;
-use std::marker::{Send, Sync};
-use std::net::SocketAddr;
-use std::sync::Arc;
-use std::time::SystemTime;
-use tokio::sync::Mutex;
-use tokio::time::{Duration, Instant};
-
-use md5::{Digest, Md5};
 
 pub(crate) const MAXIMUM_ALLOCATION_LIFETIME: Duration = Duration::from_secs(3600); // https://tools.ietf.org/html/rfc5766#section-6.2 defines 3600 seconds recommendation
 pub(crate) const NONCE_LIFETIME: Duration = Duration::from_secs(3600); // https://tools.ietf.org/html/rfc5766#section-4
@@ -140,7 +140,7 @@ impl Request {
         &mut self,
         m: &Message,
         calling_method: Method,
-    ) -> Result<Option<MessageIntegrity>> {
+    ) -> Result<Option<(Username, MessageIntegrity)>> {
         if !m.contains(ATTR_MESSAGE_INTEGRITY) {
             self.respond_with_nonce(m, calling_method, CODE_UNAUTHORIZED)
                 .await?;
@@ -221,7 +221,7 @@ impl Request {
             build_and_send_err(&self.conn, self.src_addr, bad_request_msg, err.into()).await?;
             Ok(None)
         } else {
-            Ok(Some(mi))
+            Ok(Some((username_attr, mi)))
         }
     }
 
@@ -284,7 +284,7 @@ impl Request {
         //    mechanism of [https://tools.ietf.org/html/rfc5389#section-10.2.2]
         //    unless the client and server agree to use another mechanism through
         //    some procedure outside the scope of this document.
-        let message_integrity =
+        let (username, message_integrity) =
             if let Some(mi) = self.authenticate_request(m, METHOD_ALLOCATE).await? {
                 mi
             } else {
@@ -294,7 +294,7 @@ impl Request {
 
         let five_tuple = FiveTuple {
             src_addr: self.src_addr,
-            dst_addr: self.conn.local_addr().await?,
+            dst_addr: self.conn.local_addr()?,
             protocol: PROTO_UDP,
         };
         let mut requested_port = 0;
@@ -474,6 +474,7 @@ impl Request {
                 Arc::clone(&self.conn),
                 requested_port,
                 lifetime_duration,
+                username,
             )
             .await
         {
@@ -509,10 +510,8 @@ impl Request {
         //     and port (from the 5-tuple).
 
         let (src_ip, src_port) = (self.src_addr.ip(), self.src_addr.port());
-        let (relay_ip, relay_port) = {
-            let a = a.lock().await;
-            (a.relay_addr.ip(), a.relay_addr.port())
-        };
+        let relay_ip = a.relay_addr.ip();
+        let relay_port = a.relay_addr.port();
 
         let msg = {
             if !reservation_token.is_empty() {
@@ -553,7 +552,7 @@ impl Request {
     pub(crate) async fn handle_refresh_request(&mut self, m: &Message) -> Result<()> {
         log::debug!("received RefreshRequest from {}", self.src_addr);
 
-        let message_integrity =
+        let (_, message_integrity) =
             if let Some(mi) = self.authenticate_request(m, METHOD_REFRESH).await? {
                 mi
             } else {
@@ -564,14 +563,13 @@ impl Request {
         let lifetime_duration = allocation_lifetime(m);
         let five_tuple = FiveTuple {
             src_addr: self.src_addr,
-            dst_addr: self.conn.local_addr().await?,
+            dst_addr: self.conn.local_addr()?,
             protocol: PROTO_UDP,
         };
 
         if lifetime_duration != Duration::from_secs(0) {
             let a = self.allocation_manager.get_allocation(&five_tuple).await;
             if let Some(a) = a {
-                let a = a.lock().await;
                 a.refresh(lifetime_duration).await;
             } else {
                 return Err(Error::ErrNoAllocationFound);
@@ -599,13 +597,13 @@ impl Request {
             .allocation_manager
             .get_allocation(&FiveTuple {
                 src_addr: self.src_addr,
-                dst_addr: self.conn.local_addr().await?,
+                dst_addr: self.conn.local_addr()?,
                 protocol: PROTO_UDP,
             })
             .await;
 
         if let Some(a) = a {
-            let message_integrity = if let Some(mi) = self
+            let (_, message_integrity) = if let Some(mi) = self
                 .authenticate_request(m, METHOD_CREATE_PERMISSION)
                 .await?
             {
@@ -617,7 +615,6 @@ impl Request {
             let mut add_count = 0;
 
             {
-                let a = a.lock().await;
                 for attr in &m.attributes.0 {
                     if attr.typ != ATTR_XOR_PEER_ADDRESS {
                         continue;
@@ -667,7 +664,7 @@ impl Request {
             .allocation_manager
             .get_allocation(&FiveTuple {
                 src_addr: self.src_addr,
-                dst_addr: self.conn.local_addr().await?,
+                dst_addr: self.conn.local_addr()?,
                 protocol: PROTO_UDP,
             })
             .await;
@@ -681,19 +678,19 @@ impl Request {
 
             let msg_dst = SocketAddr::new(peer_address.ip, peer_address.port);
 
-            let has_perm = {
-                let a = a.lock().await;
-                a.has_permission(&msg_dst).await
-            };
+            let has_perm = a.has_permission(&msg_dst).await;
             if !has_perm {
                 return Err(Error::ErrNoPermission);
             }
 
-            let a = a.lock().await;
             let l = a.relay_socket.send_to(&data_attr.0, msg_dst).await?;
             if l != data_attr.0.len() {
                 Err(Error::ErrShortWrite)
             } else {
+                #[cfg(feature = "metrics")]
+                a.relayed_bytes
+                    .fetch_add(data_attr.0.len(), Ordering::AcqRel);
+
                 Ok(())
             }
         } else {
@@ -708,7 +705,7 @@ impl Request {
             .allocation_manager
             .get_allocation(&FiveTuple {
                 src_addr: self.src_addr,
-                dst_addr: self.conn.local_addr().await?,
+                dst_addr: self.conn.local_addr()?,
                 protocol: PROTO_UDP,
             })
             .await;
@@ -723,7 +720,7 @@ impl Request {
                 })],
             )?;
 
-            let message_integrity =
+            let (_, message_integrity) =
                 if let Some(mi) = self.authenticate_request(m, METHOD_CHANNEL_BIND).await? {
                     mi
                 } else {
@@ -749,7 +746,6 @@ impl Request {
             );
 
             let result = {
-                let a = a.lock().await;
                 a.add_channel_bind(
                     ChannelBind::new(channel, SocketAddr::new(peer_addr.ip, peer_addr.port)),
                     self.channel_bind_timeout,
@@ -765,7 +761,7 @@ impl Request {
                 MessageType::new(METHOD_CHANNEL_BIND, CLASS_SUCCESS_RESPONSE),
                 vec![Box::new(message_integrity)],
             )?;
-            return build_and_send(&self.conn, self.src_addr, msg).await;
+            build_and_send(&self.conn, self.src_addr, msg).await
         } else {
             Err(Error::ErrNoAllocationFound)
         }
@@ -778,19 +774,21 @@ impl Request {
             .allocation_manager
             .get_allocation(&FiveTuple {
                 src_addr: self.src_addr,
-                dst_addr: self.conn.local_addr().await?,
+                dst_addr: self.conn.local_addr()?,
                 protocol: PROTO_UDP,
             })
             .await;
 
         if let Some(a) = a {
-            let a = a.lock().await;
             let channel = a.get_channel_addr(&c.number).await;
             if let Some(peer) = channel {
                 let l = a.relay_socket.send_to(&c.data, peer).await?;
                 if l != c.data.len() {
                     Err(Error::ErrShortWrite)
                 } else {
+                    #[cfg(feature = "metrics")]
+                    a.relayed_bytes.fetch_add(c.data.len(), Ordering::AcqRel);
+
                     Ok(())
                 }
             } else {
@@ -850,11 +848,9 @@ pub(crate) async fn build_and_send_err(
     msg: Message,
     err: Error,
 ) -> Result<()> {
-    if let Err(send_err) = build_and_send(conn, dst, msg).await {
-        Err(send_err)
-    } else {
-        Err(err)
-    }
+    build_and_send(conn, dst, msg).await?;
+
+    Err(err)
 }
 
 pub(crate) fn build_msg(

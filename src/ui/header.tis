@@ -83,7 +83,7 @@ function editOSPassword(login=false) {
         if (!res) return;
         var a0 = handler.get_option('auto-login') != '';
         var p = (res.password || '').trim();
-        var a = res.auto_login || false;
+        var a = res.autoLogin || false;
         if (p == p0 && a == a0) return;
         if (p != p0) handler.set_option('os-password', p);
         if (a != a0) handler.set_option('auto-login', a ? 'Y' : '');
@@ -186,6 +186,14 @@ class Header: Reactor.Component {
                 <li #balanced type="image-quality" title={translate("Balanced")}><span>{svg_checkmark}</span>{translate('Balanced')}</li> 
                 <li #low type="image-quality" title={translate("Optimize reaction time")}><span>{svg_checkmark}</span>{translate('Optimize reaction time')}</li> 
                 <li #custom type="image-quality" title={translate("Custom")}><span>{svg_checkmark}</span>{translate('Custom')}</li>
+                {show_codec ? <div>
+                <div .separator />
+                <li #auto type="codec-preference"><span>{svg_checkmark}</span>Auto Display</li>
+                {codecs[0] ? <li #vp8 type="codec-preference"><span>{svg_checkmark}</span>VP8 Codec</li> : ""}
+                <li #vp9 type="codec-preference"><span>{svg_checkmark}</span>VP9 Codec</li>
+                {codecs[1] ? <li #h264 type="codec-preference"><span>{svg_checkmark}</span>H264 Codec</li> : ""}
+                {codecs[2] ? <li #h265 type="codec-preference"><span>{svg_checkmark}</span>H265 Codec</li> : ""}
+                </div> : ""}
                 <div .separator />
                 {!cursor_embedded && <li #show-remote-cursor .toggle-option title={translate("Show remote cursor")}><span>{svg_checkmark}</span>{translate('Show remote cursor')}</li>}
                 {audio_enabled ? <li #disable-audio .toggle-option title={translate("Mute")}><span>{svg_checkmark}</span>{translate('Mute')}</li> : ""}
@@ -303,6 +311,16 @@ class Header: Reactor.Component {
     event click $(#screen) (_, me) {
         if (pi.current_display == me.index) return;
         handler.switch_display(me.index);
+    }
+
+    event keyup (evt) {
+        if((pi.displays || []).length > 0 && evt.keyCode == 220)
+        { 
+            if (pi.displays.length > pi.current_display) 
+                handler.switch_display(pi.current_display + 1);
+            else
+                handler.switch_display(1);
+        }
     }
 
     event click $(#transfer-file) {
@@ -610,11 +628,11 @@ function startChat() {
     chatbox = view.window(params);
 }
 
-handler.setConnectionType = function(secured, direct, security_numbers, security_qr_code) {
+handler.setConnectionType = function(secured, direct, security_numbers, avatar_image) {
     header.update({
        secure_connection: secured,
        direct_connection: direct,
        security_numbers: security_numbers,
-       security_qr_code: security_qr_code,
+       avatar_image: avatar_image,
     });
 }

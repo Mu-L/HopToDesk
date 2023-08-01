@@ -8,19 +8,20 @@ pub mod relay_conn;
 pub mod transaction;
 pub mod tcp;
 
-use crate::client::tcp::{TcpSplit, ConnectionID};
-use crate::error::*;
-use crate::proto::{
-    chandata::*, data::*, lifetime::*, peeraddr::*, relayaddr::*, reqtrans::*, PROTO_TCP,
-};
-use binding::*;
-use relay_conn::*;
+use self::tcp::{TcpTurn, MaybeTlsStream, ConnectionID};
 use tokio::net::TcpStream;
-use transaction::*;
+use tokio_rustls::rustls::ClientConfig as TlsClientConfig;
+use tokio_rustls::rustls::ServerName;
 
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
+
+use async_trait::async_trait;
+use base64::prelude::BASE64_STANDARD;
+use base64::Engine;
+use binding::*;
+use relay_conn::*;
 use stun::agent::*;
 use stun::attributes::*;
 use stun::error_code::*;
@@ -30,9 +31,18 @@ use stun::message::*;
 use stun::textattrs::*;
 use stun::xoraddr::*;
 use tokio::sync::{mpsc, Mutex};
-use util::{conn::*, vnet::net::*};
+use transaction::*;
+use util::conn::*;
+use util::vnet::net::*;
 
-use async_trait::async_trait;
+use crate::error::*;
+use crate::proto::chandata::*;
+use crate::proto::data::*;
+use crate::proto::lifetime::*;
+use crate::proto::peeraddr::*;
+use crate::proto::relayaddr::*;
+use crate::proto::reqtrans::*;
+use crate::proto::PROTO_TCP;
 
 const DEFAULT_RTO_IN_MS: u16 = 200;
 const MAX_DATA_BUFFER_SIZE: usize = u16::MAX as usize; // message size limit for Chromium
@@ -48,6 +58,12 @@ const MAX_READ_QUEUE_SIZE: usize = 1024;
 // 6: 31500 ms  +32000
 // -: 63500 ms  failed
 
+#[derive(Debug, Clone)]
+pub struct TlsConfig {
+    pub client_config: Arc<TlsClientConfig>,
+    pub domain: ServerName,
+}
+
 // ClientConfig is a bag of config parameters for Client.
 pub struct ClientConfig {
     pub stun_serv_addr: String, // STUN server address (e.g. "stun.abc.com:3478")
@@ -55,6 +71,7 @@ pub struct ClientConfig {
     pub username: String,
     pub password: String,
     pub realm: String,
+    pub tls_config: Option<TlsConfig>,
     pub software: String,
     pub rto_in_ms: u16,
     pub conn: Arc<dyn Conn + Send + Sync>,
@@ -68,6 +85,7 @@ struct ClientInternal {
     username: Username,
     password: String,
     realm: Arc<std::sync::Mutex<Realm>>,
+    tls_config: Option<TlsConfig>,
     nonce: Arc<Mutex<TextAttribute>>,
     integrity: MessageIntegrity,
     software: Software,
@@ -75,7 +93,7 @@ struct ClientInternal {
     binding_mgr: Arc<Mutex<BindingManager>>,
     rto_in_ms: u16,
     read_ch_tx: Arc<Mutex<Option<mpsc::Sender<InboundData>>>>,
-    on_connection_bound: Option<mpsc::Receiver<TcpStream>>,
+    on_connection_bound: Option<mpsc::Receiver<MaybeTlsStream>>,
 }
 
 #[async_trait]
@@ -108,7 +126,7 @@ impl RelayConnObserver for ClientInternal {
         to: &str,
         ignore_result: bool,
     ) -> Result<TransactionResult> {
-        let tr_key = base64::encode(&msg.transaction_id.0);
+        let tr_key = BASE64_STANDARD.encode(msg.transaction_id.0);
 
         let mut tr = Transaction::new(TransactionConfig {
             key: tr_key.clone(),
@@ -171,7 +189,7 @@ impl ClientInternal {
             String::new()
         } else {
             log::debug!("resolving {}", config.stun_serv_addr);
-            let local_addr = config.conn.local_addr().await?;
+            let local_addr = config.conn.local_addr()?;
             let stun_serv = net
                 .resolve_addr(local_addr.is_ipv4(), &config.stun_serv_addr)
                 .await?;
@@ -183,7 +201,7 @@ impl ClientInternal {
             String::new()
         } else {
             log::debug!("resolving {}", config.turn_serv_addr);
-            let local_addr = config.conn.local_addr().await?;
+            let local_addr = config.conn.local_addr()?;
             let turn_serv = net
                 .resolve_addr(local_addr.is_ipv4(), &config.turn_serv_addr)
                 .await?;
@@ -198,6 +216,7 @@ impl ClientInternal {
             username: Username::new(ATTR_USERNAME, config.username),
             password: config.password,
             realm: Arc::new(std::sync::Mutex::new(Realm::new(ATTR_REALM, config.realm))),
+            tls_config: config.tls_config,
             nonce: Arc::new(Mutex::new(TextAttribute::new(ATTR_NONCE, "".to_string()))),
             software: Software::new(ATTR_SOFTWARE, config.software),
             tr_map: Arc::new(Mutex::new(TransactionMap::new())),
@@ -229,6 +248,7 @@ impl ClientInternal {
         let binding_mgr = Arc::clone(&self.binding_mgr);
         let username = self.username.text.clone();
         let password = self.password.clone();
+        let tls_config = self.tls_config.clone();
         let realm = self.realm.clone();
         let nonce = self.nonce.clone();
         let (tx, rx) = mpsc::channel(1);
@@ -262,6 +282,7 @@ impl ClientInternal {
                     username.clone(),
                     password.clone(),
                     realm_str,
+                    tls_config.clone(),
                     (*nonce.clone().lock().await).clone(),
                     tx.clone()
                 )
@@ -276,7 +297,7 @@ impl ClientInternal {
         Ok(())
     }
 
-    async fn wait_new_connection(&mut self) -> Option<TcpStream> {
+    async fn wait_new_connection(&mut self) -> Option<MaybeTlsStream> {
         Some(self.on_connection_bound.as_mut()?.recv().await.unwrap())
     }
 
@@ -297,8 +318,9 @@ impl ClientInternal {
         username: String,
         password: String,
         realm: String,
+        tls_config: Option<TlsConfig>,
         nonce: TextAttribute,
-        on_connection_bound: mpsc::Sender<TcpStream>,
+        on_connection_bound: mpsc::Sender<MaybeTlsStream>,
     ) -> Result<()> {
         // +-------------------+-------------------------------+
         // |   Return Values   |                               |
@@ -319,7 +341,7 @@ impl ClientInternal {
         //  - Non-STUN message from the STUN server
 
         if is_message(data) {
-            ClientInternal::handle_stun_message(tr_map, read_ch_tx, data, from, username, password, realm, nonce, on_connection_bound).await
+            ClientInternal::handle_stun_message(tr_map, read_ch_tx, data, from, username, password, realm, tls_config, nonce, on_connection_bound).await
         } else if ChannelData::is_channel_data(data) {
             ClientInternal::handle_channel_data(binding_mgr, read_ch_tx, data).await
         } else if !stun_serv_str.is_empty() && from.to_string() == *stun_serv_str {
@@ -340,8 +362,9 @@ impl ClientInternal {
         username: String,
         password: String,
         realm: String,
+        tls_config: Option<TlsConfig>,
         nonce: TextAttribute,
-        on_connection_bound: mpsc::Sender<TcpStream>,
+        on_connection_bound: mpsc::Sender<MaybeTlsStream>,
     ) -> Result<()> {
         let mut msg = Message::new();
         msg.raw = data.to_vec();
@@ -372,16 +395,21 @@ impl ClientInternal {
                 connection_id.get_from(&msg)?;
             
                 let tcp_stream = TcpStream::connect(from.clone()).await?;
-                let tcp_split = Arc::new(TcpSplit::from(tcp_stream));
+                let tcp_turn = Arc::new(if let Some(tls) = tls_config.as_ref() {
+                    TcpTurn::new_tls(tls.client_config.clone(), tcp_stream, tls.domain.clone()).await?
+                } else {
+                    TcpTurn::from(tcp_stream)
+                });
                 let cfg = ClientConfig {
                     stun_serv_addr: from.to_string(),
                     turn_serv_addr: from.to_string(),
                     username: username,
                     password: password,
                     realm: realm,
+                    tls_config: tls_config,
                     software: String::new(),
                     rto_in_ms: 0,
-                    conn: tcp_split.clone(),
+                    conn: tcp_turn.clone(),
                     vnet: None,
                 };
                 let mut client = ClientInternal::new(cfg).await?;
@@ -412,8 +440,8 @@ impl ClientInternal {
                 let mut res = Message::new();
                 res.raw = buff.to_vec();
                 res.decode()?;
-                if res.typ.class == CLASS_SUCCESS_RESPONSE {
-                    on_connection_bound.send(tcp_split.into_stream().await.unwrap()).await.unwrap();
+				if res.typ.class == CLASS_SUCCESS_RESPONSE {
+                    on_connection_bound.send(tcp_turn.into_stream().await).await.unwrap();
                 }
             }
 
@@ -425,7 +453,7 @@ impl ClientInternal {
         // - stun.ClassSuccessResponse
         // - stun.ClassErrorResponse
 
-        let tr_key = base64::encode(&msg.transaction_id.0);
+        let tr_key = BASE64_STANDARD.encode(msg.transaction_id.0);
 
         let mut tm = tr_map.lock().await;
         if tm.find(&tr_key).is_none() {
@@ -687,7 +715,7 @@ impl Client {
         Ok(RelayConn::new(Arc::clone(&self.client_internal), config).await)
     }
 
-    pub async fn wait_new_connection(&self) -> Option<TcpStream> {
+    pub async fn wait_new_connection(&self) -> Option<MaybeTlsStream> {
         self.client_internal.lock().await.wait_new_connection().await
     }
 

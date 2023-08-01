@@ -1,11 +1,5 @@
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-use crate::two_factor_auth;
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-use crate::two_factor_auth::sockets::{AuthAnswer, TFAChecker};
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-use crate::two_factor_auth::ui::Manage2FA;
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-use crate::two_factor_auth::{ui, TFAManager};
+use crate::two_factor_auth::{TFAManager, sockets::AuthAnswer};
 #[cfg(target_os = "linux")]
 use crate::ipc::start_pa;
 use crate::ui_cm_interface::{start_ipc, ConnectionManager, InvokeUiCM};
@@ -21,7 +15,7 @@ pub struct SciterHandler {
 }
 
 impl InvokeUiCM for SciterHandler {
-    fn add_connection(&self, client: &crate::ui_cm_interface::Client, security_numbers: String, security_qr_code: String) {
+    fn add_connection(&self, client: &crate::ui_cm_interface::Client, security_numbers: String, avatar_image: String) {
         self.call(
             "addConnection",
             &make_args!(
@@ -38,7 +32,7 @@ impl InvokeUiCM for SciterHandler {
                 client.restart,
                 client.recording,
                 security_numbers,
-                security_qr_code
+                avatar_image
             ),
         );
     }
@@ -130,7 +124,7 @@ impl SciterConnectionManager {
     }
 
     fn close(&self, id: i32) {
-        crate::ui_cm_interface::close(id);
+		crate::ui_cm_interface::close(id);
     }
 
     fn remove_disconnected_connection(&self, id: i32) {
@@ -155,7 +149,7 @@ impl SciterConnectionManager {
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     fn is_2fa_enabled(&self) -> bool {
-        two_factor_auth::utils::is_2fa_enabled()
+        crate::two_factor_auth::utils::is_2fa_enabled()
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]

@@ -40,7 +40,6 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Change ID", "Ŝanĝi identigilon"),
         ("Website", "Retejo"),
         ("About", "Pri"),
-        ("About HopToDesk", ""),
         ("Slogan_tip", ""),
         ("Privacy Statement", ""),
         ("Build Date", ""),

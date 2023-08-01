@@ -63,7 +63,7 @@ class AddressBook: Reactor.Component
     }
     
     event click $(#retry) (_, __) {
-        refreshCurrentUser();
+        //refreshCurrentUser();
     }
 
     event click $(#login-link) (_, __) {

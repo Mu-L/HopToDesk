@@ -33,16 +33,28 @@ class Body: Reactor.Component
         var callback = function(msg) {
             me.sendMsg(msg);
         };
+		var userbackground = "";
+		var showletter = "";
         var right_style = show_chat ? "" : "display: none";
         var disconnected = c.disconnected;
+		var avatarimage = c.avatar_image;
         var show_elevation_btn = handler.can_elevate() && show_elevation && !c.is_file_transfer && c.port_forward.length == 0;
         var show_accept_btn = handler.get_option('approve-mode') != 'password';
-       // below size:* is a workaround for Linux, it already set in css, but not work, shit sciter
+
+		if (avatarimage.length > 20 && avatarimage.indexOf('image/png;base64') > 0){
+			userbackground = "background-image: url(" + avatarimage + ")";
+			showletter = "";
+		} else {
+			userbackground = "background: " + string2RGB(c.name, 1);
+			showletter = c.name[0].toUpperCase();
+		}
+	   // below size:* is a workaround for Linux, it already set in css, but not work, shit sciter
         return <div .content style="size:*">
             <div .left-panel>
                 <div .icon-and-id>
-                    <div .icon style={"background: " + string2RGB(c.name, 1)}>
-                    {c.name[0].toUpperCase()}
+                    <div .icon style={userbackground}>
+                    {userbackground ? "" : c.name[0].toUpperCase()}
+					{showletter}
                     </div>
                     <div>
                         <div .id style="font-weight: bold; font-size: 1.2em;">{c.name}</div>
@@ -74,7 +86,7 @@ class Body: Reactor.Component
                      {!auth_2fa ? <span .auth-2fa-msg>{translate('Approve the request on HopToDesk 2FA')}</span> : ""}
                      {auth || !auth_2fa ? "" : <button .button tabindex="-1" #accept>{translate('Accept')}</button>}
                      {auth ? "" : <button .button tabindex="-1" .outline #dismiss>{translate('Dismiss')}</button>}
-                     {auth ? <button .button tabindex="-1" #disconnect>{translate('Disconnect')}</button> : ""}
+                     {auth && !disconnected ? <button .button tabindex="-1" #disconnect>{translate('Disconnect')}</button> : ""}
                 </div>
                 {c.is_file_transfer || c.port_forward ? "" : <div .chaticon>{svg_chat}</div>}
             </div>
@@ -221,8 +233,8 @@ class Body: Reactor.Component
 
     function on_2fa_answer(self, answer) {
         self.auth_2fa_answer = answer;
-        body.update();
-        if (handler.get_config_option("enable-2fa-auto-accept") != "N") {
+		body.update();
+        if (handler.get_option("enable-2fa-auto-accept") != "N") {
             self.connection.authorized = true;
             body.update();
             handler.authorize(self.cid);
@@ -377,11 +389,11 @@ function bring_to_top(idx=-1) {
     }
 }
 
-handler.addConnection = function(id, is_file_transfer, port_forward, peer_id, name, authorized, keyboard, clipboard, audio, file, restart, recording, security_numbers, security_qr_code) {
+handler.addConnection = function(id, is_file_transfer, port_forward, peer_id, name, authorized, keyboard, clipboard, audio, file, restart, recording, security_numbers, avatar_image) {
 //    stdout.println("new connection #" + id + ": " + peer_id);
     var conn;
     connections.map(function(c) {
-        if (c.id == id) conn = c;
+		if (c.id == id) conn = c;
     });
     if (conn) {
         conn.authorized = authorized;
@@ -398,7 +410,7 @@ handler.addConnection = function(id, is_file_transfer, port_forward, peer_id, na
         port_forward: port_forward,
         name: name, authorized: authorized, time: new Date(), now: new Date(),
         keyboard: keyboard, clipboard: clipboard, msgs: [], unreaded: 0,
-        audio: audio, file: file, restart: restart, recording: recording, security_numbers: security_numbers, security_qr_code: security_qr_code,
+        audio: audio, file: file, restart: restart, recording: recording, security_numbers: security_numbers, avatar_image: avatar_image,
         disconnected: false
     };
     if (idx < 0) {

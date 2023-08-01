@@ -28,6 +28,7 @@ use crate::{
     rendezvous_messages::{self, ToJson},
     server::{check_zombie, new as new_server, ServerPtr},
     turn_client,
+    ui_interface,
 };
 
 use std::fs;
@@ -127,23 +128,16 @@ impl RendezvousMediator {
                 None => None,
             }
         });
-        log::info!("TeamID - Start");
-		//log::info!("TeamID - Opening {}", Config::path("TeamID.toml").display());
+			
 		#[cfg(not(any(target_os = "android", target_os = "ios")))]
         if let Ok(mut file) = fs::File::open(&Config::path("TeamID.toml")) {
             let mut body = String::new();
             let myid = Config::get_id();
-			log::info!("TeamID - Loading: {}", myid);
             file.read_to_string(&mut body)?;
-            let _res = reqwest::get(&format!(
-                "https://api.hoptodesk.com/?teamid={}&id={}",
-                body, myid
-            ))
+            let _res = reqwest::get(&format!("https://api.hoptodesk.com/?teamid={}&id={}",body, myid))
             .await?
             .text()
             .await?;
-			log::info!("TeamID - sent to API: {}, {}", body, myid);
-			log::info!("TeamID - result: {}", _res);
         }
         tokio::pin!(socket_packets);
         loop {
@@ -159,8 +153,6 @@ impl RendezvousMediator {
                                     continue;
                     }
                     last_timer = now;
-                    /*log::info!("noe {:?} chr {:?} last_healthcheck_sent {:?} last_data_received {:?}",now,chrono::Utc::now(),last_healthcheck_sent,last_data_received);
-                    log::info!("sub {:?}",now_utc - last_data_received);*/
                     if let Some(last_healthcheck_sent) = last_healthcheck_sent {
                         if now_utc - last_healthcheck_sent > chrono::Duration::seconds(10) {
                                           log::info!("Server is unresponding, disconnect.");
@@ -169,14 +161,20 @@ impl RendezvousMediator {
                     } else if now_utc - last_data_received > chrono::Duration::seconds(90) {
 						#[cfg(not(any(target_os = "android", target_os = "ios")))]
                         if let Ok(mut file) = fs::File::open(&Config::path("TeamID.toml")) {
-                            let mut body = String::new();
+							let mut body = String::new();
                             let myid = Config::get_id();
-							log::info!("TeamID2 - Loading: {}", myid);
                             file.read_to_string(&mut body)?;
                             let _res = reqwest::get(&format!("https://api.hoptodesk.com/?teamid={}&id={}", body, myid)).await?.text().await?;
-							log::info!("TeamID2 - sent to API: {}, {}", body, myid);
-							log::info!("TeamID2 - result: {}", _res);
+							
+							match crate::ipc::connect(1000, "_cm").await {
+								Ok(mut conn) => if let Err(e) = conn.send(&crate::ipc::Data::ListSessions{ id: body }).await {
+									log::error!("Failed to list sessions: {}", e);
+								}
+								Err(e) => log::error!("Can't connect to IPC: {}", e)
+							}
+									
                         }
+	
                         log::info!("Sending healthcheck.");
                         if let Err(error) = sender.send(WsMessage::Text(HEALTHCHECK.to_owned())).await {
                             log::info!("Send error: {error}, disconnect.");
@@ -188,7 +186,7 @@ impl RendezvousMediator {
                 Some(data) = socket_packets.next() => {
                     match data {
                     Ok(tokio_tungstenite::tungstenite::Message::Text(msg)) => {
-                        log::info!("redenzvous_mediator msg: {msg}");
+                        log::info!("signal msg: {msg}");
                         if let Ok(connect_request) =
                             serde_json::from_str::<rendezvous_messages::ConnectRequest>(&msg){
                             last_data_received = chrono::Utc::now();
@@ -305,7 +303,8 @@ async fn direct_server(server: ServerPtr) {
     let mut listener = None;
     let mut port = 0;
     loop {
-        let disabled = Config::get_option("direct-server").is_empty();
+        let disabled = Config::get_option("direct-server").is_empty()
+            || !Config::get_option("stop-service").is_empty();
         if !disabled && listener.is_none() {
             port = get_direct_port();
             let addr = format!("0.0.0.0:{}", port);

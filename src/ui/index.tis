@@ -2,6 +2,8 @@ if (is_osx) view.windowBlurbehind = #light;
 //stdout.println("current platform:", OS);
 //stdout.println("is_xfce: ", is_xfce);
 
+
+				
 // html min-width, min-height not working on mac, below works for all
 view.windowMinSize = (scaleIt(560), scaleIt(300));
 
@@ -57,12 +59,13 @@ function createNewConnect(id, type) {
     id = id.replace(/\s/g, "");
     app.remote_id.value = formatId(id);
     if (!id) return;
+    var force_relay = false; 
     if (id == my_id) {
         msgbox("custom-error", "Error", "You cannot connect to your own computer");
         return;
     }
     handler.set_remote_id(id);
-    handler.new_remote(id, type);
+    handler.new_remote(id, type, force_relay);
 	app.update();
 }
 
@@ -164,9 +167,15 @@ class AudioInputs: Reactor.Component {
 class Languages: Reactor.Component {
     function render() {
         var langs = JSON.parse(handler.get_langs());
+		var cur = handler.get_local_option("lang") || "default";
+		var noneng;
         var me = this;
         self.timer(1ms, function() { me.toggleMenuState() });
-        return <li>{translate('Language')}
+		if (cur != "en" && cur != "default") {
+			noneng = " " + "(Language)";
+		}
+				
+        return <li>{translate('Language')} {noneng}
             <menu #languages key={langs.length}>
                 {langs.map(function(lang) {
                 return <li id={lang[0]} title={lang[1]}><span>{svg_checkmark}</span>{lang[1]}</li>;
@@ -367,7 +376,7 @@ class MyIdMenu: Reactor.Component {
 
     function showAbout() {
         var name = handler.get_app_name();
-            msgbox("custom-nocancel-nook-hasclose", "About " + name, "<div style='line-height: 2em'> \
+            msgbox("custom-nocancel-nook-hasclose", translate('About') + " " + name, "<div style='line-height: 2em'> \
                 <div>Version: " + handler.get_version() + " \
             </div>
 			<div style='font-size: 13px; color: #000; text-decoration: none;'>
@@ -396,14 +405,10 @@ class MyIdMenu: Reactor.Component {
         if (me.id == "-enable-2fa") {
             var enabled = !(me.is_2fa_enabled());
             if (enabled) {
-                //stdout.println("2FA enabled");
                 var data = me.enable_2fa();
-
-				//msgbox("custom nocancel", translate("2FA QR code"), "<center>" + translate("Scan this QR code with a camera on a secondary device such as a phone to set it up as your 2FA authenticator.") + "<br/><img src='" + data.img_base64 + "'/><br/>" + translate("You will need to confirm the 2FA on the secondary device with you when trying to connect to this desktop.") + "</center>");
 				msgbox("custom nocancel", translate("2FA QR code"), "<center>" + translate("Scan this QR code with a camera on a secondary device such as a phone to set it up as your 2FA authenticator.") + "<br/>" + data.img_base64 + "<br/>" + translate("You will need to confirm the 2FA on the secondary device with you when trying to connect to this desktop.") + "</center>");
 
             } else {
-                //stdout.println("2FA disabled");
                 me.disable_2fa();
             }
             me.attributes.toggleClass("selected", enabled);
@@ -446,8 +451,8 @@ class MyIdMenu: Reactor.Component {
             <div> \
 			<div #networkhoptodesk .custom-event title='HopToDesk Network' " + selectedhopnetwork + " network='networkhoptodesk' style=\"height: 30px; display:block;\"><div style=\"padding-top: 1px; margin-top: 5px; margin-left: 35px; display: block;\">" + translate("HopToDesk Network (Default)") + "</div></div><br></br> \
 			<div #networkcustom .custom-event title='Custom Network Settings' " + selectedcustomnetwork + " network='networkcustom' id='networkcustom' style=\"height: 30px; display:block;\"><div style=\"padding-top: 1px; margin-top: 5px; margin-left: 35px; display: block;\">" + translate("Custom Network Settings") + "</div></div><br></br> \
-			<span style=\"margin-top: 5px; margin-bottom: 5px;\">" + translate("Enter your custom network settings URL:") + "</span><br></br><br></br> \
-			<input|text .outline-focus name='url' value='" + old_url + "' placeholder='" + translate('Custom network settings URL') + "' style=\"margin-bottom: 5px;\" #customurl/></div> \
+			<span style=\"margin-top: 5px; margin-bottom: 15px;\">" + translate("Enter your custom network settings URL:") + "</span><br></br><br></br> \
+			<input|text .outline-focus name='url' value='" + old_url + "' placeholder='" + translate('Custom network settings URL') + "' style=\"margin-bottom: 15px; max-width: 100%; font-size: 14px\" #customurl/></div> \
             </div> \
 			", "", function(el) {
 				if (el) {
@@ -625,7 +630,7 @@ class App: Reactor.Component
                     <div>
                         <div .title>{translate('Your Desktop')}</div>
                         <div .lighter-text>{translate('desk_tip')}</div>
-                        <div .your-desktop>
+                        <div .your-desktop style="min-height: 70px">
                             {!show_settings_button ? <MyIdMenu>{translate("ID")}<div tabindex="0">{svg_menu}</div></MyIdMenu> : ""}
                             {key_confirmed ? <input #idbox .idbox type="text" readonly title={translate('ID (Click to Copy)')} value={formatId(get_id())}/> : translate("Generating ...")}
                         </div>
@@ -651,7 +656,6 @@ class App: Reactor.Component
                             {show_settings_button ? <MyIdMenu><div style="margin:top: -20px; position: fixed; top: 10; border-radius: 50px; width: 100px;float:right;padding: 10px;background: #2D81D4 url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAkCAYAAAD7PHgWAAAABGdBTUEAAK/INwWK6QAAABl0RVh0U29mdHdhcmUAQWRvYmUgSW1hZ2VSZWFkeXHJZTwAAASASURBVHjaYvz//z/DYAYAAcTEMMgBQAANegcCBNCgdyBAANHKgcZAvAmIXwPxGyA+BMQe5BgEEEAMoExCZewAxG//Y4LfQBxDqnkAAcRI5VzMBsRngVgHh/w9INYC4p/EGggQQCxkOoQXiB2BWA2If0AddQYqhuy4biB+B8R1QMwJxEpAHAjEa4BYE4itgJgfiB8C8QEgfoluEUAAkROFukB8Dkv0nQXil0hil5H0rEMS/wzEp4D4K5oZ94HYGd0+gAAi1XF8QHzpP3EgDkmfDRD/JELPPSAWQLYTIIBIdaA/moEngPgWmtgnIK7AojcKiF+gqX0ExPuB+C+SWAqyPoAAIjUNqiOxTwKxLTQ9+gGxKhB/BuItQHwFi95lUD0BQCwMxE+AeDMQP4bKRULVmQDxHJgmgAAi1YE/kNggS3igmWABkfrvAnEvlrJYDIn/FVkSIIBILahBIfAbylaB5khcQAMaWiFAbIgnMCyB2AnK/gPEO5ElAQKInFx8Bim9dGGRB+XEXUD8DUndLyA+CcTBWNSnIam7ii4PEECkhCAHELsBsTSS2Ac0NQlAvA2IXaHlHgywArEZEK8C4hI0Pe+Q2GLQUOeHCQAEELGh5gTE54H4H5JvfwCxDloV9wstl96Chso/NPFkJH1C0NyMDO7AqkWAACLGcYZA/B5LmVWOpIYJiPchyYGKkxAg5gJiDiB2hDoUuVDmR9IfgsVzIE/5AwQQMQ5cgaYRFJLxaGo0kSz4iyOtGUBrERjwRZP3BOLDaHbtBQggYhz4FElDNxCzYlETjKTmNg41ILwNSR22whwUE7lISeI5QAAxkdigeINUzOAqrkAtlb9ElKPMWOT/oTUYWAACiJgQ3I7ka1AFvwqI7bGk079IRYotFnNkgfg1klnhaPKgDDcfLRkcBwggYhzoilZXgsB3II5EUsOK1sIBZQgTJHllUHpCkn8DxOJI8tZY6mkQSAUIIGKLmVggvo6mGdRqVkJSEwDEf9BCG5TmNkAdhAxKkPSBcvMVLI0IUBplBAggUmoQbmi0fEAyqBRNTQkRTao+PC2kT9AyUhgmDxBA5FR1JwlUdSlYmmAg8AyLh0A4HUnNRXR5gAAitTWjg9akf4RFDaiptBraFNOC5ta70J7dCyzq7yOx1aBV4imYAEAAkRp6mWjpRIYKvUBOaMMXBtqR5QECiNQQ5Edr24EanYxAbA31/Ucg3o/WAEAGPNCmlSg09EGh+h2ILwKxOVSNCLIGgAAi1beRaB2lpUC8B60YAlX0YVj02kCrSWRwHIhnAfEXJLECZH0AAUSqA8XRqj5cAOR4N7S6+jUR+kDFkTSynQABRE6aATVIb2Ax/BraiMIJJD0L0crHy1h6eU/RCn8wBgggckcWBKHNfSMg/gbEe5DGX9YjqcsH4udAPB+IuaFiqUC8GNoN8IamuetQfY/RLQIIIGoPfYAywTUglsUh/xKamT4RayBAAFF7dOsLEFdAWyXYQD8pjgMBgACidgjCAKhfkQ7EetCC+ia07zuTVIMAAgwABC/z2Wrp3KsAAAAASUVORK5CYII=');" #menu><span style="font-size: 16px; float:right; color: #FFFFFF">{translate('Settings')}</span></div></MyIdMenu> : ""}
                         </div>
 						<div .card-connect>
-
                             <ID @{this.remote_id} />
                             <div .right-buttons>
                                 <button .button .outline #file-transfer title={translate('Transfer File')}>{translate('Transfer File')}</button>
@@ -692,7 +696,7 @@ class InstallMe: Reactor.Component {
     function render() {
         return <div .install-me style="margin-top: -5px;">
             <span />
-            <div>{translate('install_tip')}</div>
+            <div id="installtip">{translate('install_tip')}</div>
             <div><center><button #install-me .button title={translate('Install')}>{translate('Install')}</button></center></div>
         </div>;
     }
@@ -752,7 +756,7 @@ class UpgradeMe: Reactor.Component {
         handler.update_me("");
     }
 }
-
+/*
 class UpdateMe: Reactor.Component {
     function render() {
         var update_or_download = "download"; // !is_win ? "download" : "update";
@@ -793,7 +797,7 @@ class UpdateMe: Reactor.Component {
             onsuccess, onerror, onprogress);
     }
 }
-
+*/
 class SystemError: Reactor.Component {
     function render() {
         return <div .install-me>
@@ -999,15 +1003,41 @@ class PasswordArea: Reactor.Component {
     function render() {
         var me = this;
         self.timer(1ms, function() { me.toggleMenuState() });
-        return
-        <div .your-desktop>
-            <div>{translate('Password')}</div>
-            <div .password style="flow:horizontal">
-                {this.renderPop()}
-                <PasswordEyeArea />
-                {svg_edit}
-            </div>
-        </div>;
+        var isunattended = handler.get_option("unattended-access");
+		if (isunattended) {
+			return
+			<div .your-desktop>
+				<div>{translate('Password')}</div>
+				<div .password style="flow:horizontal">
+					{this.renderPop()}
+					<PasswordEyeArea />
+					{svg_edit}
+				</div>
+				<span></span><div style="text-align: center; font-size: 13px">
+				<label style="display: flex; align-items: center; justify-content: flex-end; flex-direction: row-reverse;">
+				  <input type="checkbox" id="unattendedcheckbox" name="unattendedcheckbox" style="margin-right: 8px; background-color: #FFFFFF" checked />
+				  <span id="unattendedlabel">{translate('Unattended Access')}</span>
+				</label>
+				</div>
+			</div>;
+		} else {
+			return
+			<div .your-desktop>
+				<div>{translate('Password')}</div>
+				<div .password style="flow:horizontal">
+					{this.renderPop()}
+					<PasswordEyeArea />
+					{svg_edit}
+				</div>
+				<span></span><div style="text-align: center; font-size: 13px">
+				<label style="display: flex; align-items: center; justify-content: flex-end; flex-direction: row-reverse;">
+				  <input type="checkbox" id="unattendedcheckbox" name="unattendedcheckbox" style="margin-right: 8px; background-color: #FFFFFF" />
+				  <span id="unattendedlabel">{translate('Unattended Access')}</span>
+				</label>
+				</div>
+			</div>;
+		}
+
     }
 
     function renderPop() {
@@ -1052,8 +1082,6 @@ class PasswordArea: Reactor.Component {
         var approve_mode= handler.get_option('approve-mode');
         var show_password = approve_mode != 'click';
         if(show_password && temporaryPasswordLengthMenu) temporaryPasswordLengthMenu.update({show: true });
-        var menu = $(menu#edit-password-context);
-        me.popup(menu);
     }
 
 	event keypress $(svg#edit) (evt, me)
@@ -1071,7 +1099,7 @@ class PasswordArea: Reactor.Component {
 		}
 	}
 
-    event click $(li#set-password) {
+    event click $(svg#edit) {
         var me = this;
         var password = handler.permanent_password();
         var value_field = password.length == 0 ? "" : "value=" + password;
@@ -1112,6 +1140,17 @@ class PasswordArea: Reactor.Component {
             passwordArea.update();
         }
     }
+	
+    event click $(#unattendedcheckbox) (_, me) {
+        var v = me.id;
+		if (me.state.checked) {
+			handler.set_option("unattended-access", "true");
+			$(#unattendedlabel).style.set{color: "#222222"};
+		} else {
+			handler.set_option("unattended-access", "");
+			$(#unattendedlabel).style.set{color: "#666"};
+		}
+    }	
 }
 
 var password_cache = ["","","",""];
@@ -1213,19 +1252,31 @@ function self.ready() {
     var r = handler.get_size();
     if (isReasonableSize(r) && r[2] > 0) {
         var (sx, sy, sw, sh) = view.screenBox(#workarea, #rectw);
+		if (sw <= 800) {
+			var el = $(#installtip);
+			el.style.set{display: "none"};
+		}
         if (r[2] >= sw && r[3] >= sh) {
             self.timer(1ms, function() { view.windowState = View.WINDOW_MAXIMIZED; });
         } else {
             view.move(r[0], r[1], r[2], r[3]);
         }
     } else {
-        centerize(scaleIt(800), scaleIt(600));
+		centerize(scaleIt(800), scaleIt(600));
     }
     if (!handler.get_remote_id()) {
         view.focus = $(#remote_id);
     }
 	//refreshCurrentUser();
     updateTheme();
+	
+	var (sxm, sym, swm, shm) = view.screenBox(#workarea, #rectw);
+	if (swm <= 800) {
+		var el = $(#installtip);
+		el.style.set{display: "none"};
+	}
+
+	
 }
 
 function showAbout() {
@@ -1277,7 +1328,6 @@ function checkConnectStatus() {
             app.update();
         }
         if (tmp[2] && tmp[2] != my_id) {
-            stdout.println("id updated");
             app.update();
         }
         tmp = handler.get_error();
@@ -1285,11 +1335,6 @@ function checkConnectStatus() {
             system_error = tmp;
             app.update();
         }
-        //tmp = handler.get_software_update_url();
-        //if (tmp != software_update_url) {
-        //    software_update_url = tmp;
-        //    app.update();
-        //}
         if (handler.recent_sessions_updated()) {
             stdout.println("recent sessions updated");
             updateAbPeer();
@@ -1327,92 +1372,3 @@ function check_if_overlay() {
 }
 
 checkConnectStatus();
-/*
-function login() {
-    var name0 = getUserName();
-    var pass0 = '';
-    msgbox("custom-login", translate('Login'), <div .form .set-password>
-            <div><span>{translate('Username')}:</span><input|text name="username" value={name0} .outline-focus title={translate("Username")} /></div>
-            <div><span>{translate('Password')}:</span><PasswordComponent value={pass0} /></div>
-        </div>, "", function(res=null, show_progress) {
-        if (!res) return;
-        show_progress();
-        var name = (res.username || '').trim();
-        if (!name) {
-            show_progress(false, translate("Username missed"));
-            return " ";
-        }
-        var pass = (res.password || '').trim();
-        if (!pass) {
-            show_progress(false, translate("Password missed"));
-            return " ";
-        }
-        abLoading = true;
-        var url = handler.get_api_server();
-        httpRequest(url + "/api/login", #post, {username: name, password: pass, id: my_id, uuid: handler.get_uuid()}, function(data) {
-            if (data.error) {
-                abLoading = false;
-                var err = translate(data.error);
-                show_progress(false, err);
-                return;
-            }
-            handler.set_local_option("access_token", data.access_token);
-            handler.set_local_option("user_info", JSON.stringify(data.user));
-            show_progress(-1);
-            myIdMenu.update();
-            getAb();
-        }, function(err, status) {
-            abLoading = false;
-            err = translate(err);
-            if (url.indexOf('hoptodesk') < 0) err = url + ', ' + err;
-            show_progress(false, err);
-        });
-        return " ";
-      });
-}
-
-function reset_token() {
-    handler.set_local_option("access_token", "");
-    handler.set_local_option("user_info", "");
-    handler.set_local_option("selected-tags", "");
-    myIdMenu.update();
-    resetAb();
-    if (abComponent) {
-        abComponent.update();
-    }
-}
-
-function logout() {
-    var url = handler.get_api_server();
-    httpRequest(url + "/api/logout", #post, {id: my_id, uuid: handler.get_uuid()}, function(data) {
-    }, function(err, status) {
-        msgbox("custom-error", translate('Error'), err);
-    }, getHttpHeaders());
-    reset_token();
-}
-
-function refreshCurrentUser() {
-    if (!handler.get_local_option("access_token")) return;
-    abLoading = true;
-    abError = "";
-    app.update();
-    httpRequest(handler.get_api_server() + "/api/currentUser", #post, {id: my_id, uuid: handler.get_uuid()}, function(data) {
-        if (data.error) {
-            handleAbError(data.error);
-            return;
-        }
-        handler.set_local_option("user_info", JSON.stringify(data));
-        myIdMenu.update();
-        getAb();
-    }, function(err, status) {
-        if (status == 401 || status == 400) {
-            reset_token();
-        }
-        handleAbError(err);
-    }, getHttpHeaders());
-}
-
-function getHttpHeaders() {
-    return "Authorization: Bearer " + handler.get_local_option("access_token");
-}
-*/

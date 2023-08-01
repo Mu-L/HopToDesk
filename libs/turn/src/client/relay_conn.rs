@@ -2,13 +2,11 @@
 mod relay_conn_test;
 
 // client implements the API for a TURN client
-use super::binding::*;
-use super::periodic_timer::*;
-use super::permission::*;
-use super::transaction::*;
-use crate::proto;
-use crate::Error;
+use std::io;
+use std::net::SocketAddr;
+use std::sync::Arc;
 
+use async_trait::async_trait;
 use stun::agent::*;
 use stun::attributes::*;
 use stun::error_code::*;
@@ -16,16 +14,15 @@ use stun::fingerprint::*;
 use stun::integrity::*;
 use stun::message::*;
 use stun::textattrs::*;
-
+use tokio::sync::{mpsc, Mutex};
+use tokio::time::{Duration};
 use util::Conn;
 
-use std::io;
-use std::net::SocketAddr;
-use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex};
-use tokio::time::Duration;
-
-use async_trait::async_trait;
+use super::binding::*;
+use super::periodic_timer::*;
+use super::permission::*;
+use super::transaction::*;
+use crate::{proto, Error};
 
 const PERM_REFRESH_INTERVAL: Duration = Duration::from_secs(120);
 const MAX_RETRY_ATTEMPTS: u16 = 3;
@@ -167,11 +164,11 @@ impl<T: RelayConnObserver + Send + Sync> Conn for RelayConn<T> {
     }
 
     // LocalAddr returns the local network address.
-    async fn local_addr(&self) -> Result<SocketAddr, util::Error> {
+    fn local_addr(&self) -> Result<SocketAddr, util::Error> {
         Ok(self.relayed_addr)
     }
 
-    async fn remote_addr(&self) -> Option<SocketAddr> {
+    fn remote_addr(&self) -> Option<SocketAddr> {
         None
     }
 
@@ -185,7 +182,7 @@ impl<T: RelayConnObserver + Send + Sync> Conn for RelayConn<T> {
         let _ = relay_conn
             .close()
             .await
-            .map_err(|err| util::Error::Other(format!("{}", err)));
+            .map_err(|err| util::Error::Other(format!("{err}")));
         Ok(())
     }
 }

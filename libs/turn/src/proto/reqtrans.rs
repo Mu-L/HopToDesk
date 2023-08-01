@@ -1,12 +1,13 @@
 #[cfg(test)]
 mod reqtrans_test;
 
-use super::*;
-
 use std::fmt;
+
 use stun::attributes::*;
 use stun::checks::*;
 use stun::message::*;
+
+use super::*;
 
 // RequestedTransport represents REQUESTED-TRANSPORT attribute.
 //
@@ -15,7 +16,7 @@ use stun::message::*;
 // codepoint 17 (User Datagram protocol).
 //
 // RFC 5766 Section 14.7
-#[derive(Default, Debug, PartialEq)]
+#[derive(Default, Debug, PartialEq, Eq)]
 pub struct RequestedTransport {
     pub protocol: Protocol,
 }

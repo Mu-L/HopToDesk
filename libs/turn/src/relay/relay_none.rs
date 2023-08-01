@@ -1,8 +1,8 @@
-use super::*;
-use crate::error::*;
-
 use async_trait::async_trait;
 use util::vnet::net::*;
+
+use super::*;
+use crate::error::*;
 
 // RelayAddressGeneratorNone returns the listener with no modifications
 pub struct RelayAddressGeneratorNone {
@@ -33,7 +33,7 @@ impl RelayAddressGenerator for RelayAddressGeneratorNone {
             .resolve_addr(use_ipv4, &format!("{}:{}", self.address, requested_port))
             .await?;
         let conn = self.net.bind(addr).await?;
-        let relay_addr = conn.local_addr().await?;
+        let relay_addr = conn.local_addr()?;
         Ok((conn, relay_addr))
     }
 }

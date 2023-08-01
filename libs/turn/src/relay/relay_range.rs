@@ -1,9 +1,10 @@
-use super::*;
-use crate::error::*;
+use std::net::IpAddr;
 
 use async_trait::async_trait;
-use std::net::IpAddr;
 use util::vnet::net::*;
+
+use super::*;
+use crate::error::*;
 
 // RelayAddressGeneratorRanges can be used to only allocate connections inside a defined port range
 pub struct RelayAddressGeneratorRanges {
@@ -60,13 +61,13 @@ impl RelayAddressGenerator for RelayAddressGeneratorRanges {
                 .resolve_addr(use_ipv4, &format!("{}:{}", self.address, requested_port))
                 .await?;
             let conn = self.net.bind(addr).await?;
-            let mut relay_addr = conn.local_addr().await?;
+            let mut relay_addr = conn.local_addr()?;
             relay_addr.set_ip(self.relay_address);
             return Ok((conn, relay_addr));
         }
 
         for _ in 0..max_retries {
-            let port = self.min_port + rand::random::<u16>() % (self.max_port + 1 - self.min_port);
+            let port = self.min_port + rand::random::<u16>() % (self.max_port - self.min_port + 1);
             let addr = self
                 .net
                 .resolve_addr(use_ipv4, &format!("{}:{}", self.address, port))
@@ -76,7 +77,7 @@ impl RelayAddressGenerator for RelayAddressGeneratorRanges {
                 Err(_) => continue,
             };
 
-            let mut relay_addr = conn.local_addr().await?;
+            let mut relay_addr = conn.local_addr()?;
             relay_addr.set_ip(self.relay_address);
             return Ok((conn, relay_addr));
         }

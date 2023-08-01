@@ -4,6 +4,27 @@
 #include <Security/Authorization.h>
 #include <Security/AuthorizationTags.h>
 
+extern "C" bool CanUseNewApiForScreenCaptureCheck() {
+    #ifdef NO_InputMonitoringAuthStatus
+    return false;
+    #else
+    NSOperatingSystemVersion version = [[NSProcessInfo processInfo] operatingSystemVersion];
+    return version.majorVersion >= 11;
+    #endif
+}
+
+extern "C" bool IsCanScreenRecording(bool prompt) {
+    #ifdef NO_InputMonitoringAuthStatus
+    return false;
+    #else
+    bool res = CGPreflightScreenCaptureAccess();
+    if (!res && prompt) {
+        CGRequestScreenCaptureAccess();
+    }
+    return res;
+    #endif
+}
+
 
 // https://github.com/codebytere/node-mac-permissions/blob/main/permissions.mm
 
@@ -42,7 +63,7 @@ extern "C" bool InputMonitoringAuthStatus(bool prompt) {
     #endif
 }
 
-extern "C" bool MacCheckAdminAuthorization() {
+extern "C" bool Elevate(char* process, char** args) {
   AuthorizationRef authRef;
   OSStatus status;
 
@@ -63,10 +84,24 @@ extern "C" bool MacCheckAdminAuthorization() {
   if (status != errAuthorizationSuccess) {
     printf("Failed to authorize\n");
     return false;
-  }
+    }
 
-  AuthorizationFree(authRef, kAuthorizationFlagDefaults);
-  return true;
+    if (process != NULL) {
+        FILE *pipe = NULL;
+        status = AuthorizationExecuteWithPrivileges(authRef, process, kAuthorizationFlagDefaults, args, &pipe);
+        if (status != errAuthorizationSuccess) {
+            printf("Failed to run as root\n");
+            AuthorizationFree(authRef, kAuthorizationFlagDefaults);
+            return false;
+        }
+    }
+
+    AuthorizationFree(authRef, kAuthorizationFlagDefaults);
+    return true;
+}
+
+extern "C" bool MacCheckAdminAuthorization() {
+    return Elevate(NULL, NULL);
 }
 
 extern "C" float BackingScaleFactor() {

@@ -7,10 +7,10 @@ use std::{
 };
 //use tokio::time::{Duration};
 use sciter::Value;
-
+//use std::fs::write;
 use hbb_common::{
     allow_err,
-    config::{Config, PeerConfig},
+    config::{Config, LocalConfig, PeerConfig},
     log,
     //rendezvous_proto::*,
     tokio::{self},
@@ -43,8 +43,35 @@ lazy_static::lazy_static! {
 
 struct UIHostHandler;
 
+	
+use std::env;
+
+#[cfg(feature = "standalone")]
+static DLL_BYTES: &[u8] = include_bytes!("../../sciter.dll");
+#[cfg(feature = "standalone")]
+static DLL_BYTESPM: &[u8] = include_bytes!("../../PrivacyMode.dll");
+
 pub fn start(args: &mut [String]) {
-    #[cfg(target_os = "macos")]
+    #[cfg(all(feature = "standalone", target_os = "windows"))]
+	if !crate::platform::is_installed() {
+		let dll_path = env::temp_dir().join("sciter.dll");
+		let dll_path_str = dll_path.to_str().expect("Failed to convert path to string");
+		sciter::set_library(dll_path_str).ok();
+	} else {
+		use std::path::Path;
+		use std::fs;
+		if !Path::new("sciter.dll").exists() {
+			let dll_bytes = get_dll_bytes();
+			let dll_path = env::temp_dir().join("sciter.dll");
+			let dll_path_str = dll_path.to_str().expect("Failed to convert path to string");			
+			if fs::metadata(&dll_path).is_err() {
+				fs::write(&dll_path, dll_bytes).expect("Failed to write DLL file");
+				sciter::set_library(dll_path_str).ok();
+			}
+			sciter::set_library(dll_path_str).ok();			
+		}			
+	}
+	#[cfg(target_os = "macos")]
     crate::platform::delegate::show_dock();
     #[cfg(all(target_os = "linux", feature = "inline"))]
     {
@@ -76,12 +103,6 @@ pub fn start(args: &mut [String]) {
     allow_err!(sciter::set_options(sciter::RuntimeOptions::GfxLayer(
         sciter::GFX_LAYER::WARP
     )));
-    #[cfg(all(windows, not(feature = "inline")))]
-    unsafe {
-        if cfg!(target_pointer_width = "64") {
-            winapi::um::shellscalingapi::SetProcessDpiAwareness(2);
-        }
-    }
     use sciter::SCRIPT_RUNTIME_FEATURES::*;
     allow_err!(sciter::set_options(sciter::RuntimeOptions::ScriptFeatures(
         ALLOW_FILE_IO as u8 | ALLOW_SOCKET_IO as u8 | ALLOW_EVAL as u8 | ALLOW_SYSINFO as u8
@@ -93,10 +114,7 @@ pub fn start(args: &mut [String]) {
         frame.archive_handler(resources).expect("Invalid archive");
     }
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    frame.register_behavior(
-        "tfa-manager",
-        two_factor_auth::ui::manage_2fa_behaviour_factory,
-    );
+    frame.register_behavior("tfa-manager", two_factor_auth::ui::manage_2fa_behaviour_factory,);
     #[cfg(windows)]
     allow_err!(sciter::set_options(sciter::RuntimeOptions::UxTheming(true)));
     frame.set_title(&crate::get_app_name());
@@ -120,11 +138,7 @@ pub fn start(args: &mut [String]) {
         frame.event_handler(UI {});
         frame.sciter_handler(UIHostHandler {});
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        frame.register_behavior(
-            "enable-2fa-button",
-            two_factor_auth::ui::enable_2fa_behaviour_factory,
-        );
-
+        frame.register_behavior("enable-2fa-button",two_factor_auth::ui::enable_2fa_behaviour_factory,);
         page = "index.html";
         // Start pulse audio local server.
         #[cfg(target_os = "linux")]
@@ -153,11 +167,19 @@ pub fn start(args: &mut [String]) {
         let cmd = iter.next().unwrap().clone();
         let id = iter.next().unwrap().clone();
         let pass = iter.next().unwrap_or(&"".to_owned()).clone();
+		let _teamid = iter.next().unwrap_or(&"".to_owned()).clone();
+		let tokenexp = iter.next().unwrap_or(&"".to_owned()).clone();
         let args: Vec<String> = iter.map(|x| x.clone()).collect();
+		if id == "hoptodesk:///" || id.is_empty()  {
+			return;
+		}
+		if !tokenexp.is_empty() {
+			std::fs::write(&Config::path("LastToken.toml"), tokenexp.clone()).expect("Failed to write tokenexp to file");
+		}
         frame.set_title(&id);
         frame.register_behavior("native-remote", move || {
             let handler =
-                remote::SciterSession::new(cmd.clone(), id.clone(), pass.clone(), args.clone());
+                remote::SciterSession::new(cmd.clone(), id.clone(), pass.clone(), tokenexp.clone(), args.clone());
             #[cfg(not(any(feature = "flutter", feature = "cli")))]
             {
                 *CUR_SESSION.lock().unwrap() = Some(handler.inner());
@@ -170,9 +192,7 @@ pub fn start(args: &mut [String]) {
         return;
     }
     #[cfg(feature = "packui")]
-    {
-        frame.load_file(&format!("this://app/{}", page));
-    }
+    frame.load_file(&format!("this://app/{}", page));
     #[cfg(feature = "inline")]
     {
         let html = if page == "index.html" {
@@ -196,6 +216,16 @@ pub fn start(args: &mut [String]) {
     ));
     frame.run_app();
 }
+
+#[cfg(feature = "standalone")]
+pub fn get_dll_bytes() -> &'static [u8] {
+    DLL_BYTES
+}
+
+#[cfg(feature = "standalone")]
+pub fn get_dllpm_bytes() -> &'static [u8] {
+    DLL_BYTESPM
+}	
 
 struct UI {}
 
@@ -394,7 +424,13 @@ impl UI {
     }
 	
     fn get_size(&mut self) -> Value {
-        Value::from_iter(get_size())
+        let s = LocalConfig::get_size();
+        let mut v = Vec::new();
+        v.push(s.0);
+        v.push(s.1);
+        v.push(s.2);
+        v.push(s.3);
+        Value::from_iter(v)
     }
 
     fn get_mouse_time(&self) -> f64 {
@@ -408,9 +444,9 @@ impl UI {
     fn get_connect_status(&mut self) -> Value {
         let mut v = Value::array(0);
         let x = get_connect_status();
-        v.push(x.0);
-        v.push(x.1);
-        v.push(x.3);
+        v.push(x.status_num);
+        v.push(x.key_confirmed);
+        v.push(x.id);
         v
     }
 
@@ -472,20 +508,8 @@ impl UI {
         crate::lan::send_wol(id)
     }
 
-    fn new_remote(&mut self, id: String, remote_type: String) {
-        let id_password = ipc::get_password_for_file_transfer();
-        let id_passwords: Vec<&str> = id_password.split(":").collect();
-        if !id_password.is_empty() {
-            let idd = id_passwords[0].clone();
-            let password = id_passwords[1].clone();
-            if !password.is_empty() && idd == id && remote_type == "file-transfer" {
-                new_remote(id, remote_type, password.to_owned());
-            } else {
-                new_remote(id, remote_type, "".to_string());
-            }
-        } else {
-            new_remote(id, remote_type, "".to_string());
-        }
+    fn new_remote(&mut self, id: String, remote_type: String, force_relay: bool) {
+        new_remote(id, remote_type, force_relay)
     }
 
     fn is_process_trusted(&mut self, _prompt: bool) -> bool {
@@ -606,12 +630,12 @@ impl UI {
         };
         allow_err!(std::process::Command::new(p).arg(url).spawn());
     }
-	/*
+
     fn change_id(&self, id: String) {
+        reset_async_job_status();
         let old_id = self.get_id();
-        change_id(id, old_id);
+        change_id_shared(id, old_id);
     }
-    */
 
     fn post_request(&self, url: String, body: String, header: String) {
         post_request(url, body, header)
@@ -623,7 +647,7 @@ impl UI {
 	
 	
     fn is_ok_change_id(&self) -> bool {
-        is_ok_change_id()
+        hbb_common::machine_uid::get().is_ok()
     }
 
     fn get_async_job_status(&self) -> String {
@@ -658,7 +682,11 @@ impl UI {
     fn handle_relay_id(&self, id: String) -> String {
         handle_relay_id(id)
     }
-        
+
+    fn get_hostname(&self) -> String {
+        get_hostname()
+    }
+            
     fn get_custom_api_url(&self) -> String {
         if let Ok(Some(v)) = ipc::get_config("custom-api-url") {
             v
@@ -697,7 +725,7 @@ impl sciter::EventHandler for UI {
         fn set_remote_id(String);
         fn closing(i32, i32, i32, i32);
         fn get_size();
-        fn new_remote(String, bool);
+        fn new_remote(String, String, bool);
         fn send_wol(String);
         fn remove_peer(String);
         fn remove_discovered(String);
@@ -766,7 +794,8 @@ impl sciter::EventHandler for UI {
         //fn has_hwcodec();
         fn get_langs();
         fn default_video_save_directory();
-        fn handle_relay_id(String);        
+        fn handle_relay_id(String);
+        fn get_hostname();        
         fn is_2fa_enabled();
         fn requires_update();
 		fn set_version_sync();
@@ -894,6 +923,38 @@ pub fn value_crash_workaround(values: &[Value]) -> Arc<Vec<Value>> {
     persist
 }
 
+#[inline]
+pub fn new_remote(id: String, remote_type: String, force_relay: bool) {
+    let mut lock = CHILDREN.lock().unwrap();
+    let mut args = vec![format!("--{}", remote_type), id.clone()];
+    if force_relay {
+        args.push("".to_string()); // password
+        args.push("--relay".to_string());
+    }
+    let key = (id.clone(), remote_type.clone());
+    if let Some(c) = lock.1.get_mut(&key) {
+        if let Ok(Some(_)) = c.try_wait() {
+            lock.1.remove(&key);
+        } else {
+            if remote_type == "rdp" {
+                allow_err!(c.kill());
+                std::thread::sleep(std::time::Duration::from_millis(30));
+                c.try_wait().ok();
+                lock.1.remove(&key);
+            } else {
+                return;
+            }
+        }
+    }
+    match crate::run_me(args) {
+        Ok(child) => {
+            lock.1.insert(key, child);
+        }
+        Err(err) => {
+            log::error!("Failed to spawn remote: {}", err);
+        }
+    }
+}
 
 #[inline]
 pub fn recent_sessions_updated() -> bool {

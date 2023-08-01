@@ -3,6 +3,7 @@ mod lifetime_test;
 
 use std::fmt;
 use std::time::Duration;
+
 use stun::attributes::*;
 use stun::checks::*;
 use stun::message::*;
@@ -21,7 +22,7 @@ pub const DEFAULT_LIFETIME: Duration = Duration::from_secs(10 * 60);
 // until expiration.
 //
 // RFC 5766 Section 14.2
-#[derive(Default, Debug, PartialEq)]
+#[derive(Default, Debug, PartialEq, Eq)]
 pub struct Lifetime(pub Duration);
 
 impl fmt::Display for Lifetime {

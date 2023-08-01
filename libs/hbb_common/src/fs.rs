@@ -6,11 +6,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde_derive::{Deserialize, Serialize};
 use tokio::{fs::File, io::*};
 
-use crate::{bail, get_version_number, message_proto::*, ResultType, Stream};
+use crate::{anyhow::anyhow, bail, get_version_number, message_proto::*, ResultType, Stream};
 // https://doc.rust-lang.org/std/os/windows/fs/trait.MetadataExt.html
 use crate::{
     compress::{compress, decompress},
-    config::{Config, COMPRESS_LEVEL},
+    config::Config,
 };
 
 pub fn read_dir(path: &Path, include_hidden: bool) -> ResultType<FileDirectory> {
@@ -191,7 +191,7 @@ pub fn is_file_exists(file_path: &str) -> bool {
 
 #[inline]
 pub fn can_enable_overwrite_detection(version: i64) -> bool {
-    version >= get_version_number("1.1.10")
+    version >= get_version_number("1.40.4")
 }
 
 #[derive(Default)]
@@ -403,10 +403,18 @@ impl TransferJob {
         }
         if block.compressed {
             let tmp = decompress(&block.data);
-            self.file.as_mut().unwrap().write_all(&tmp).await?;
+            self.file
+                .as_mut()
+                .ok_or(anyhow!("file is None"))?
+                .write_all(&tmp)
+                .await?;
             self.finished_size += tmp.len() as u64;
         } else {
-            self.file.as_mut().unwrap().write_all(&block.data).await?;
+            self.file
+                .as_mut()
+                .ok_or(anyhow!("file is None"))?
+                .write_all(&block.data)
+                .await?;
             self.finished_size += block.data.len() as u64;
         }
         self.transferred += block.data.len() as u64;
@@ -456,7 +464,13 @@ impl TransferJob {
         let mut compressed = false;
         let mut offset: usize = 0;
         loop {
-            match self.file.as_mut().unwrap().read(&mut buf[offset..]).await {
+            match self
+                .file
+                .as_mut()
+                .ok_or(anyhow!("file is None"))?
+                .read(&mut buf[offset..])
+                .await
+            {
                 Err(err) => {
                     self.file_num += 1;
                     self.file = None;
@@ -481,7 +495,7 @@ impl TransferJob {
         } else {
             self.finished_size += offset as u64;
             if !is_compressed_file(name) {
-                let tmp = compress(&buf, COMPRESS_LEVEL);
+                let tmp = compress(&buf);
                 if tmp.len() < buf.len() {
                     buf = tmp;
                     compressed = true;
@@ -501,7 +515,12 @@ impl TransferJob {
     async fn send_current_digest(&mut self, stream: &mut Stream) -> ResultType<()> {
         let mut msg = Message::new();
         let mut resp = FileResponse::new();
-        let meta = self.file.as_ref().unwrap().metadata().await?;
+        let meta = self
+            .file
+            .as_ref()
+            .ok_or(anyhow!("file is None"))?
+            .metadata()
+            .await?;
         let last_modified = meta
             .modified()?
             .duration_since(SystemTime::UNIX_EPOCH)?
@@ -750,13 +769,13 @@ pub async fn handle_read_jobs(
             Ok(None) => {
                 if job.job_completed() {
                     finished.push(job.id());
-                    let err = job.job_error();
-                    if err.is_some() {
-                        stream
-                            .send(&new_error(job.id(), err.unwrap(), job.file_num()))
-                            .await?;
-                    } else {
-                        stream.send(&new_done(job.id(), job.file_num())).await?;
+                    match job.job_error() {
+                        Some(err) => {
+                            stream
+                                .send(&new_error(job.id(), err, job.file_num()))
+                                .await?
+                        }
+                        None => stream.send(&new_done(job.id(), job.file_num())).await?,
                     }
                 } else {
                     // waiting confirmation.
@@ -823,14 +842,19 @@ pub fn is_write_need_confirmation(
         let modified_time = metadata.modified()?;
         let remote_mt = Duration::from_secs(digest.last_modified);
         let local_mt = modified_time.duration_since(UNIX_EPOCH)?;
+        // [Note]
+        // We decide to give the decision whether to override the existing file to users,
+        // which obey the behavior of the file manager in our system.
+        let mut is_identical = false;
         if remote_mt == local_mt && digest.file_size == metadata.len() {
-            return Ok(DigestCheckResult::IsSame);
+            is_identical = true;
         }
         Ok(DigestCheckResult::NeedConfirm(FileTransferDigest {
             id: digest.id,
             file_num: digest.file_num,
             last_modified: local_mt.as_secs(),
             file_size: metadata.len(),
+            is_identical,
             ..Default::default()
         }))
     } else {

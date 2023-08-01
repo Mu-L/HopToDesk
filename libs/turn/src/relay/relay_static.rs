@@ -1,9 +1,10 @@
-use super::*;
-use crate::error::*;
+use std::net::IpAddr;
 
 use async_trait::async_trait;
-use std::net::IpAddr;
 use util::vnet::net::*;
+
+use super::*;
+use crate::error::*;
 
 // RelayAddressGeneratorStatic can be used to return static IP address each time a relay is created.
 // This can be used when you have a single static IP address that you want to use
@@ -39,7 +40,7 @@ impl RelayAddressGenerator for RelayAddressGeneratorStatic {
             .resolve_addr(use_ipv4, &format!("{}:{}", self.address, requested_port))
             .await?;
         let conn = self.net.bind(addr).await?;
-        let mut relay_addr = conn.local_addr().await?;
+        let mut relay_addr = conn.local_addr()?;
         relay_addr.set_ip(self.relay_address);
         return Ok((conn, relay_addr));
     }

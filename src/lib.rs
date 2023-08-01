@@ -41,12 +41,11 @@ use common::*;
 pub mod cli;
 #[cfg(not(any(target_os = "android", target_os = "ios", feature = "cli")))]
 pub mod core_main;
-#[cfg(all(windows, feature = "hbbs"))]
-mod hbbs;
 mod lang;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod port_forward;
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod tray;
 
 mod rendezvous_messages;
@@ -60,7 +59,9 @@ mod ui_session_interface;
 #[cfg(windows)]
 pub mod clipboard_file;
 
+#[cfg(windows)]
+pub mod privacy_win_mag;
+
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod two_factor_auth;
-#[cfg(target_os = "windows")]
-pub mod win_privacy;
+

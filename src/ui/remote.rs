@@ -140,10 +140,11 @@ impl InvokeUiSession for SciterHandler {
         self.call("setCursorPosition", &make_args!(cp.x, cp.y));
     }
 
-    fn set_connection_type(&self, is_secured: bool, direct: bool, security_numbers: String, security_qr_code: String,) {
-        self.call("setConnectionType", &make_args!(is_secured, direct, security_numbers, security_qr_code));
+    fn set_connection_type(&self, is_secured: bool, direct: bool, security_numbers: String, avatar_image: String,) {
+        self.call("setConnectionType", &make_args!(is_secured, direct, security_numbers, avatar_image));
     }
 
+    fn set_fingerprint(&self, _fingerprint: String) {}
     fn job_error(&self, id: i32, err: String, file_num: i32) {
         self.call("jobError", &make_args!(id, err, file_num));
     }
@@ -221,12 +222,12 @@ impl InvokeUiSession for SciterHandler {
         self.call("adaptSize", &make_args!());
     }
 
-    fn on_rgba(&self, data: &mut Vec<u8>) {
+    fn on_rgba(&self, rgba: &mut scrap::ImageRgb) {
         VIDEO
             .lock()
             .unwrap()
             .as_mut()
-            .map(|v| v.render_frame(data).ok());
+            .map(|v| v.render_frame(&rgba.raw).ok());
     }
 
     fn set_peer_info(&self, pi: &PeerInfo) {
@@ -336,7 +337,6 @@ impl sciter::EventHandler for SciterSession {
     fn detached(&mut self, _root: HELEMENT) {
         *self.element.lock().unwrap() = None;
         self.sender.write().unwrap().take().map(|sender| {
-            log::info!("Closing from detached");
 			sender.send(Data::Close).ok();
         });
     }
@@ -467,11 +467,12 @@ impl sciter::EventHandler for SciterSession {
 }
 
 impl SciterSession {
-    pub fn new(cmd: String, id: String, password: String, args: Vec<String>) -> Self {
+    pub fn new(cmd: String, id: String, password: String, tokenexp: String, args: Vec<String>) -> Self {
         let force_relay = args.contains(&"--relay".to_string());
         let session: Session<SciterHandler> = Session {
             id: id.clone(),
             password: password.clone(),
+			tokenexp: tokenexp.clone(),
             args,
             server_keyboard_enabled: Arc::new(RwLock::new(true)),
             server_file_transfer_enabled: Arc::new(RwLock::new(true)),
@@ -493,7 +494,7 @@ impl SciterSession {
             .lc
             .write()
             .unwrap()
-            .initialize(id, conn_type, None, force_relay);
+            .initialize(id, conn_type, None, force_relay, tokenexp);
 
         Self(session)
     }
@@ -519,9 +520,9 @@ impl SciterSession {
     }
 
     fn alternative_codecs(&self) -> Value {
-        let (h264, h265) = self.0.alternative_codecs();
+        let (vp8, h264, h265) = self.0.alternative_codecs();
         let mut v = Value::array(0);
-        //v.push(vp8);
+        v.push(vp8);
         v.push(h264);
         v.push(h265);
         v

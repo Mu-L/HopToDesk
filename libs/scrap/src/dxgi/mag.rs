@@ -127,18 +127,9 @@ impl MagInterface {
         };
         s.init_succeeded = false;
         unsafe {
-            if GetSystemMetrics(SM_CMONITORS) != 1 {
-                // Do not try to use the magnifier in multi-screen setup (where the API
-                // crashes sometimes).
-                return Err(Error::new(
-                    ErrorKind::Other,
-                    "Magnifier capturer cannot work on multi-screen system.",
-                ));
-            }
-
             // load lib
             let lib_file_name = "Magnification.dll";
-            let lib_file_name_c = CString::new(lib_file_name).unwrap();
+            let lib_file_name_c = CString::new(lib_file_name)?;
             s.lib_handle = LoadLibraryExA(
                 lib_file_name_c.as_ptr() as _,
                 NULL,
@@ -198,7 +189,7 @@ impl MagInterface {
     }
 
     unsafe fn load_func(lib_module: HMODULE, func_name: &str) -> Result<FARPROC> {
-        let func_name_c = CString::new(func_name).unwrap();
+        let func_name_c = CString::new(func_name)?;
         let func = GetProcAddress(lib_module, func_name_c.as_ptr() as _);
         if func.is_null() {
             return Err(Error::new(
@@ -282,10 +273,10 @@ impl CapturerMag {
             let y = GetSystemMetrics(SM_YVIRTUALSCREEN);
             let w = GetSystemMetrics(SM_CXVIRTUALSCREEN);
             let h = GetSystemMetrics(SM_CYVIRTUALSCREEN);
-            if !(origin.0 == x as i32
-                && origin.1 == y as i32
-                && width == w as usize
-                && height == h as usize)
+            if !(origin.0 >= x as i32
+                && origin.1 >= y as i32
+                && width <= w as usize
+                && height <= h as usize)
             {
                 return Err(Error::new(
                     ErrorKind::Other,
@@ -339,7 +330,7 @@ impl CapturerMag {
             }
 
             // Register the host window class. See the MSDN documentation of the
-            // Magnification API for more infomation.
+            // Magnification API for more information.
             let wcex = WNDCLASSEXA {
                 cbSize: size_of::<WNDCLASSEXA>() as _,
                 style: 0,
@@ -451,7 +442,7 @@ impl CapturerMag {
     }
 
     pub(crate) fn exclude(&mut self, cls: &str, name: &str) -> Result<bool> {
-        let name_c = CString::new(name).unwrap();
+        let name_c = CString::new(name)?;
         unsafe {
             let mut hwnd = if cls.len() == 0 {
                 FindWindowExA(NULL as _, NULL as _, NULL as _, name_c.as_ptr())
@@ -518,10 +509,10 @@ impl CapturerMag {
             let y = GetSystemMetrics(SM_YVIRTUALSCREEN);
             let w = GetSystemMetrics(SM_CXVIRTUALSCREEN);
             let h = GetSystemMetrics(SM_CYVIRTUALSCREEN);
-            if !(self.rect.left == x as i32
-                && self.rect.top == y as i32
-                && self.rect.right == (x + w) as i32
-                && self.rect.bottom == (y + h) as i32)
+            if !(self.rect.left >= x as i32
+                && self.rect.top >= y as i32
+                && self.rect.right <= (x + w) as i32
+                && self.rect.bottom <= (y + h) as i32)
             {
                 return Err(Error::new(
                     ErrorKind::Other,
@@ -545,8 +536,8 @@ impl CapturerMag {
                     HWND_TOP,
                     self.rect.left,
                     self.rect.top,
-                    self.rect.right,
-                    self.rect.bottom,
+                    self.rect.right - self.rect.left,
+                    self.rect.bottom - self.rect.top,
                     0,
                 )
             {
@@ -556,8 +547,8 @@ impl CapturerMag {
                         "Failed SetWindowPos (x, y, w , h) - ({}, {}, {}, {}), error {}",
                         self.rect.left,
                         self.rect.top,
-                        self.rect.right,
-                        self.rect.bottom,
+                        self.rect.right - self.rect.left,
+                        self.rect.bottom - self.rect.top,
                         GetLastError()
                     ),
                 ));

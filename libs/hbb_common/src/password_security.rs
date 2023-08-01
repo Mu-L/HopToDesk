@@ -6,7 +6,6 @@ use sodiumoxide::crypto::{box_, secretbox};
 use x25519_dalek::StaticSecret;
 
 lazy_static::lazy_static! {
-    pub static ref TEMPORARY_PASSWORD:Arc<RwLock<String>> = Arc::new(RwLock::new(Config::get_auto_password(temporary_password_length())));
 	pub static ref PASSWORD_NOT_REMEMBERED: Arc<RwLock<String>> = Arc::new(RwLock::new("".to_owned()));
 }
 
@@ -36,12 +35,12 @@ pub fn file_transfer_password() -> String {
 
 // Should only be called in server
 pub fn update_temporary_password() {
-    *TEMPORARY_PASSWORD.write().unwrap() = Config::get_auto_password(temporary_password_length());
+    Config::set_temporary_password(&Config::get_auto_password(temporary_password_length()));
 }
 
 // Should only be called in server
 pub fn temporary_password() -> String {
-    TEMPORARY_PASSWORD.read().unwrap().clone()
+    Config::get_temporary_password()
 }
 
 fn verification_method() -> VerificationMethod {
@@ -118,7 +117,7 @@ pub fn decrypt_str_or_original(s: &str, current_version: &str) -> (String, bool,
     if s.len() > VERSION_LEN {
         let version = &s[..VERSION_LEN];
         if version == "00" {
-            if let Ok(v) = decrypt(&s[VERSION_LEN..].as_bytes()) {
+            if let Ok(v) = decrypt(s[VERSION_LEN..].as_bytes()) {
                 return (
                     String::from_utf8_lossy(&v).to_string(),
                     true,
@@ -163,7 +162,7 @@ pub fn decrypt_vec_or_original(v: &[u8], current_version: &str) -> (Vec<u8>, boo
 }
 
 fn encrypt(v: &[u8]) -> Result<String, ()> {
-    if v.len() > 0 {
+    if !v.is_empty() {
         symmetric_crypt(v, true).map(|v| base64::encode(v, base64::Variant::Original))
     } else {
         Err(())
@@ -171,7 +170,7 @@ fn encrypt(v: &[u8]) -> Result<String, ()> {
 }
 
 fn decrypt(v: &[u8]) -> Result<Vec<u8>, ()> {
-    if v.len() > 0 {
+    if !v.is_empty() {
         base64::decode(v, base64::Variant::Original).and_then(|v| symmetric_crypt(&v, false))
     } else {
         Err(())
@@ -223,51 +222,51 @@ mod test {
         let data = "Hello World";
         let encrypted = encrypt_str_or_original(data, version);
         let (decrypted, succ, store) = decrypt_str_or_original(&encrypted, version);
-        println!("data: {}", data);
-        println!("encrypted: {}", encrypted);
-        println!("decrypted: {}", decrypted);
+        println!("data: {data}");
+        println!("encrypted: {encrypted}");
+        println!("decrypted: {decrypted}");
         assert_eq!(data, decrypted);
         assert_eq!(version, &encrypted[..2]);
-        assert_eq!(succ, true);
-        assert_eq!(store, false);
+        assert!(succ);
+        assert!(!store);
         let (_, _, store) = decrypt_str_or_original(&encrypted, "99");
-        assert_eq!(store, true);
-        assert_eq!(decrypt_str_or_original(&decrypted, version).1, false);
+        assert!(store);
+        assert!(!decrypt_str_or_original(&decrypted, version).1);
         assert_eq!(encrypt_str_or_original(&encrypted, version), encrypted);
 
         println!("test vec");
         let data: Vec<u8> = vec![1, 2, 3, 4, 5, 6];
         let encrypted = encrypt_vec_or_original(&data, version);
         let (decrypted, succ, store) = decrypt_vec_or_original(&encrypted, version);
-        println!("data: {:?}", data);
-        println!("encrypted: {:?}", encrypted);
-        println!("decrypted: {:?}", decrypted);
+        println!("data: {data:?}");
+        println!("encrypted: {encrypted:?}");
+        println!("decrypted: {decrypted:?}");
         assert_eq!(data, decrypted);
         assert_eq!(version.as_bytes(), &encrypted[..2]);
-        assert_eq!(store, false);
-        assert_eq!(succ, true);
+        assert!(!store);
+        assert!(succ);
         let (_, _, store) = decrypt_vec_or_original(&encrypted, "99");
-        assert_eq!(store, true);
-        assert_eq!(decrypt_vec_or_original(&decrypted, version).1, false);
+        assert!(store);
+        assert!(!decrypt_vec_or_original(&decrypted, version).1);
         assert_eq!(encrypt_vec_or_original(&encrypted, version), encrypted);
 
         println!("test original");
         let data = version.to_string() + "Hello World";
         let (decrypted, succ, store) = decrypt_str_or_original(&data, version);
         assert_eq!(data, decrypted);
-        assert_eq!(store, true);
-        assert_eq!(succ, false);
+        assert!(store);
+        assert!(!succ);
         let verbytes = version.as_bytes();
-        let data: Vec<u8> = vec![verbytes[0] as u8, verbytes[1] as u8, 1, 2, 3, 4, 5, 6];
+        let data: Vec<u8> = vec![verbytes[0], verbytes[1], 1, 2, 3, 4, 5, 6];
         let (decrypted, succ, store) = decrypt_vec_or_original(&data, version);
         assert_eq!(data, decrypted);
-        assert_eq!(store, true);
-        assert_eq!(succ, false);
+        assert!(store);
+        assert!(!succ);
         let (_, succ, store) = decrypt_str_or_original("", version);
-        assert_eq!(store, false);
-        assert_eq!(succ, false);
-        let (_, succ, store) = decrypt_vec_or_original(&vec![], version);
-        assert_eq!(store, false);
-        assert_eq!(succ, false);
+        assert!(!store);
+        assert!(!succ);
+        let (_, succ, store) = decrypt_vec_or_original(&[], version);
+        assert!(!store);
+        assert!(!succ);
     }
 }

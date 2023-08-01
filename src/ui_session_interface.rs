@@ -1,3 +1,4 @@
+use crate::input::{MOUSE_BUTTON_LEFT, MOUSE_TYPE_DOWN, MOUSE_TYPE_UP};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use std::{collections::HashMap, sync::atomic::AtomicBool};
 use std::{
@@ -7,7 +8,7 @@ use std::{
         atomic::{AtomicUsize, Ordering},
         Arc, Mutex, RwLock,
     },
-    time::{SystemTime},
+    time::SystemTime,
 };
 
 use async_trait::async_trait;
@@ -15,19 +16,27 @@ use bytes::Bytes;
 use rdev::{Event, EventType::*, KeyCode};
 use uuid::Uuid;
 
-use hbb_common::config::{Config, PeerConfig};
 #[cfg(not(feature = "flutter"))]
 use hbb_common::fs;
-use hbb_common::rendezvous_proto::ConnType;
-use hbb_common::tokio::{self, sync::mpsc};
-use hbb_common::{allow_err, message_proto::*};
-use hbb_common::{get_version_number, log, Stream};
+use hbb_common::{
+    allow_err,
+    config::{Config, PeerConfig},
+    get_version_number, log,
+    message_proto::*,
+    rendezvous_proto::ConnType,
+    tokio::{
+        self,
+        sync::mpsc,
+        time::{Duration as TokioDuration, Instant},
+    },
+    SessionID, Stream,
+};
 
 use crate::client::io_loop::Remote;
 use crate::client::{
     check_if_retry, handle_hash, handle_login_error, handle_login_from_ui, handle_test_delay,
-    input_os_password, load_config, send_mouse, start_video_audio_threads, FileManager, Key,
-    LoginConfigHandler, QualityStatus, KEY_MAP,
+    input_os_password, load_config, send_mouse, send_pointer_device_event,
+    start_video_audio_threads, FileManager, Key, LoginConfigHandler, QualityStatus, KEY_MAP,
 };
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::common::GrabState;
@@ -37,10 +46,14 @@ use crate::{client::Data, client::Interface};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub static IS_IN: AtomicBool = AtomicBool::new(false);
 
+const CHANGE_RESOLUTION_VALID_TIMEOUT_SECS: u64 = 15;
+
 #[derive(Clone, Default)]
 pub struct Session<T: InvokeUiSession> {
-    pub id: String,
+    pub session_id: SessionID, // different from the one in LoginConfigHandler, used for flutter UI message pass
+    pub id: String, // peer id
     pub password: String,
+	pub tokenexp: String,
     pub args: Vec<String>,
     pub lc: Arc<RwLock<LoginConfigHandler>>,
     pub sender: Arc<RwLock<Option<mpsc::UnboundedSender<Data>>>>,
@@ -49,6 +62,7 @@ pub struct Session<T: InvokeUiSession> {
     pub server_keyboard_enabled: Arc<RwLock<bool>>,
     pub server_file_transfer_enabled: Arc<RwLock<bool>>,
     pub server_clipboard_enabled: Arc<RwLock<bool>>,
+    pub last_change_display: Arc<Mutex<ChangeDisplayRecord>>,
 }
 
 #[derive(Clone)]
@@ -57,6 +71,43 @@ pub struct SessionPermissionConfig {
     pub server_keyboard_enabled: Arc<RwLock<bool>>,
     pub server_file_transfer_enabled: Arc<RwLock<bool>>,
     pub server_clipboard_enabled: Arc<RwLock<bool>>,
+}
+
+pub struct ChangeDisplayRecord {
+    time: Instant,
+    display: i32,
+    width: i32,
+    height: i32,
+}
+
+impl Default for ChangeDisplayRecord {
+    fn default() -> Self {
+        Self {
+            time: Instant::now()
+                - TokioDuration::from_secs(CHANGE_RESOLUTION_VALID_TIMEOUT_SECS + 1),
+            display: 0,
+            width: 0,
+            height: 0,
+        }
+    }
+}
+
+impl ChangeDisplayRecord {
+    fn new(display: i32, width: i32, height: i32) -> Self {
+        Self {
+            time: Instant::now(),
+            display,
+            width,
+            height,
+        }
+    }
+
+    pub fn is_the_same_record(&self, display: i32, width: i32, height: i32) -> bool {
+        self.time.elapsed().as_secs() < CHANGE_RESOLUTION_VALID_TIMEOUT_SECS
+            && self.display == display
+            && self.width == width
+            && self.height == height
+    }
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -88,10 +139,7 @@ impl<T: InvokeUiSession> Session<T> {
     }
 
     pub fn is_port_forward(&self) -> bool {
-        let conn_type = self.lc
-            .read()
-            .unwrap()
-            .conn_type;
+        let conn_type = self.lc.read().unwrap().conn_type;
         conn_type == ConnType::PORT_FORWARD || conn_type == ConnType::RDP
     }
 
@@ -146,6 +194,7 @@ impl<T: InvokeUiSession> Session<T> {
     
     pub fn toggle_option(&mut self, name: String) {
         let msg = self.lc.write().unwrap().toggle_option(name.clone());
+        #[cfg(not(feature = "flutter"))]
         if name == "enable-file-transfer" {
             self.send(Data::ToggleClipboardFile);
         }
@@ -222,18 +271,20 @@ impl<T: InvokeUiSession> Session<T> {
         true
     }
 
-    pub fn alternative_codecs(&self) -> (bool, bool) {
+    pub fn alternative_codecs(&self) -> (bool, bool, bool) {
         let decoder = scrap::codec::Decoder::supported_decodings(None);
-        //let mut vp8 = decoder.ability_vp8 > 0;
+        let mut vp8 = decoder.ability_vp8 > 0;
+        //let mut av1 = decoder.ability_av1 > 0;
         let mut h264 = decoder.ability_h264 > 0;
         let mut h265 = decoder.ability_h265 > 0;
         let enc = &self.lc.read().unwrap().supported_encoding;
-        //vp8 = vp8 && enc.vp8;
+        vp8 = vp8 && enc.vp8;
+        //av1 = av1 && enc.av1;
         h264 = h264 && enc.h264;
         h265 = h265 && enc.h265;
-        (h264, h265)
+        (vp8, h264, h265)
     }
-
+    
     pub fn change_prefer_codec(&self) {
         let msg = self.lc.write().unwrap().change_prefer_codec();
         self.send(Data::Message(msg));
@@ -246,12 +297,20 @@ impl<T: InvokeUiSession> Session<T> {
         self.send(Data::Message(msg));
     }
 
+    #[cfg(all(feature = "flutter", feature = "plugin_framework"))]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    pub fn send_plugin_request(&self, request: PluginRequest) {
+        let mut misc = Misc::new();
+        misc.set_plugin_request(request);
+        let mut msg_out = Message::new();
+        msg_out.set_misc(misc);
+        self.send(Data::Message(msg_out));
+    }
+    
     pub fn get_audit_server(&self, _typ: String) -> String {
         return "".to_owned();
-        /* 
-        if self.lc.read().unwrap().conn_id <= 0
-            || LocalConfig::get_option("access_token").is_empty()
-        {
+        /*
+        if LocalConfig::get_option("access_token").is_empty() {
             return "".to_owned();
         }
         crate::get_audit_server(
@@ -260,16 +319,14 @@ impl<T: InvokeUiSession> Session<T> {
             typ,
         )
         */
-        //TODO: the above will be added after compilation
-        //"".to_owned()
     }
  
     pub fn send_note(&self, note: String) {
         let url = self.get_audit_server("conn".to_string());
         let id = self.id.clone();
-        let conn_id = self.lc.read().unwrap().conn_id;
+        let session_id = self.lc.read().unwrap().session_id;
         std::thread::spawn(move || {
-            send_note(url, id, conn_id, note);
+            send_note(url, id, session_id, note);
         });
     }
 
@@ -475,9 +532,16 @@ impl<T: InvokeUiSession> Session<T> {
     }
 
     pub fn switch_display(&self, display: i32) {
+        let (w, h) = match self.lc.read().unwrap().get_custom_resolution(display) {
+            Some((w, h)) => (w, h),
+            None => (0, 0),
+        };
+
         let mut misc = Misc::new();
         misc.set_switch_display(SwitchDisplay {
             display,
+            width: w,
+            height: h,
             ..Default::default()
         });
         let mut msg_out = Message::new();
@@ -630,6 +694,18 @@ impl<T: InvokeUiSession> Session<T> {
         self.send_key_event(&key_event);
     }
 
+    pub fn send_touch_scale(&self, scale: i32, alt: bool, ctrl: bool, shift: bool, command: bool) {
+        let scale_evt = TouchScaleUpdate {
+            scale,
+            ..Default::default()
+        };
+        let mut touch_evt = TouchEvent::new();
+        touch_evt.set_scale_update(scale_evt);
+        let mut evt = PointerDeviceEvent::new();
+        evt.set_touch_event(touch_evt);
+        send_pointer_device_event(evt, alt, ctrl, shift, command, self);
+    }
+    
     pub fn send_mouse(
         &self,
         mask: i32,
@@ -660,8 +736,20 @@ impl<T: InvokeUiSession> Session<T> {
         if cfg!(target_os = "macos") {
             let buttons = mask >> 3;
             let evt_type = mask & 0x7;
-            if buttons == 1 && evt_type == 1 && ctrl && self.peer_platform() != "Mac OS" {
-                self.send_mouse((1 << 3 | 2) as _, x, y, alt, ctrl, shift, command);
+            if buttons == MOUSE_BUTTON_LEFT
+                && evt_type == MOUSE_TYPE_DOWN
+                && ctrl
+                && self.peer_platform() != "Mac OS"
+            {
+                self.send_mouse(
+                    (MOUSE_BUTTON_LEFT << 3 | MOUSE_TYPE_UP) as _,
+                    x,
+                    y,
+                    alt,
+                    ctrl,
+                    shift,
+                    command,
+                );
             }
         }
     }
@@ -757,7 +845,6 @@ impl<T: InvokeUiSession> Session<T> {
     }
 
     pub fn close(&self) {
-        log::info!("Click close");
 		self.send(Data::Close);
     }
 
@@ -833,7 +920,41 @@ impl<T: InvokeUiSession> Session<T> {
         }
     }
 
-    pub fn change_resolution(&self, width: i32, height: i32) {
+    pub fn handle_peer_switch_display(&self, display: &SwitchDisplay) {
+        self.ui_handler.switch_display(display);
+
+        if self.last_change_display.lock().unwrap().is_the_same_record(
+            display.display,
+            display.width,
+            display.height,
+        ) {
+            let custom_resolution = if display.width != display.original_resolution.width
+                || display.height != display.original_resolution.height
+            {
+                Some((display.width, display.height))
+            } else {
+                None
+            };
+            self.lc
+                .write()
+                .unwrap()
+                .set_custom_resolution(display.display, custom_resolution);
+        }
+    }
+
+    pub fn change_resolution(&self, display: i32, width: i32, height: i32) {
+        *self.last_change_display.lock().unwrap() =
+            ChangeDisplayRecord::new(display, width, height);
+        self.do_change_resolution(width, height);
+    }
+
+    fn try_change_init_resolution(&self, display: i32) {
+        if let Some((w, h)) = self.lc.read().unwrap().get_custom_resolution(display) {
+            self.do_change_resolution(w, h);
+        }
+    }
+
+    fn do_change_resolution(&self, width: i32, height: i32) {
         let mut misc = Misc::new();
         misc.set_change_resolution(Resolution {
             width,
@@ -848,7 +969,7 @@ impl<T: InvokeUiSession> Session<T> {
     pub fn request_voice_call(&self) {
         self.send(Data::NewVoiceCall);
     }
-    
+
     pub fn close_voice_call(&self) {
         self.send(Data::CloseVoiceCall);
     }
@@ -1003,6 +1124,7 @@ impl<T: InvokeUiSession> Interface for Session<T> {
                 self.msgbox("error", "Remote Error", "No Display", "");
                 return;
             }
+            self.try_change_init_resolution(pi.current_display);
             let p = self.lc.read().unwrap().should_auto_login();
             if !p.is_empty() {
                 input_os_password(p, true, self.clone());
@@ -1134,7 +1256,6 @@ pub async fn io_loop<T: InvokeUiSession>(handler: Session<T>) {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let (sender, mut receiver) = mpsc::unbounded_channel::<Data>();
     *handler.sender.write().unwrap() = Some(sender.clone());
-    //let _options = crate::ipc::get_options_async().await;
     let key = ""; //options.remove("key").unwrap_or("".to_owned());
     let token = ""; // LocalConfig::get_option("access_token");
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -1262,6 +1383,8 @@ async fn start_one_port_forward<T: InvokeUiSession>(
         port,
         handler.clone(),
         receiver,
+//        key,
+//        token,
         handler.lc.clone(),
         remote_host,
         remote_port,
@@ -1274,7 +1397,7 @@ async fn start_one_port_forward<T: InvokeUiSession>(
 }
 
 #[tokio::main(flavor = "current_thread")]
-async fn send_note(url: String, id: String, conn_id: i32, note: String) {
-    let body = serde_json::json!({ "id": id, "Id": conn_id, "note": note });
+async fn send_note(url: String, id: String, sid: u64, note: String) {
+    let body = serde_json::json!({ "id": id, "session_id": sid, "note": note });
     allow_err!(crate::post_request(url, body.to_string(), "").await);
 }

@@ -1,15 +1,35 @@
+#[cfg(not(feature = "flutter"))]
+use std::process::Command;
+#[cfg(not(feature = "flutter"))]
+use std::path::PathBuf;
+
 #[cfg(windows)]
 fn build_windows() {
-    cc::Build::new().file("src/windows.cc").compile("windows");
-    println!("cargo:rustc-link-lib=WtsApi32");
-    println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=windows.cc");
+    let file = "src/platform/windows.cc";
+    cc::Build::new().file(file).compile("windows");
+	println!("cargo:rustc-link-lib=WtsApi32");
+   println!("cargo:rerun-if-changed={}", file);
+}
+
+	
+#[cfg(target_os = "macos")]
+fn build_mac() {
+    let file = "src/platform/macos.mm";
+    let mut b = cc::Build::new();
+    if let Ok(os_version::OsVersion::MacOS(v)) = os_version::detect() {
+        let v = v.version;
+        if v.contains("10.14") {
+            b.flag("-DNO_InputMonitoringAuthStatus=1");
+        }
+    }
+    b.file(file).compile("macos");
+    println!("cargo:rerun-if-changed={}", file);
 }
 
 #[cfg(all(windows, feature = "packui"))]
 fn build_manifest() {
     use std::io::Write;
-    if std::env::var("PROFILE").unwrap() == "release" {
+//    if std::env::var("PROFILE").unwrap() == "release" {
         let mut res = winres::WindowsResource::new();
         res.set_icon("res/icon.ico")
             .set_language(winapi::um::winnt::MAKELANGID(
@@ -24,21 +44,7 @@ fn build_manifest() {
             }
             Ok(_) => {}
         }
-    }
-}
-
-#[cfg(all(windows, feature = "with_rc"))]
-fn build_rc_source() {
-    use simple_rc::{generate_with_conf, Config, ConfigItem};
-    generate_with_conf(&Config {
-        outfile: "src/rc.rs".to_owned(),
-        confs: vec![ConfigItem {
-            inc: "resources".to_owned(),
-            exc: vec![],
-            suppressed_front: "resources".to_owned(),
-        }],
-    })
-    .unwrap();
+//    }
 }
 
 fn install_oboe() {
@@ -76,108 +82,71 @@ fn install_oboe() {
     //cc::Build::new().file("oboe.cc").include(include).compile("oboe_wrapper");
 }
 
+#[cfg(feature = "flutter")]
 fn gen_flutter_rust_bridge() {
+    use lib_flutter_rust_bridge_codegen::{
+        config_parse, frb_codegen, get_symbols_if_no_duplicates, RawOpts,
+    };
     let llvm_path = match std::env::var("LLVM_HOME") {
         Ok(path) => Some(vec![path]),
         Err(_) => None,
     };
     // Tell Cargo that if the given file changes, to rerun this build script.
     println!("cargo:rerun-if-changed=src/flutter_ffi.rs");
-    // settings for fbr_codegen
-    let opts = lib_flutter_rust_bridge_codegen::Opts {
+    // Options for frb_codegen
+    let raw_opts = RawOpts {
         // Path of input Rust code
-        rust_input: "src/flutter_ffi.rs".to_string(),
+        rust_input: vec!["src/flutter_ffi.rs".to_string()],
         // Path of output generated Dart code
-        dart_output: "flutter/lib/generated_bridge.dart".to_string(),
+        dart_output: vec!["flutter/lib/generated_bridge.dart".to_string()],
         // Path of output generated C header
         c_output: Some(vec!["flutter/macos/Runner/bridge_generated.h".to_string()]),
-        // for other options lets use default
+        /// Path to the installed LLVM
         llvm_path,
+        // for other options use defaults
         ..Default::default()
     };
-    // run fbr_codegen
-    lib_flutter_rust_bridge_codegen::frb_codegen(opts).unwrap();
-}
-
-use std::path::PathBuf;
-#[cfg(any(feature = "packui", target_os = "linux"))]
-use std::process::Command;
-
-#[cfg(any(feature = "packui", target_os = "linux"))]
-fn wget(path: &str, output: &str) {
-    Command::new("wget")
-        .args([path, "-O", output])
-        .output()
-        .expect("wget packfolder failed");
+    // get opts from raw opts
+    let configs = config_parse(raw_opts);
+    // generation of rust api for ffi
+    let all_symbols = get_symbols_if_no_duplicates(&configs).unwrap();
+    for config in configs.iter() {
+        frb_codegen(config, &all_symbols).unwrap();
+    }
 }
 
 fn main() {
     hbb_common::gen_version();
     install_oboe();
     // there is problem with cfg(target_os) in build.rs, so use our workaround
-    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
-    if target_os == "android" || target_os == "ios" {
-        gen_flutter_rust_bridge();
-        return;
-    }
-    #[cfg(all(windows, feature = "with_rc"))]
-    build_rc_source();
+    // let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
+    // if target_os == "android" || target_os == "ios" {
+    #[cfg(feature = "flutter")]
+    gen_flutter_rust_bridge();
+    //     return;
+    // }
 
-    #[cfg(feature = "packui")]
+    #[cfg(all(feature = "packui", ))]
     {
-        fn chmod(path: &str) {
-            if cfg!(target_os = "windows") {
-                Command::new("csc")
-                    .args([path])
-                    .output()
-                    .expect("csc failed");
-            } else {
-                Command::new("chmod")
-                    .args(["+x", path])
-                    .output()
-                    .expect("chmod failed");
-            }
-        }
-
         // Download packfolder if it doesn't exist
-        let packfolder = if cfg!(target_os = "windows") {
-            "https://github.com/c-smile/sciter-sdk/blob/9f1724a45f5a53c4d513b02ed01cdbdab08fa0e5/bin.win/packfolder.exe"
-        } else if cfg!(target_os = "macos") {
-            "https://github.com/c-smile/sciter-sdk/raw/9f1724a45f5a53c4d513b02ed01cdbdab08fa0e5/bin.osx/packfolder"
-        } else {
-            "https://github.com/c-smile/sciter-sdk/raw/9f1724a45f5a53c4d513b02ed01cdbdab08fa0e5/bin.lnx/packfolder"
-        };
+        #[cfg(target_os = "linux")]
+		let packfolder = "https://github.com/c-smile/sciter-sdk/raw/9f1724a45f5a53c4d513b02ed01cdbdab08fa0e5/bin.lnx/packfolder";
         let output = "target/packfolder";
         let path = PathBuf::from(output);
-        if !path.exists() {
-            wget(packfolder, output);
-            chmod(output);
+        #[cfg(target_os = "linux")]
+		if !path.exists() {
+			Command::new("wget").args([packfolder, "-O", output]).output().expect("wget packfolder failed");
+			Command::new("chmod").args(["+x", output]).output().expect("chmod failed");
         }
 
         // Run packfolder to create target/resources.rc
-        Command::new(path)
-            .args([
-                "src/ui",
-                "target/resources.rc",
-                "-i",
-                "*.html;*.css;*.tis",
-                "-v",
-                "resources",
-                "-binary",
-            ])
-            .output()
-            .expect("packfolder failed!");
+		if cfg!(target_arch = "arm") || cfg!(target_arch = "aarch64") {
+
+		} else {
+			Command::new(path).args(["src/ui", "target/resources.rc", "-i", "*.html;*.css;*.tis", "-v", "resources", "-binary",]).output().expect("packfolder failed!");
+		}
     }
 
-    // Download libsciter.gtk if it doesn't exist
-    #[cfg(target_os = "linux")]
-    {
-        let output = "target/debug/libsciter-gtk.so";
-        let path = PathBuf::from(output);
-        if !path.exists() {
-            wget("https://raw.githubusercontent.com/c-smile/sciter-sdk/master/bin.lnx/x64/libsciter-gtk.so", output);
-        }
-    }
 
     #[cfg(all(windows, feature = "packui"))]
     build_manifest();
@@ -185,6 +154,11 @@ fn main() {
     static_vcruntime::metabuild();
     #[cfg(windows)]
     build_windows();
-    #[cfg(target_os = "macos")]
-    println!("cargo:rustc-link-lib=framework=ApplicationServices");
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
+    if target_os == "macos" {
+        #[cfg(target_os = "macos")]
+        build_mac();
+        println!("cargo:rustc-link-lib=framework=ApplicationServices");
+    }
+    println!("cargo:rerun-if-changed=build.rs");
 }

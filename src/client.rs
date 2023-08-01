@@ -34,7 +34,7 @@ use hbb_common::{
     allow_err,
     anyhow::{anyhow, Context},
     bail,
-    config::{Config, PeerConfig, PeerInfoSerde, CONNECT_TIMEOUT, RENDEZVOUS_TIMEOUT},
+    config::{Config, PeerConfig, PeerInfoSerde, Resolution, CONNECT_TIMEOUT, RENDEZVOUS_TIMEOUT},
     get_version_number, log,
     message_proto::{option_message::BoolOption, *},
     protobuf::Message as _,
@@ -46,7 +46,6 @@ use hbb_common::{
     timeout,
     tokio::time::Duration,
     tokio::{self, net::TcpStream},
-    //tokio_util::compat::{Compat, TokioAsyncReadCompatExt},
     //AddrMangle, 
     ResultType, Stream,
 };
@@ -57,13 +56,13 @@ use scrap::{
     ImageFormat, ImageRgb,
 };
 
-use crate::common::{self, is_keyboard_mode_supported};
+use crate::is_keyboard_mode_supported;
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-use crate::common::{check_clipboard, ClipboardContext, CLIPBOARD_INTERVAL};
 #[cfg(not(feature = "flutter"))]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::ui_session_interface::SessionPermissionConfig;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use crate::{check_clipboard, ClipboardContext, CLIPBOARD_INTERVAL};
 
 pub use super::lang::*;
 
@@ -75,7 +74,9 @@ pub const MILLI1: Duration = Duration::from_millis(1);
 pub const SEC30: Duration = Duration::from_secs(30);
 pub const VIDEO_QUEUE_SIZE: usize = 120;
 
-//pub const LOGIN_MSG_DESKTOP_NOT_INITED: &str = "Desktop env is not inited";
+#[cfg(all(target_os = "linux", feature = "linux_headless"))]
+#[cfg(not(any(feature = "flatpak", feature = "appimage")))]
+pub const LOGIN_MSG_DESKTOP_NOT_INITED: &str = "Desktop env is not inited";
 pub const LOGIN_MSG_DESKTOP_SESSION_NOT_READY: &str = "Desktop session not ready";
 pub const LOGIN_MSG_DESKTOP_XSESSION_FAILED: &str = "Desktop xsession failed";
 pub const LOGIN_MSG_DESKTOP_SESSION_ANOTHER_USER: &str = "Desktop session another user login";
@@ -89,7 +90,7 @@ pub const LOGIN_MSG_DESKTOP_SESSION_NOT_READY_PASSWORD_WRONG: &str =
 pub const LOGIN_MSG_PASSWORD_EMPTY: &str = "Empty Password";
 pub const LOGIN_MSG_PASSWORD_WRONG: &str = "Wrong Password";
 pub const LOGIN_MSG_NO_PASSWORD_ACCESS: &str = "No Password Access";
-//pub const LOGIN_MSG_OFFLINE: &str = "Offline";
+pub const LOGIN_MSG_OFFLINE: &str = "Offline";
 #[cfg(target_os = "linux")]
 pub const SCRAP_UBUNTU_HIGHER_REQUIRED: &str = "Wayland requires Ubuntu 21.04 or higher version.";
 #[cfg(target_os = "linux")]
@@ -97,6 +98,17 @@ pub const SCRAP_OTHER_VERSION_OR_X11_REQUIRED: &str =
     "Wayland requires higher version of linux distro. Please try X11 desktop or change your OS.";
 pub const SCRAP_X11_REQUIRED: &str = "x11 expected";
 pub const SCRAP_X11_REF_URL: &str = "";
+
+#[cfg(feature = "flutter")]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub(crate) struct ClientClipboardContext;
+
+#[cfg(not(feature = "flutter"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub(crate) struct ClientClipboardContext {
+    pub cfg: SessionPermissionConfig,
+    pub tx: UnboundedSender<Data>,
+}
 
 /// Client of the remote desktop.
 pub struct Client;
@@ -310,6 +322,8 @@ impl Client {
     /// Start a new connection.
     async fn _start(
         peer_id: &str,
+//        key: &str,
+//        token: &str,
         conn_type: ConnType,
     ) -> ResultType<(
         Stream,
@@ -655,14 +669,19 @@ impl Client {
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    fn try_stop_clipboard(_self_id: &str) {
+    fn try_stop_clipboard(_self_uuid: &uuid::Uuid) {
         #[cfg(feature = "flutter")]
-        if crate::flutter::other_sessions_running(_self_id) {
+        if crate::flutter::other_sessions_running(_self_uuid) {
             return;
         }
         TEXT_CLIPBOARD_STATE.lock().unwrap().running = false;
     }
 
+    // `try_start_clipboard` is called by all session when connection is established. (When handling peer info).
+    // This function only create one thread with a loop, the loop is shared by all sessions.
+    // After all sessions are end, the loop exists.
+    //
+    // If clipboard update is detected, the text will be sent to all sessions by `send_text_clipboard_msg`.
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     fn try_start_clipboard(_ctx: Option<ClientClipboardContext>) {
         let mut clipboard_lock = TEXT_CLIPBOARD_STATE.lock().unwrap();
@@ -743,6 +762,7 @@ pub struct AudioHandler {
     #[cfg(not(any(target_os = "android", target_os = "linux")))]
     audio_stream: Option<Box<dyn StreamTrait>>,
     channels: u16,
+    #[cfg(not(any(target_os = "android", target_os = "linux")))]
     device_channel: u16,
     #[cfg(not(any(target_os = "android", target_os = "linux")))]
     ready: Arc<std::sync::Mutex<bool>>,
@@ -927,6 +947,7 @@ impl AudioHandler {
         config: &StreamConfig,
         device: &Device,
     ) -> ResultType<()> {
+        self.device_channel = config.channels;
         let err_fn = move |err| {
             // too many errors, will improve later
             log::trace!("an error occurred on stream: {}", err);
@@ -1038,13 +1059,13 @@ pub struct LoginConfigHandler {
     pub conn_type: ConnType,
     hash: Hash,
     password: Vec<u8>, // remember password for reconnect
-    pub remember: bool,
+    tokenex: String,
+	pub remember: bool,
     config: PeerConfig,
     pub port_forward: (String, i32),
     pub version: i64,
-    pub conn_id: i32,
     features: Option<Features>,
-    session_id: u64,
+    pub session_id: u64, // used for local <-> server communication
     pub supported_encoding: SupportedEncoding,
     pub restarting_remote_device: bool,
     pub force_relay: bool,
@@ -1084,9 +1105,11 @@ impl LoginConfigHandler {
         conn_type: ConnType,
         switch_uuid: Option<String>,
         force_relay: bool,
+		tokenex: String,
     ) {
         self.id = id;
         self.conn_type = conn_type;
+		self.tokenex = tokenex;
         let config = self.load_config();
         self.remember = !config.password.is_empty();
         self.config = config;
@@ -1333,7 +1356,9 @@ impl LoginConfigHandler {
     ///
     /// * `ignore_default` - If `true`, ignore the default value of the option.
     fn get_option_message(&self, ignore_default: bool) -> Option<OptionMessage> {
-        if self.conn_type.eq(&ConnType::FILE_TRANSFER) || self.conn_type.eq(&ConnType::PORT_FORWARD)
+        if self.conn_type.eq(&ConnType::FILE_TRANSFER)
+            || self.conn_type.eq(&ConnType::PORT_FORWARD)
+            || self.conn_type.eq(&ConnType::RDP)
         {
             return None;
         }
@@ -1394,7 +1419,9 @@ impl LoginConfigHandler {
     }
 
     pub fn get_option_message_after_login(&self) -> Option<OptionMessage> {
-        if self.conn_type.eq(&ConnType::FILE_TRANSFER) || self.conn_type.eq(&ConnType::PORT_FORWARD)
+        if self.conn_type.eq(&ConnType::FILE_TRANSFER)
+            || self.conn_type.eq(&ConnType::PORT_FORWARD)
+            || self.conn_type.eq(&ConnType::RDP)
         {
             return None;
         }
@@ -1552,6 +1579,31 @@ impl LoginConfigHandler {
         }
     }
 
+    #[inline]
+    pub fn get_custom_resolution(&self, display: i32) -> Option<(i32, i32)> {
+        self.config
+            .custom_resolutions
+            .get(&display.to_string())
+            .map(|r| (r.w, r.h))
+    }
+
+    #[inline]
+    pub fn set_custom_resolution(&mut self, display: i32, wh: Option<(i32, i32)>) {
+        let display = display.to_string();
+        let mut config = self.load_config();
+        match wh {
+            Some((w, h)) => {
+                config
+                    .custom_resolutions
+                    .insert(display, Resolution { w, h });
+            }
+            None => {
+                config.custom_resolutions.remove(&display);
+            }
+        }
+        self.save_config(config);
+    }
+    
     pub fn handle_login_error(&mut self, err: &str, interface: &impl Interface) -> bool {
         if err == "Wrong Password" {
             self.password = Default::default();
@@ -1619,6 +1671,7 @@ impl LoginConfigHandler {
         config.info = serde;
         let password = self.password.clone();
         let password0 = config.password.clone();
+		
         let remember = self.remember;
         if remember {
             if !password.is_empty() && password != password0 {
@@ -1639,13 +1692,13 @@ impl LoginConfigHandler {
             }
         } else {
             let keyboard_modes =
-                common::get_supported_keyboard_modes(get_version_number(&pi.version));
+                crate::get_supported_keyboard_modes(get_version_number(&pi.version));
             let current_mode = &KeyboardMode::from_str(&config.keyboard_mode).unwrap_or_default();
             if !keyboard_modes.contains(current_mode) {
                 config.keyboard_mode = KeyboardMode::Legacy.to_string();
             }
         }
-        self.conn_id = pi.conn_id;
+        //self.conn_id = pi.conn_id;
         // no matter if change, for update file time
         self.save_config(config);
 		self.supported_encoding = pi.encoding.clone().unwrap_or_default();
@@ -1682,9 +1735,22 @@ impl LoginConfigHandler {
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         let my_id = Config::get_id();
 		let avatar = Config::get_option("avatar");
+		//let mut tokenex = "NOTOKEN".to_string();
+
+		#[cfg(not(any(target_os = "android", target_os = "ios")))]
+        let tokenex = std::fs::read_to_string(Config::path("LastToken.toml")).unwrap_or_else(|err| {
+                eprintln!("Error reading file: {}", err);
+                String::new()
+            });
+
+		#[cfg(any(target_os = "android", target_os = "ios"))]
+		let tokenex = "".to_string();
+		
+		
         let mut lr = LoginRequest {
             username: self.id.clone(),
             password: password.into(),
+			tokenex: tokenex,
             my_id,
             my_name: crate::username(),
             option: self.get_option_message(true).into(),
@@ -1699,14 +1765,13 @@ impl LoginConfigHandler {
 			avatar_image: avatar,
             ..Default::default()
         };
-        
 		match self.conn_type {
             ConnType::FILE_TRANSFER => lr.set_file_transfer(FileTransfer {
                 dir: self.get_remote_dir(),
                 show_hidden: !self.get_option("remote_show_hidden").is_empty(),
                 ..Default::default()
             }),
-            ConnType::PORT_FORWARD => lr.set_port_forward(PortForward {
+            ConnType::PORT_FORWARD | ConnType::RDP => lr.set_port_forward(PortForward {
                 host: self.port_forward.0.clone(),
                 port: self.port_forward.1,
                 ..Default::default()
@@ -1740,18 +1805,19 @@ impl LoginConfigHandler {
     }
     /*
 
-        pub fn set_force_relay(&mut self, direct: bool, received: bool) {
-            self.force_relay = false;
-            if direct && !received {
-                let errno = errno::errno().0;
-                log::info!("errno is {}", errno);
-                // TODO: check mac and ios
-                if cfg!(windows) && errno == 10054 || !cfg!(windows) && errno == 104 {
-                    self.force_relay = true;
-                    self.set_option("force-always-relay".to_owned(), "Y".to_owned());
-                }
+    pub fn set_force_relay(&mut self, direct: bool, received: bool, err: String) {
+        self.force_relay = false;
+        if direct && !received {
+            let errno = errno::errno().0;
+            // TODO: check mac and ios
+            if cfg!(windows) && (errno == 10054 || err.contains("10054"))
+                || !cfg!(windows) && (errno == 104 || err.contains("104"))
+            {
+                self.force_relay = true;
+                self.set_option("force-always-relay".to_owned(), "Y".to_owned());
             }
         }
+    }
     */
 }
 
@@ -1894,13 +1960,13 @@ pub async fn handle_test_delay(t: TestDelay, peer: &mut Stream) {
 
 /// Whether is track pad scrolling.
 #[inline]
-#[cfg(all(target_os = "macos"))]
+#[cfg(all(target_os = "macos", not(feature = "flutter")))]
 fn check_scroll_on_mac(mask: i32, x: i32, y: i32) -> bool {
     // flutter version we set mask type bit to 4 when track pad scrolling.
-    if mask & 7 == 4 {
+    if mask & 7 == crate::input::MOUSE_TYPE_TRACKPAD {
         return true;
     }
-    if mask & 3 != 3 {
+    if mask & 3 != crate::input::MOUSE_TYPE_WHEEL {
         return false;
     }
     let btn = mask >> 3;
@@ -1961,16 +2027,46 @@ pub fn send_mouse(
     if command {
         mouse_event.modifiers.push(ControlKey::Meta.into());
     }
-    #[cfg(all(target_os = "macos"))]
+    #[cfg(all(target_os = "macos", not(feature = "flutter")))]
     if check_scroll_on_mac(mask, x, y) {
-        mouse_event.modifiers.push(ControlKey::Scroll.into());
+        let factor = 3;
+        mouse_event.mask = crate::input::MOUSE_TYPE_TRACKPAD;
+        mouse_event.x *= factor;
+        mouse_event.y *= factor;
     }
     interface.swap_modifier_mouse(&mut mouse_event);
     msg_out.set_mouse_event(mouse_event);
     interface.send(Data::Message(msg_out));
 }
 
-/// Avtivate OS by sending mouse movement.
+#[inline]
+pub fn send_pointer_device_event(
+    mut evt: PointerDeviceEvent,
+    alt: bool,
+    ctrl: bool,
+    shift: bool,
+    command: bool,
+    interface: &impl Interface,
+) {
+    let mut msg_out = Message::new();
+    if alt {
+        evt.modifiers.push(ControlKey::Alt.into());
+    }
+    if shift {
+        evt.modifiers.push(ControlKey::Shift.into());
+    }
+    if ctrl {
+        evt.modifiers.push(ControlKey::Control.into());
+    }
+    if command {
+        evt.modifiers.push(ControlKey::Meta.into());
+    }
+    msg_out.set_pointer_device_event(evt);
+    interface.send(Data::Message(msg_out));
+}
+
+
+/// Activate OS by sending mouse movement.
 ///
 /// # Arguments
 ///
@@ -2306,6 +2402,7 @@ pub trait Interface: Send + Clone + 'static + Sized {
 #[derive(Clone)]
 pub enum Data {
     Close,
+    CloseID(String),
     Login((String, String, String, bool)),
     Message(Message),
     SendFiles((i32, String, String, i32, bool, bool)),
@@ -2318,6 +2415,7 @@ pub enum Data {
     CancelJob(i32),
     RemovePortForward(i32),
     AddPortForward((i32, String, i32)),
+    #[cfg(not(feature = "flutter"))]
     ToggleClipboardFile,
     NewRDP,
     SetConfirmOverrideFile((i32, i32, bool, bool, bool)),
@@ -2472,8 +2570,7 @@ lazy_static::lazy_static! {
 pub fn check_if_retry(msgtype: &str, title: &str, text: &str) -> bool {
     msgtype == "error"
         && title == "Connection Error"
-        && (text.contains("10054")
-            || text.contains("104")
+        && (text.contains("10054") || text.contains("104")
             || (!text.to_lowercase().contains("offline")
                 && !text.to_lowercase().contains("exist")
                 && !text.to_lowercase().contains("handshake")
@@ -2518,13 +2615,4 @@ fn decode_id_pk(signed: &[u8], key: &sign::PublicKey) -> ResultType<(String, [u8
     }
 }
 
-#[cfg(feature = "flutter")]
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub(crate) struct ClientClipboardContext;
 
-#[cfg(not(feature = "flutter"))]
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub(crate) struct ClientClipboardContext {
-    pub cfg: SessionPermissionConfig,
-    pub tx: UnboundedSender<Data>,
-}

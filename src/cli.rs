@@ -83,8 +83,23 @@ impl Interface for Session {
         handle_hash(self.lc.clone(), &pass, hash, self, peer).await;
     }
 
-    async fn handle_login_from_ui(&mut self, os_username: String, os_password: String, password: String, remember: bool, peer: &mut Stream) {
-        handle_login_from_ui(self.lc.clone(), os_username, os_password, password, remember, peer).await;
+    async fn handle_login_from_ui(
+        &mut self,
+        os_username: String,
+        os_password: String,
+        password: String,
+        remember: bool,
+        peer: &mut Stream,
+    ) {
+        handle_login_from_ui(
+            self.lc.clone(),
+            os_username,
+            os_password,
+            password,
+            remember,
+            peer,
+        )
+        .await;
     }
 
     async fn handle_test_delay(&mut self, t: TestDelay, peer: &mut Stream) {
@@ -115,13 +130,14 @@ pub async fn connect_test(id: &str, key: String, token: String) {
                             break;
                         }
                         Ok(Some(Ok(bytes))) => {
-                            let msg_in = Message::parse_from_bytes(&bytes).unwrap();
-                            match msg_in.union {
-                                Some(message::Union::Hash(hash)) => {
-                                    log::info!("Got hash");
-                                    break;
+                            if let Ok(msg_in) = Message::parse_from_bytes(&bytes) {
+                                match msg_in.union {
+                                    Some(message::Union::Hash(hash)) => {
+                                        log::info!("Got hash");
+                                        break;
+                                    }
+                                    _ => {}
                                 }
-                                _ => {}
                             }
                         }
                         _ => {}
@@ -139,6 +155,8 @@ pub async fn start_one_port_forward(
     port: i32,
     remote_host: String,
     remote_port: i32,
+//    key: String,
+//    token: String,
 ) {
 	crate::common::test_rendezvous_server();
     crate::common::test_nat_type();
@@ -150,6 +168,8 @@ pub async fn start_one_port_forward(
         port,
         handler.clone(),
         receiver,
+//        &key,
+//        &token,
         handler.lc.clone(),
         remote_host,
         remote_port,

@@ -19,11 +19,18 @@
 // https://slhck.info/video/2017/03/01/rate-control.html
 
 use super::{video_qos::VideoQoS, *};
+#[cfg(all(windows, feature = "virtual_display_driver"))]
+use crate::virtual_display_manager;
+#[cfg(windows)]
+use crate::{platform::windows::is_process_consent_running, privacy_win_mag};
 #[cfg(windows)]
 use hbb_common::get_version_number;
-use hbb_common::tokio::sync::{
+use hbb_common::{
+    protobuf::MessageField,
+    tokio::sync::{
     mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
     Mutex as TokioMutex,
+    },
 };
 #[cfg(not(windows))]
 use scrap::Capturer;
@@ -41,14 +48,6 @@ use std::{
     ops::{Deref, DerefMut},
     time::{self, Duration, Instant},
 };
-#[cfg(windows)]
-use virtual_display;
-
-pub const SCRAP_UBUNTU_HIGHER_REQUIRED: &str = "Wayland requires Ubuntu 21.04 or higher version.";
-pub const SCRAP_OTHER_VERSION_OR_X11_REQUIRED: &str =
-    "Wayland requires higher version of linux distro. Please try X11 desktop or change your OS.";
-pub const SCRAP_X11_REQUIRED: &str = "x11 expected";
-pub const SCRAP_X11_REF_URL: &str = "";
 
 pub const NAME: &'static str = "video";
 
@@ -66,8 +65,70 @@ lazy_static::lazy_static! {
     pub static ref IS_UAC_RUNNING: Arc<Mutex<bool>> = Default::default();
     pub static ref IS_FOREGROUND_WINDOW_ELEVATED: Arc<Mutex<bool>> = Default::default();
     pub static ref LAST_SYNC_DISPLAYS: Arc<RwLock<Vec<DisplayInfo>>> = Default::default();
+    static ref ORIGINAL_RESOLUTIONS: Arc<RwLock<HashMap<String, (i32, i32)>>> = Default::default();
 }
 
+// Not virtual display
+#[inline]
+fn set_original_resolution_(display_name: &str, wh: (i32, i32)) -> (i32, i32) {
+    let mut original_resolutions = ORIGINAL_RESOLUTIONS.write().unwrap();
+    match original_resolutions.get(display_name) {
+        Some(r) => r.clone(),
+        None => {
+            original_resolutions.insert(display_name.to_owned(), wh.clone());
+            wh
+        }
+    }
+}
+
+// Not virtual display
+#[inline]
+fn get_original_resolution_(display_name: &str) -> Option<(i32, i32)> {
+    ORIGINAL_RESOLUTIONS
+        .read()
+        .unwrap()
+        .get(display_name)
+        .map(|r| r.clone())
+}
+
+// Not virtual display
+#[inline]
+fn get_or_set_original_resolution_(display_name: &str, wh: (i32, i32)) -> (i32, i32) {
+    let r = get_original_resolution_(display_name);
+    if let Some(r) = r {
+        return r;
+    }
+    set_original_resolution_(display_name, wh)
+}
+
+// Not virtual display
+#[inline]
+fn update_get_original_resolution_(display_name: &str, w: usize, h: usize) -> Resolution {
+    let wh = get_or_set_original_resolution_(display_name, (w as _, h as _));
+    Resolution {
+        width: wh.0,
+        height: wh.1,
+        ..Default::default()
+    }
+}
+
+#[inline]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub fn reset_resolutions() {
+    for (name, (w, h)) in ORIGINAL_RESOLUTIONS.read().unwrap().iter() {
+        if let Err(e) = crate::platform::change_resolution(name, *w as _, *h as _) {
+            log::error!(
+                "Failed to reset resolution of display '{}' to ({},{}): {}",
+                name,
+                w,
+                h,
+                e
+            );
+        }
+    }
+}
+
+#[inline]
 fn is_capturer_mag_supported() -> bool {
     #[cfg(windows)]
     return scrap::CapturerMag::is_supported();
@@ -75,26 +136,31 @@ fn is_capturer_mag_supported() -> bool {
     false
 }
 
+#[inline]
 pub fn capture_cursor_embedded() -> bool {
     scrap::is_cursor_embedded()
 }
 
+#[inline]
 pub fn notify_video_frame_fetched(conn_id: i32, frame_tm: Option<Instant>) {
-    FRAME_FETCHED_NOTIFIER.0.send((conn_id, frame_tm)).unwrap()
+    FRAME_FETCHED_NOTIFIER.0.send((conn_id, frame_tm)).ok();
 }
 
+#[inline]
 pub fn set_privacy_mode_conn_id(conn_id: i32) {
     *PRIVACY_MODE_CONN_ID.lock().unwrap() = conn_id
 }
 
+#[inline]
 pub fn get_privacy_mode_conn_id() -> i32 {
     *PRIVACY_MODE_CONN_ID.lock().unwrap()
 }
 
+#[inline]
 pub fn is_privacy_mode_supported() -> bool {
     #[cfg(windows)]
     return *IS_CAPTURER_MAGNIFIER_SUPPORTED
-        && get_version_number(&crate::VERSION) > get_version_number("1.1.9");
+        && get_version_number(&crate::VERSION) > get_version_number("1.40.4");
     #[cfg(not(windows))]
     return false;
 }
@@ -208,8 +274,6 @@ fn create_capturer(
     if privacy_mode_id > 0 {
         #[cfg(windows)]
         {
-            use crate::win_privacy::*;
-
             match scrap::CapturerMag::new(
                 display.origin(),
                 display.width(),
@@ -220,7 +284,7 @@ fn create_capturer(
                     let mut ok = false;
                     let check_begin = Instant::now();
                     while check_begin.elapsed().as_secs() < 5 {
-                        match c1.exclude("", PRIVACY_WINDOW_NAME) {
+                        match c1.exclude("", privacy_win_mag::PRIVACY_WINDOW_NAME) {
                             Ok(false) => {
                                 ok = false;
                                 std::thread::sleep(std::time::Duration::from_millis(500));
@@ -229,7 +293,7 @@ fn create_capturer(
                                 bail!(
                                     "Failed to exclude privacy window {} - {}, err: {}",
                                     "",
-                                    PRIVACY_WINDOW_NAME,
+                                    privacy_win_mag::PRIVACY_WINDOW_NAME,
                                     e
                                 );
                             }
@@ -243,7 +307,7 @@ fn create_capturer(
                         bail!(
                             "Failed to exclude privacy window {} - {} ",
                             "",
-                            PRIVACY_WINDOW_NAME
+                            privacy_win_mag::PRIVACY_WINDOW_NAME
                         );
                     }
                     log::debug!("Create magnifier capture for {}", privacy_mode_id);
@@ -275,22 +339,6 @@ fn create_capturer(
     };
 }
 
-#[cfg(windows)]
-fn ensure_close_virtual_device() -> ResultType<()> {
-    let num_displays = Display::all()?.len();
-    if num_displays == 0 {
-        // Device may sometimes be uninstalled by user in "Device Manager" Window.
-        // Closing device will clear the instance data.
-        virtual_display::close_device();
-    } else if num_displays > 1 {
-        // Try close device, if display device changed.
-        if virtual_display::is_device_created() {
-            virtual_display::close_device();
-        }
-    }
-    Ok(())
-}
-
 // This function works on privacy mode. Windows only for now.
 pub fn test_create_capturer(privacy_mode_id: i32, timeout_millis: u64) -> bool {
     let test_begin = Instant::now();
@@ -309,11 +357,11 @@ pub fn test_create_capturer(privacy_mode_id: i32, timeout_millis: u64) -> bool {
 fn check_uac_switch(privacy_mode_id: i32, capturer_privacy_mode_id: i32) -> ResultType<()> {
     if capturer_privacy_mode_id != 0 {
         if privacy_mode_id != capturer_privacy_mode_id {
-            if !crate::win_privacy::is_process_consent_running()? {
+            if !is_process_consent_running()? {
                 bail!("consent.exe is running");
             }
         }
-        if crate::win_privacy::is_process_consent_running()? {
+        if is_process_consent_running()? {
             bail!("consent.exe is running");
         }
     }
@@ -374,7 +422,7 @@ fn get_capturer(use_yuv: bool, portable_service_running: bool) -> ResultType<Cap
     let mut capturer_privacy_mode_id = privacy_mode_id;
     #[cfg(windows)]
     if capturer_privacy_mode_id != 0 {
-        if crate::win_privacy::is_process_consent_running()? {
+        if is_process_consent_running()? {
             capturer_privacy_mode_id = 0;
         }
     }
@@ -435,7 +483,6 @@ fn check_get_displays_changed_msg() -> Option<Message> {
     let displays = check_displays_new()?;
     let (current, displays) = get_displays_2(&displays);
     let mut pi = PeerInfo {
-        conn_id: crate::SYNC_PEER_INFO_DISPLAYS,
         ..Default::default()
     };
     pi.displays = displays.clone();
@@ -446,9 +493,14 @@ fn check_get_displays_changed_msg() -> Option<Message> {
     Some(msg_out)
 }
 
+#[cfg(all(windows, feature = "virtual_display_driver"))]
+pub fn try_plug_out_virtual_display() {
+    let _res = virtual_display_manager::plug_out_headless();
+}
+
 fn run(sp: GenericService) -> ResultType<()> {
-    #[cfg(windows)]
-    ensure_close_virtual_device()?;
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let _wake_lock = get_wake_lock();
 
     // ensure_inited() is needed because release_resource() may be called.
     #[cfg(target_os = "linux")]
@@ -461,12 +513,12 @@ fn run(sp: GenericService) -> ResultType<()> {
     let mut c = get_capturer(true, last_portable_service_running)?;
 
     let mut video_qos = VIDEO_QOS.lock().unwrap();
-    video_qos.set_size(c.width as _, c.height as _);
-    let mut spf = video_qos.spf();
-    let bitrate = video_qos.generate_bitrate()?;
-    let abr = video_qos.check_abr_config();
+    video_qos.refresh(None);
+    let mut spf;
+    let mut quality = video_qos.quality();
+    let abr = VideoQoS::abr_enabled();
     drop(video_qos);
-    log::info!("init bitrate={}, abr enabled:{}", bitrate, abr);
+    log::info!("init quality={:?}, abr enabled:{}", quality, abr);
 
     let encoder_cfg = match Encoder::negotiated_codec() {
         scrap::CodecName::H264(name) | scrap::CodecName::H265(name) => {
@@ -474,7 +526,7 @@ fn run(sp: GenericService) -> ResultType<()> {
                 name,
                 width: c.width,
                 height: c.height,
-                bitrate: bitrate as _,
+                quality,
             })
         }
         name @ (scrap::CodecName::VP8 | scrap::CodecName::VP9) => {
@@ -482,13 +534,12 @@ fn run(sp: GenericService) -> ResultType<()> {
                 width: c.width as _,
                 height: c.height as _,
                 timebase: [1, 1000], // Output timestamp precision
-                bitrate,
+                quality,
                 codec: if name == scrap::CodecName::VP8 {
                     VpxVideoCodecId::VP8
                 } else {
                     VpxVideoCodecId::VP9
                 },
-                num_threads: (num_cpus::get() / 2) as _,
             })
         }
     };
@@ -499,10 +550,13 @@ fn run(sp: GenericService) -> ResultType<()> {
         Err(err) => bail!("Failed to create encoder: {}", err),
     }
     c.set_use_yuv(encoder.use_yuv());
+    VIDEO_QOS.lock().unwrap().store_bitrate(encoder.bitrate());
 
     if *SWITCH.lock().unwrap() {
         log::debug!("Broadcasting display switch");
         let mut misc = Misc::new();
+        let display_name = get_current_display_name().unwrap_or_default();
+        let original_resolution = get_original_resolution(&display_name, c.width, c.height);
         misc.set_switch_display(SwitchDisplay {
             display: c.current as _,
             x: c.origin.0 as _,
@@ -512,12 +566,15 @@ fn run(sp: GenericService) -> ResultType<()> {
             cursor_embedded: capture_cursor_embedded(),
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             resolutions: Some(SupportedResolutions {
-                resolutions: get_current_display_name()
-                    .map(|name| crate::platform::resolutions(&name))
-                    .unwrap_or(vec![]),
+                resolutions: if display_name.is_empty() {
+                    vec![]
+                } else {
+                    crate::platform::resolutions(&display_name)
+                },
                 ..SupportedResolutions::default()
             })
             .into(),
+            original_resolution,
             ..Default::default()
         });
         let mut msg_out = Message::new();
@@ -547,14 +604,12 @@ fn run(sp: GenericService) -> ResultType<()> {
         check_uac_switch(c.privacy_mode_id, c._capturer_privacy_mode_id)?;
 
         let mut video_qos = VIDEO_QOS.lock().unwrap();
-        if video_qos.check_if_updated() && video_qos.target_bitrate > 0 {
-            log::debug!(
-                "qos is updated, target_bitrate:{}, fps:{}",
-                video_qos.target_bitrate,
-                video_qos.fps
-            );
-            allow_err!(encoder.set_bitrate(video_qos.target_bitrate));
-            spf = video_qos.spf();
+        spf = video_qos.spf();
+        if quality != video_qos.quality() {
+            log::debug!("quality: {:?} -> {:?}", quality, video_qos.quality());
+            quality = video_qos.quality();
+            allow_err!(encoder.set_quality(quality));
+            video_qos.store_bitrate(encoder.bitrate());
         }
         drop(video_qos);
 
@@ -562,6 +617,8 @@ fn run(sp: GenericService) -> ResultType<()> {
             bail!("SWITCH");
         }
         if c.current != *CURRENT_DISPLAY.lock().unwrap() {
+            #[cfg(target_os = "linux")]
+            super::wayland::clear();
             *SWITCH.lock().unwrap() = true;
             bail!("SWITCH");
         }
@@ -596,6 +653,8 @@ fn run(sp: GenericService) -> ResultType<()> {
             if let Some(msg_out) = check_get_displays_changed_msg() {
                 sp.send(msg_out);
                 log::info!("Displays changed");
+                #[cfg(target_os = "linux")]
+                super::wayland::clear();
                 *SWITCH.lock().unwrap() = true;
                 bail!("SWITCH");
             }
@@ -611,16 +670,6 @@ fn run(sp: GenericService) -> ResultType<()> {
                 let time = now - start;
                 let ms = (time.as_secs() * 1000 + time.subsec_millis() as u64) as i64;
                 match frame {
-                    scrap::Frame::VP8(data) => {
-                        let send_conn_ids =
-                            handle_one_frame_encoded(VpxVideoCodecId::VP8, &sp, data, ms)?;
-                        frame_controller.set_send(now, send_conn_ids);
-                    }
-                    scrap::Frame::VP9(data) => {
-                        let send_conn_ids =
-                            handle_one_frame_encoded(VpxVideoCodecId::VP9, &sp, data, ms)?;
-                        frame_controller.set_send(now, send_conn_ids);
-                    }
                     scrap::Frame::RAW(data) => {
                         if data.len() != 0 {
                             let send_conn_ids =
@@ -668,8 +717,14 @@ fn run(sp: GenericService) -> ResultType<()> {
                     would_block_count += 1;
                     if !scrap::is_x11() {
                         if would_block_count >= 100 {
-                            super::wayland::release_resource();
-                            bail!("Wayland capturer none 100 times, try restart capture");
+                            // to-do: Unknown reason for WouldBlock 100 times (seconds = 100 * 1 / fps)
+                            // https://github.com/rustdesk/rustdesk/blob/63e6b2f8ab51743e77a151e2b7ff18816f5fa2fb/libs/scrap/src/common/wayland.rs#L81
+                            //
+                            // Do not reset the capturer for now, as it will cause the prompt to show every few minutes.
+                            // https://github.com/rustdesk/rustdesk/issues/4276
+                            //
+                            // super::wayland::release_resource();
+                            // bail!("Wayland capturer none 100 times, try restart capture");
                         }
                     }
                 }
@@ -677,6 +732,8 @@ fn run(sp: GenericService) -> ResultType<()> {
             Err(err) => {
                 if check_display_changed(c.ndisplay, c.current, c.width, c.height) {
                     log::info!("Displays changed");
+                    #[cfg(target_os = "linux")]
+                    super::wayland::clear();
                     *SWITCH.lock().unwrap() = true;
                     bail!("SWITCH");
                 }
@@ -721,9 +778,7 @@ fn run(sp: GenericService) -> ResultType<()> {
     }
 
     #[cfg(target_os = "linux")]
-    if !scrap::is_x11() {
-        super::wayland::release_resource();
-    }
+    super::wayland::clear();
 
     Ok(())
 }
@@ -810,28 +865,21 @@ fn handle_one_frame(
 }
 
 #[inline]
-#[cfg(any(target_os = "android", target_os = "ios"))]
-pub fn handle_one_frame_encoded(
-    codec: VpxVideoCodecId,
-    sp: &GenericService,
-    frame: &[u8],
-    ms: i64,
-) -> ResultType<HashSet<i32>> {
-    sp.snapshot(|sps| {
-        // so that new sub and old sub share the same encoder after switch
-        if sps.has_subscribes() {
-            bail!("SWITCH");
+fn get_original_resolution(display_name: &str, w: usize, h: usize) -> MessageField<Resolution> {
+    #[cfg(all(windows, feature = "virtual_display_driver"))]
+    let is_virtual_display = crate::virtual_display_manager::is_virtual_display(&display_name);
+    #[cfg(not(all(windows, feature = "virtual_display_driver")))]
+    let is_virtual_display = false;
+    Some(if is_virtual_display {
+        Resolution {
+            width: 0,
+            height: 0,
+            ..Default::default()
         }
-        Ok(())
-    })?;
-    let vpx_frame = EncodedVideoFrame {
-        data: frame.to_vec().into(),
-        key: true,
-        pts: ms,
-        ..Default::default()
-    };
-    let send_conn_ids = sp.send_video_frame(scrap::VpxEncoder::create_msg(codec, vec![vpx_frame]));
-    Ok(send_conn_ids)
+    } else {
+        update_get_original_resolution_(&display_name, w, h)
+    })
+    .into()
 }
 
 pub(super) fn get_displays_2(all: &Vec<Display>) -> (usize, Vec<DisplayInfo>) {
@@ -841,14 +889,17 @@ pub(super) fn get_displays_2(all: &Vec<Display>) -> (usize, Vec<DisplayInfo>) {
         if d.is_primary() {
             primary = i;
         }
+        let display_name = d.name();
+        let original_resolution = get_original_resolution(&display_name, d.width(), d.height());
         displays.push(DisplayInfo {
             x: d.origin().0 as _,
             y: d.origin().1 as _,
             width: d.width() as _,
             height: d.height() as _,
-            name: d.name(),
+            name: display_name,
             online: d.is_online(),
             cursor_embedded: false,
+            original_resolution,
             ..Default::default()
         });
     }
@@ -867,16 +918,21 @@ pub fn is_inited_msg() -> Option<Message> {
     None
 }
 
+// switch to primary display if long time (30 seconds) no users
+#[inline]
+pub fn try_reset_current_display() {
+    if LAST_ACTIVE.lock().unwrap().elapsed().as_secs() >= 30 {
+        *CURRENT_DISPLAY.lock().unwrap() = usize::MAX;
+    }
+    *LAST_ACTIVE.lock().unwrap() = time::Instant::now();
+}
+
 pub async fn get_displays() -> ResultType<(usize, Vec<DisplayInfo>)> {
     #[cfg(target_os = "linux")]
     {
         if !scrap::is_x11() {
             return super::wayland::get_displays().await;
         }
-    }
-    // switch to primary display if long time (30 seconds) no users
-    if LAST_ACTIVE.lock().unwrap().elapsed().as_secs() >= 30 {
-        *CURRENT_DISPLAY.lock().unwrap() = usize::MAX;
     }
     Ok(get_displays_2(&try_get_displays()?))
 }
@@ -924,36 +980,36 @@ pub async fn switch_to_primary() {
 }
 
 #[inline]
-#[cfg(not(windows))]
+#[cfg(not(all(windows, feature = "virtual_display_driver")))]
 fn try_get_displays() -> ResultType<Vec<Display>> {
     Ok(Display::all()?)
 }
 
-#[cfg(windows)]
+#[inline]
+#[cfg(all(windows, feature = "virtual_display_driver"))]
+fn no_displays(displays: &Vec<Display>) -> bool {
+    let display_len = displays.len();
+    if display_len == 0 {
+        true
+    } else if display_len == 1 {
+        let display = &displays[0];
+        let dummy_display_side_max_size = 800;
+        display.width() <= dummy_display_side_max_size
+            && display.height() <= dummy_display_side_max_size
+    } else {
+        false
+    }
+}
+
+#[cfg(all(windows, feature = "virtual_display_driver"))]
 fn try_get_displays() -> ResultType<Vec<Display>> {
     let mut displays = Display::all()?;
-    if displays.len() == 0 {
+    if no_displays(&displays) {
         log::debug!("no displays, create virtual display");
-        // Try plugin monitor
-        if !virtual_display::is_device_created() {
-            if let Err(e) = virtual_display::create_device() {
-                log::debug!("Create device failed {}", e);
-            }
-        }
-        if virtual_display::is_device_created() {
-            if let Err(e) = virtual_display::plug_in_monitor() {
-                log::debug!("Plug in monitor failed {}", e);
-            } else {
-                if let Err(e) = virtual_display::update_monitor_modes() {
-                    log::debug!("Update monitor modes failed {}", e);
-                }
-            }
-        }
-        displays = Display::all()?;
-    } else if displays.len() > 1 {
-        // If more than one displays exists, close RustDeskVirtualDisplay
-        if virtual_display::is_device_created() {
-            virtual_display::close_device()
+        if let Err(e) = virtual_display_manager::plug_in_headless() {
+            log::error!("plug in headless failed {}", e);
+        } else {
+            displays = Display::all()?;
         }
     }
     Ok(displays)
@@ -978,10 +1034,14 @@ pub(super) fn get_current_display_2(mut all: Vec<Display>) -> ResultType<(usize,
     return Ok((n, current, all.remove(current)));
 }
 
+#[inline]
 pub fn get_current_display() -> ResultType<(usize, usize, Display)> {
     get_current_display_2(try_get_displays()?)
 }
 
+// `try_reset_current_display` is needed because `get_displays` may change the current display,
+// which may cause the mismatch of current display and the current display name.
+#[inline]
 pub fn get_current_display_name() -> ResultType<String> {
     Ok(get_current_display_2(try_get_displays()?)?.2.name())
 }
@@ -993,7 +1053,7 @@ fn start_uac_elevation_check() {
 	if !crate::platform::is_installed() && !crate::platform::is_root() {
             std::thread::spawn(|| loop {
                 std::thread::sleep(std::time::Duration::from_secs(1));
-                if let Ok(uac) = crate::win_privacy::is_process_consent_running() {
+                if let Ok(uac) = is_process_consent_running() {
                     *IS_UAC_RUNNING.lock().unwrap() = uac;
                 }
                 if !crate::platform::is_elevated(None).unwrap_or(false) {
@@ -1004,4 +1064,17 @@ fn start_uac_elevation_check() {
             });
         }
     });
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn get_wake_lock() -> crate::platform::WakeLock {
+    let (display, idle, sleep) = if cfg!(windows) {
+        (true, false, false)
+    } else if cfg!(linux) {
+        (false, false, true)
+    } else {
+        //macos
+        (true, false, false)
+    };
+    crate::platform::WakeLock::new(display, idle, sleep)
 }

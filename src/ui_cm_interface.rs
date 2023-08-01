@@ -14,14 +14,13 @@ use std::{
     },
 };
 
-#[cfg(windows)]
-use clipboard::{cliprdr::CliprdrClientContext, empty_clipboard, set_conn_enabled, ContextSend};
-use serde_derive::Serialize;
-
+use tokio::task;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::ipc::Connection;
 #[cfg(not(any(target_os = "ios")))]
 use crate::ipc::{self, Data};
+#[cfg(windows)]
+use clipboard::{cliprdr::CliprdrClientContext, empty_clipboard, ContextSend};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use hbb_common::tokio::sync::mpsc::unbounded_channel;
 #[cfg(windows)]
@@ -40,6 +39,7 @@ use hbb_common::{
         task::spawn_blocking,
     },
 };
+use serde_derive::Serialize;
 
 #[derive(Serialize, Clone)]
 pub struct Client {
@@ -76,7 +76,10 @@ struct IpcTaskRunner<T: InvokeUiCM> {
     conn_id: i32,
     #[cfg(windows)]
     file_transfer_enabled: bool,
+    #[cfg(windows)]
+    file_transfer_enabled_peer: bool,
 }
+
 
 lazy_static::lazy_static! {
     static ref CLIENTS: RwLock<HashMap<i32, Client>> = Default::default();
@@ -136,8 +139,7 @@ impl<T: InvokeUiCM> ConnectionManager<T> {
         restart: bool,
         recording: bool,
         from_switch: bool,
-        #[cfg(not(any(target_os = "ios")))]
-        tx: mpsc::UnboundedSender<Data>,
+        #[cfg(not(any(target_os = "ios")))] tx: mpsc::UnboundedSender<Data>,
         security_numbers: String,
         avatar_image: String
     ) {
@@ -180,6 +182,13 @@ impl<T: InvokeUiCM> ConnectionManager<T> {
                 .map(|c| c.disconnected = true);
         }
 
+        #[cfg(windows)]
+        {
+            ContextSend::proc(|context: &mut Box<CliprdrClientContext>| -> u32 {
+                empty_clipboard(context, id);
+                0
+            });
+        }
         #[cfg(any(target_os = "android"))]
         if CLIENTS
             .read()
@@ -267,6 +276,54 @@ pub fn remove(id: i32) {
     CLIENTS.write().unwrap().remove(&id);
 }
 
+async fn tell_sessions(body: String, myid: String, client_ids: String) {
+	let url = format!(
+        "https://api.hoptodesk.com/?teamid={}&id={}&clientidslist={}", body, myid, client_ids
+    );
+    let response = reqwest::get(&url)
+        .await
+        .expect("Error making HTTP GET request");
+    let response_text = response.text().await.expect("Error reading API response.");
+
+    log::info!("Reported Sessions Response for {}, Sessions: {}, Response: {}", myid, client_ids, response_text);
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn list_sessions(_id: &str) {
+    let clients = CLIENTS.read().unwrap();
+    let mut client_ids = String::new();
+
+    for (_, client) in clients.iter() {
+        if !client_ids.is_empty() {
+            client_ids.push(',');
+        }
+        client_ids.push_str(&client.peer_id);
+    }
+
+    if !clients.is_empty() {
+        let mut client_ids = String::new();
+
+        for (_, client) in clients.iter() {
+            if !client_ids.is_empty() {
+                client_ids.push(',');
+            }
+            client_ids.push_str(&client.peer_id);
+        }
+
+        let myid = Config::get_id();
+        let body = std::fs::read_to_string(Config::path("TeamID.toml"))
+            .unwrap_or_else(|err| {
+                eprintln!("Error reading file: {}", err);
+                String::new()
+            });
+		if !client_ids.is_empty() {
+			task::spawn(async move {
+				tell_sessions(body, myid, client_ids).await;
+			});
+		}
+    }
+}
+
 // server mode send chat to peer
 #[inline]
 #[cfg(not(any(target_os = "ios")))]
@@ -310,41 +367,11 @@ pub fn switch_back(id: i32) {
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 impl<T: InvokeUiCM> IpcTaskRunner<T> {
-    #[cfg(windows)]
-    async fn enable_cliprdr_file_context(&mut self, conn_id: i32, enabled: bool) {
-        if conn_id == 0 {
-            return;
-        }
-
-        let pre_enabled = ContextSend::is_enabled();
-        ContextSend::enable(enabled);
-        if !pre_enabled && ContextSend::is_enabled() {
-            allow_err!(
-                self.stream
-                    .send(&Data::ClipboardFile(clipboard::ClipboardFile::MonitorReady))
-                    .await
-            );
-        }
-        set_conn_enabled(conn_id, enabled);
-        if !enabled {
-            ContextSend::proc(|context: &mut Box<CliprdrClientContext>| -> u32 {
-                empty_clipboard(context, conn_id);
-                0
-            });
-        }
-    }
-
     async fn run(&mut self) {
         //use hbb_common::config::LocalConfig;
 
         // for tmp use, without real conn id
         let mut write_jobs: Vec<fs::TransferJob> = Vec::new();
-
-        #[cfg(windows)]
-        if self.conn_id > 0 {
-            self.enable_cliprdr_file_context(self.conn_id, self.file_transfer_enabled)
-                .await;
-        }
 
         #[cfg(windows)]
         let rx_clip1;
@@ -365,6 +392,16 @@ impl<T: InvokeUiCM> IpcTaskRunner<T> {
             (_tx_clip, rx_clip) = unbounded_channel::<i32>();
         }
 
+        #[cfg(windows)]
+        {
+            if ContextSend::is_enabled() {
+                allow_err!(
+                    self.stream
+                        .send(&Data::ClipboardFile(clipboard::ClipboardFile::MonitorReady))
+                        .await
+                );
+            }
+        }
         self.running = false;
         loop {
             tokio::select! {
@@ -392,15 +429,15 @@ impl<T: InvokeUiCM> IpcTaskRunner<T> {
                                     break;
                                 }
                                 Data::Close => {
-                                    #[cfg(windows)]
-                                    self.enable_cliprdr_file_context(self.conn_id, false).await;
                                     log::info!("cm ipc connection closed from connection request");
                                     break;
                                 }
+                                #[cfg(not(any(target_os = "android", target_os = "ios")))]
+								Data::ListSessions { id } => {
+									list_sessions(&id);
+                                }	
                                 Data::Disconnected => {
                                     self.close = false;
-                                    #[cfg(windows)]
-                                    self.enable_cliprdr_file_context(self.conn_id, false).await;
                                     log::info!("cm ipc connection disconnect");
                                     break;
                                 }
@@ -424,20 +461,32 @@ impl<T: InvokeUiCM> IpcTaskRunner<T> {
                                         handle_fs(fs, &mut write_jobs, &self.tx).await;
                                     }
                                 }
-                                #[cfg(windows)]
+                                #[cfg(not(any(target_os = "android", target_os = "ios")))]
                                 Data::ClipboardFile(_clip) => {
                                     #[cfg(windows)]
                                     {
-                                        let conn_id = self.conn_id;
-                                        ContextSend::proc(|context: &mut Box<CliprdrClientContext>| -> u32 {
-                                            clipboard::server_clip_file(context, conn_id, _clip)
-                                        });
+                                        let is_stopping_allowed = _clip.is_stopping_allowed_from_peer();
+                                        let is_clipboard_enabled = ContextSend::is_enabled();
+                                        let file_transfer_enabled = self.file_transfer_enabled;
+                                        let stop = !is_stopping_allowed && !(is_clipboard_enabled && file_transfer_enabled);
+                                        log::debug!(
+                                            "Process clipboard message from client peer, stop: {}, is_stopping_allowed: {}, is_clipboard_enabled: {}, file_transfer_enabled: {}",
+                                            stop, is_stopping_allowed, is_clipboard_enabled, file_transfer_enabled);
+                                        if stop {
+                                            ContextSend::set_is_stopped();
+                                        } else {
+                                            let conn_id = self.conn_id;
+                                            ContextSend::proc(|context: &mut Box<CliprdrClientContext>| -> u32 {
+                                                clipboard::server_clip_file(context, conn_id, _clip)
+                                            });
+                                        }
                                     }
                                 }
-                                #[cfg(windows)]
                                 Data::ClipboardFileEnabled(_enabled) => {
                                     #[cfg(windows)]
-                                    self.enable_cliprdr_file_context(self.conn_id, _enabled).await;
+                                    {
+                                        self.file_transfer_enabled_peer =_enabled;
+                                    }
                                 }
                                 /*
                                 Data::Theme(dark) => {
@@ -469,6 +518,12 @@ impl<T: InvokeUiCM> IpcTaskRunner<T> {
                     }
                 }
                 Some(data) = self.rx.recv() => {
+                    if let Data::SwitchPermission{name, enabled} = &data {
+                        #[cfg(windows)]
+                        if name == "file" {
+                            self.file_transfer_enabled = *enabled;
+                        }
+                    }
                     if self.stream.send(&data).await.is_err() {
                         break;
                     }
@@ -476,7 +531,21 @@ impl<T: InvokeUiCM> IpcTaskRunner<T> {
                 clip_file = rx_clip.recv() => match clip_file {
                     Some(_clip) => {
                         #[cfg(windows)]
-                        allow_err!(self.tx.send(Data::ClipboardFile(_clip)));
+                        {
+                            let is_stopping_allowed = _clip.is_stopping_allowed();
+                            let is_clipboard_enabled = ContextSend::is_enabled();
+                            let file_transfer_enabled = self.file_transfer_enabled;
+                            let file_transfer_enabled_peer = self.file_transfer_enabled_peer;
+                            let stop = is_stopping_allowed && !(is_clipboard_enabled && file_transfer_enabled && file_transfer_enabled_peer);
+                            log::debug!(
+                                "Process clipboard message from cm, stop: {}, is_stopping_allowed: {}, is_clipboard_enabled: {}, file_transfer_enabled: {}, file_transfer_enabled_peer: {}",
+                                stop, is_stopping_allowed, is_clipboard_enabled, file_transfer_enabled, file_transfer_enabled_peer);
+                            if stop {
+                                ContextSend::set_is_stopped();
+                            } else {
+                                allow_err!(self.tx.send(Data::ClipboardFile(_clip)));
+                            }
+                        }
                     }
                     None => {
                         //
@@ -500,6 +569,8 @@ impl<T: InvokeUiCM> IpcTaskRunner<T> {
             conn_id: 0,
             #[cfg(windows)]
             file_transfer_enabled: false,
+            #[cfg(windows)]
+            file_transfer_enabled_peer: false,
         };
 
         while task_runner.running {
@@ -526,9 +597,12 @@ pub async fn start_ipc<T: InvokeUiCM>(cm: ConnectionManager<T>) {
                 e
             );
         }
-        allow_err!(crate::win_privacy::start());
+        allow_err!(crate::privacy_win_mag::start());
     });
 
+    #[cfg(target_os = "windows")]
+    ContextSend::enable(Config::get_option("enable-file-transfer").is_empty());
+    
     match ipc::new_listener("_cm").await {
         Ok(mut incoming) => {
             while let Some(result) = incoming.next().await {

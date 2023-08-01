@@ -1,23 +1,17 @@
 #[cfg(test)]
 mod periodic_timer_test;
 
-use tokio::sync::{mpsc, Mutex};
-use tokio::time::Duration;
-
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use tokio::sync::{mpsc, Mutex};
+use tokio::time::Duration;
 
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Default, Debug, Copy, Clone, PartialEq, Eq)]
 pub enum TimerIdRefresh {
+    #[default]
     Alloc,
     Perms,
-}
-
-impl Default for TimerIdRefresh {
-    fn default() -> Self {
-        TimerIdRefresh::Alloc
-    }
 }
 
 // PeriodicTimerTimeoutHandler is a handler called on timeout

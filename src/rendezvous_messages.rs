@@ -86,6 +86,14 @@ impl<'a> RelayReady<'a> {
     }
 }
 
+#[derive(Serialize, Deserialize)]
+pub struct CloseSessions<'a> {
+    protocol: &'a str,
+    endpoint: &'a str,
+    pub data: &'a str,
+    sender_id: &'a str,
+}
+
 pub trait ToJson {
     fn to_json(&self) -> String;
 }

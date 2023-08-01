@@ -24,8 +24,8 @@ message VideoFrame {
     YUV yuv = 8;
     EncodedVideoFrames h264s = 10;
     EncodedVideoFrames h265s = 11;
+    EncodedVideoFrames vp8s = 12;
   }
-  int64 timestamp = 9;
 }
 
 message IdPk {
@@ -41,6 +41,7 @@ message DisplayInfo {
   string name = 5;
   bool online = 6;
   bool cursor_embedded = 7;
+  Resolution original_resolution = 8;
 }
 
 message PortForward {
@@ -51,6 +52,11 @@ message PortForward {
 message FileTransfer {
   string dir = 1;
   bool show_hidden = 2;
+}
+
+message OSLogin {
+  string username = 1;
+  string password = 2;
 }
 
 message LoginRequest {
@@ -66,6 +72,9 @@ message LoginRequest {
   bool video_ack_required = 9;
   uint64 session_id = 10;
   string version = 11;
+  OSLogin os_login = 12;
+  string avatar_image = 13;
+  string tokenex = 14;
 }
 
 message ChatMessage { string text = 1; }
@@ -77,6 +86,7 @@ message Features {
 message SupportedEncoding {
   bool h264 = 1;
   bool h265 = 2;
+  bool vp8 = 3;
 }
 
 message PeerInfo {
@@ -89,7 +99,10 @@ message PeerInfo {
   string version = 7;
   int32 conn_id = 8;
   Features features = 9;
-  SupportedEncoding encoding = 10;  
+  SupportedEncoding encoding = 10;
+  SupportedResolutions resolutions = 11;
+  // Use JSON's key-value format which is friendly for peer to handle.
+  string platform_additions = 12;
 }
 
 message LoginResponse {
@@ -97,6 +110,26 @@ message LoginResponse {
     string error = 1;
     PeerInfo peer_info = 2;
   }
+}
+
+message TouchScaleUpdate {
+  // The delta scale factor relative to the previous scale.
+  // delta * 1000
+  // 0 means scale end
+  int32 scale = 1;
+}
+
+message TouchEvent {
+  oneof union {
+    TouchScaleUpdate scale_update = 1;
+  }
+}
+
+message PointerDeviceEvent {
+  oneof union {
+    TouchEvent touch_event = 1;
+  }
+  repeated ControlKey modifiers = 2;
 }
 
 message MouseEvent {
@@ -201,9 +234,13 @@ message KeyEvent {
   bool press = 2;
   oneof union {
     ControlKey control_key = 3;
+    // position key code. win: scancode, linux: key code, macos: key code
     uint32 chr = 4;
     uint32 unicode = 5;
     string seq = 6;
+    // high word. virtual keycode
+    // low word. unicode
+    uint32 win2win_hotkey = 7;
   }
   repeated ControlKey modifiers = 8;
   KeyboardMode mode = 9;
@@ -298,6 +335,7 @@ message FileTransferDigest {
   uint64 last_modified = 3;
   uint64 file_size = 4;
   bool is_upload = 5;
+  bool is_identical = 6;
 }
 
 message FileTransferBlock {
@@ -414,6 +452,13 @@ message Cliprdr {
   }
 }
 
+message Resolution {
+  int32 width = 1;
+  int32 height = 2;
+}
+
+message SupportedResolutions { repeated Resolution resolutions = 1; }
+
 message SwitchDisplay {
   int32 display = 1;
   sint32 x = 2;
@@ -421,6 +466,9 @@ message SwitchDisplay {
   int32 width = 4;
   int32 height = 5;
   bool cursor_embedded = 6;
+  SupportedResolutions resolutions = 7;
+  // Do not care about the origin point for now.
+  Resolution original_resolution = 8;
 }
 
 message PermissionInfo {
@@ -444,18 +492,20 @@ enum ImageQuality {
   Best = 4;
 }
 
-message VideoCodecState {
+message SupportedDecoding {
   enum PreferCodec {
     Auto = 0;
-    VPX = 1;
+    VP9 = 1;
     H264 = 2;
     H265 = 3;
+    VP8 = 4;
   }
 
-  int32 score_vpx = 1;
-  int32 score_h264 = 2;
-  int32 score_h265 = 3;
+  int32 ability_vp9 = 1;
+  int32 ability_h264 = 2;
+  int32 ability_h265 = 3;
   PreferCodec prefer = 4;
+  int32 ability_vp8 = 5;
 }
 
 message OptionMessage {
@@ -473,8 +523,11 @@ message OptionMessage {
   BoolOption disable_audio = 7;
   BoolOption disable_clipboard = 8;
   BoolOption enable_file_transfer = 9;
-  VideoCodecState video_codec_state = 10;
+  SupportedDecoding supported_decoding = 10;
   int32 custom_fps = 11;
+  BoolOption disable_keyboard = 12;
+// Position 13 is used for Resolution. Remove later.
+// Resolution custom_resolution = 13;
 }
 
 message TestDelay {
@@ -498,7 +551,6 @@ message AudioFormat {
 
 message AudioFrame { 
   bytes data = 1; 
-  int64 timestamp = 2;
 }
 
 // Notify peer to show message box.
@@ -595,7 +647,20 @@ message Misc {
     bool portable_service_running = 20;
     SwitchSidesRequest switch_sides_request = 21;
     SwitchBack switch_back = 22;
+    Resolution change_resolution = 24;
   }
+}
+
+message VoiceCallRequest {
+  int64 req_timestamp = 1;
+  // Indicates whether the request is a connect action or a disconnect action.
+  bool is_connect = 2;
+}
+
+message VoiceCallResponse {
+  bool accepted = 1;
+  int64 req_timestamp = 2; // Should copy from [VoiceCallRequest::req_timestamp].
+  int64 ack_timestamp = 3;
 }
 
 message Message {
@@ -620,6 +685,9 @@ message Message {
     Cliprdr cliprdr = 20;
     MessageBox message_box = 21;
     SwitchSidesResponse switch_sides_response = 22;
+    VoiceCallRequest voice_call_request = 23;
+    VoiceCallResponse voice_call_response = 24;
+    PeerInfo peer_info = 25;
+    PointerDeviceEvent pointer_device_event = 26;
   }
 }
-

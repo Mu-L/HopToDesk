@@ -1,15 +1,25 @@
-use super::*;
-
-use crate::proto::lifetime::DEFAULT_LIFETIME;
 use std::str::FromStr;
+
+use stun::attributes::ATTR_USERNAME;
+use stun::textattrs::TextAttribute;
 use tokio::net::UdpSocket;
+
+use super::*;
+use crate::proto::lifetime::DEFAULT_LIFETIME;
 
 #[tokio::test]
 async fn test_has_permission() -> Result<()> {
     let turn_socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
     let relay_socket = Arc::clone(&turn_socket);
     let relay_addr = relay_socket.local_addr()?;
-    let a = Allocation::new(turn_socket, relay_socket, relay_addr, FiveTuple::default());
+    let a = Allocation::new(
+        turn_socket,
+        relay_socket,
+        relay_addr,
+        FiveTuple::default(),
+        TextAttribute::new(ATTR_USERNAME, "user".into()),
+        None,
+    );
 
     let addr1 = SocketAddr::from_str("127.0.0.1:3478")?;
     let addr2 = SocketAddr::from_str("127.0.0.1:3479")?;
@@ -40,7 +50,14 @@ async fn test_add_permission() -> Result<()> {
     let turn_socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
     let relay_socket = Arc::clone(&turn_socket);
     let relay_addr = relay_socket.local_addr()?;
-    let a = Allocation::new(turn_socket, relay_socket, relay_addr, FiveTuple::default());
+    let a = Allocation::new(
+        turn_socket,
+        relay_socket,
+        relay_addr,
+        FiveTuple::default(),
+        TextAttribute::new(ATTR_USERNAME, "user".into()),
+        None,
+    );
 
     let addr = SocketAddr::from_str("127.0.0.1:3478")?;
     let p = Permission::new(addr);
@@ -57,7 +74,14 @@ async fn test_remove_permission() -> Result<()> {
     let turn_socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
     let relay_socket = Arc::clone(&turn_socket);
     let relay_addr = relay_socket.local_addr()?;
-    let a = Allocation::new(turn_socket, relay_socket, relay_addr, FiveTuple::default());
+    let a = Allocation::new(
+        turn_socket,
+        relay_socket,
+        relay_addr,
+        FiveTuple::default(),
+        TextAttribute::new(ATTR_USERNAME, "user".into()),
+        None,
+    );
 
     let addr = SocketAddr::from_str("127.0.0.1:3478")?;
 
@@ -83,7 +107,14 @@ async fn test_add_channel_bind() -> Result<()> {
     let turn_socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
     let relay_socket = Arc::clone(&turn_socket);
     let relay_addr = relay_socket.local_addr()?;
-    let a = Allocation::new(turn_socket, relay_socket, relay_addr, FiveTuple::default());
+    let a = Allocation::new(
+        turn_socket,
+        relay_socket,
+        relay_addr,
+        FiveTuple::default(),
+        TextAttribute::new(ATTR_USERNAME, "user".into()),
+        None,
+    );
 
     let addr = SocketAddr::from_str("127.0.0.1:3478")?;
     let c = ChannelBind::new(ChannelNumber(MIN_CHANNEL_NUMBER), addr);
@@ -110,7 +141,14 @@ async fn test_get_channel_by_number() -> Result<()> {
     let turn_socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
     let relay_socket = Arc::clone(&turn_socket);
     let relay_addr = relay_socket.local_addr()?;
-    let a = Allocation::new(turn_socket, relay_socket, relay_addr, FiveTuple::default());
+    let a = Allocation::new(
+        turn_socket,
+        relay_socket,
+        relay_addr,
+        FiveTuple::default(),
+        TextAttribute::new(ATTR_USERNAME, "user".into()),
+        None,
+    );
 
     let addr = SocketAddr::from_str("127.0.0.1:3478")?;
     let c = ChannelBind::new(ChannelNumber(MIN_CHANNEL_NUMBER), addr);
@@ -139,7 +177,14 @@ async fn test_get_channel_by_addr() -> Result<()> {
     let turn_socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
     let relay_socket = Arc::clone(&turn_socket);
     let relay_addr = relay_socket.local_addr()?;
-    let a = Allocation::new(turn_socket, relay_socket, relay_addr, FiveTuple::default());
+    let a = Allocation::new(
+        turn_socket,
+        relay_socket,
+        relay_addr,
+        FiveTuple::default(),
+        TextAttribute::new(ATTR_USERNAME, "user".into()),
+        None,
+    );
 
     let addr = SocketAddr::from_str("127.0.0.1:3478")?;
     let addr2 = SocketAddr::from_str("127.0.0.1:3479")?;
@@ -164,7 +209,14 @@ async fn test_remove_channel_bind() -> Result<()> {
     let turn_socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
     let relay_socket = Arc::clone(&turn_socket);
     let relay_addr = relay_socket.local_addr()?;
-    let a = Allocation::new(turn_socket, relay_socket, relay_addr, FiveTuple::default());
+    let a = Allocation::new(
+        turn_socket,
+        relay_socket,
+        relay_addr,
+        FiveTuple::default(),
+        TextAttribute::new(ATTR_USERNAME, "user".into()),
+        None,
+    );
 
     let addr = SocketAddr::from_str("127.0.0.1:3478")?;
     let number = ChannelNumber(MIN_CHANNEL_NUMBER);
@@ -194,7 +246,14 @@ async fn test_allocation_refresh() -> Result<()> {
     let turn_socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
     let relay_socket = Arc::clone(&turn_socket);
     let relay_addr = relay_socket.local_addr()?;
-    let mut a = Allocation::new(turn_socket, relay_socket, relay_addr, FiveTuple::default());
+    let a = Allocation::new(
+        turn_socket,
+        relay_socket,
+        relay_addr,
+        FiveTuple::default(),
+        TextAttribute::new(ATTR_USERNAME, "user".into()),
+        None,
+    );
 
     a.start(DEFAULT_LIFETIME).await;
     a.refresh(Duration::from_secs(0)).await;
@@ -209,7 +268,14 @@ async fn test_allocation_close() -> Result<()> {
     let turn_socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
     let relay_socket = Arc::clone(&turn_socket);
     let relay_addr = relay_socket.local_addr()?;
-    let mut a = Allocation::new(turn_socket, relay_socket, relay_addr, FiveTuple::default());
+    let a = Allocation::new(
+        turn_socket,
+        relay_socket,
+        relay_addr,
+        FiveTuple::default(),
+        TextAttribute::new(ATTR_USERNAME, "user".into()),
+        None,
+    );
 
     // add mock lifetimeTimer
     a.start(DEFAULT_LIFETIME).await;

@@ -34,6 +34,7 @@ mod tw;
 mod ua;
 mod vn;
 mod lt;
+mod bg;
 
 
 lazy_static::lazy_static! {
@@ -59,6 +60,7 @@ lazy_static::lazy_static! {
             ("sk", "Slovenčina"),
             ("sl", "Slovenščina"),
             ("ro", "Română"),            			
+            ("bg", "български"),
             ("el", "Ελληνικά"),
             ("tr", "Türkçe"),
             ("ru", "Русский"),
@@ -137,6 +139,7 @@ pub fn translate_locale(name: String, locale: &str) -> String {
         "th" => th::T.deref(),		
         "sl" => sl::T.deref(),
         "ro" => ro::T.deref(),
+        "bg" => bg::T.deref(),        
         "lt" => lt::T.deref(),
         _ => en::T.deref(),
     };

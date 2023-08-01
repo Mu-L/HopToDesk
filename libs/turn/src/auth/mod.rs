@@ -1,13 +1,15 @@
 #[cfg(test)]
 mod auth_test;
 
-use crate::error::*;
-
 use std::net::SocketAddr;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use base64::prelude::BASE64_STANDARD;
+use base64::Engine;
 use md5::{Digest, Md5};
 use ring::hmac;
+
+use crate::error::*;
 
 pub trait AuthHandler {
     fn auth_handle(&self, username: &str, realm: &str, src_addr: SocketAddr) -> Result<Vec<u8>>;
@@ -30,12 +32,12 @@ fn long_term_credentials(username: &str, shared_secret: &str) -> String {
         shared_secret.as_bytes(),
     );
     let password = hmac::sign(&mac, username.as_bytes()).as_ref().to_vec();
-    base64::encode(&password)
+    BASE64_STANDARD.encode(password)
 }
 
-// generate_auth_key is a convince function to easily generate keys in the format used by AuthHandler
+// generate_auth_key is a convenience function to easily generate keys in the format used by AuthHandler
 pub fn generate_auth_key(username: &str, realm: &str, password: &str) -> Vec<u8> {
-    let s = format!("{}:{}:{}", username, realm, password);
+    let s = format!("{username}:{realm}:{password}");
 
     let mut h = Md5::new();
     h.update(s.as_bytes());
@@ -58,8 +60,7 @@ impl AuthHandler for LongTermAuthHandler {
         let t = Duration::from_secs(username.parse::<u64>()?);
         if t < SystemTime::now().duration_since(UNIX_EPOCH)? {
             return Err(Error::Other(format!(
-                "Expired time-windowed username {}",
-                username
+                "Expired time-windowed username {username}"
             )));
         }
 

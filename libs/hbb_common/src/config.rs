@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     fs,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    ops::{Deref, DerefMut},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, RwLock},
     time::{Duration, Instant, SystemTime},
@@ -19,13 +20,13 @@ use crate::{
     log,
     password_security::{
         decrypt_str_or_original, decrypt_vec_or_original, encrypt_str_or_original,
-        encrypt_vec_or_original,
+        encrypt_vec_or_original, self,
     },
 };
 
 pub const RENDEZVOUS_TIMEOUT: u64 = 12_000;
 pub const CONNECT_TIMEOUT: u64 = 18_000;
-pub const READ_TIMEOUT: u64 = 30_000;
+pub const READ_TIMEOUT: u64 = 18_000;
 pub const REG_INTERVAL: i64 = 12_000;
 pub const COMPRESS_LEVEL: i32 = 3;
 const SERIAL: i32 = 3;
@@ -42,9 +43,8 @@ lazy_static::lazy_static! {
     static ref CONFIG: Arc<RwLock<Config>> = Arc::new(RwLock::new(Config::load()));
     static ref CONFIG2: Arc<RwLock<Config2>> = Arc::new(RwLock::new(Config2::load()));
     static ref LOCAL_CONFIG: Arc<RwLock<LocalConfig>> = Arc::new(RwLock::new(LocalConfig::load()));
-    pub static ref CONFIG_OIDC: Arc<RwLock<ConfigOidc>> = Arc::new(RwLock::new(ConfigOidc::load()));
+	pub static ref APP_NAME: Arc<RwLock<String>> = Arc::new(RwLock::new("HopToDesk".to_owned()));
     pub static ref ONLINE: Arc<Mutex<HashMap<String, i64>>> = Default::default();
-    pub static ref APP_NAME: Arc<RwLock<String>> = Arc::new(RwLock::new("HopToDesk".to_owned()));
     static ref KEY_PAIR: Arc<Mutex<Option<(Vec<u8>, Vec<u8>)>>> = Default::default();
     static ref HW_CODEC_CONFIG: Arc<RwLock<HwCodecConfig>> = Arc::new(RwLock::new(HwCodecConfig::load()));
     static ref USER_DEFAULT_CONFIG: Arc<RwLock<(UserDefaultConfig, Instant)>> = Arc::new(RwLock::new((UserDefaultConfig::load(), Instant::now())));
@@ -100,12 +100,12 @@ macro_rules! serde_field_string {
         where
             D: de::Deserializer<'de>,
         {
-            let s: &str = de::Deserialize::deserialize(deserializer)?;
-            Ok(if s.is_empty() {
-                Self::$default_func()
-            } else {
-                s.to_owned()
-            })
+            let s: String =
+                de::Deserialize::deserialize(deserializer).unwrap_or(Self::$default_func());
+            if s.is_empty() {
+                return Ok(Self::$default_func());
+            }
+            Ok(s)
         }
     };
 }
@@ -114,7 +114,7 @@ macro_rules! serde_field_bool {
     ($struct_name: ident, $field_name: literal, $func: ident, $default: literal) => {
         #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
         pub struct $struct_name {
-            #[serde(default = $default, rename = $field_name)]
+            #[serde(default = $default, rename = $field_name, deserialize_with = "deserialize_bool")]
             pub v: bool,
         }
         impl Default for $struct_name {
@@ -125,6 +125,18 @@ macro_rules! serde_field_bool {
         impl $struct_name {
             pub fn $func() -> bool {
                 UserDefaultConfig::read().get($field_name) == "Y"
+            }
+        }
+        impl Deref for $struct_name {
+            type Target = bool;
+
+            fn deref(&self) -> &Self::Target {
+                &self.v
+            }
+        }
+        impl DerefMut for $struct_name {
+            fn deref_mut(&mut self) -> &mut Self::Target {
+                &mut self.v
             }
         }
     };
@@ -138,78 +150,94 @@ pub enum NetworkType {
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Config {
-    #[serde(default)]
+    #[serde(
+        default,
+        skip_serializing_if = "String::is_empty",
+        deserialize_with = "deserialize_string"
+    )]
     pub id: String, // use
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string")]
     enc_id: String, // store
-    #[serde(default)]
-    password: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string")]
+    temporary_password: String,
+    #[serde(default, deserialize_with = "deserialize_string")]
+    permanent_password: String,
+    #[serde(default, deserialize_with = "deserialize_string")]
     salt: String,
     #[serde(default)]
     key_pair: (Vec<u8>, Vec<u8>), // sk, pk
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_bool")]
     key_confirmed: bool,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_hashmap_string_bool")]
     keys_confirmed: HashMap<String, bool>,
 }
 
 #[derive(Debug, Default, PartialEq, Serialize, Deserialize, Clone)]
 pub struct Socks5Server {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string")]
     pub proxy: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string")]
     pub username: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string")]
     pub password: String,
 }
 
 // more variable configs
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Config2 {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string")]
     rendezvous_server: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_i32")]
     nat_type: i32,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_i32")]
     serial: i32,
 
     #[serde(default)]
     socks: Option<Socks5Server>,
 
     // the other scalar value must before this
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_hashmap_string_string")]
     pub options: HashMap<String, String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq)]
+pub struct Resolution {
+    pub w: i32,
+    pub h: i32,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq)]
 pub struct PeerConfig {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_vec_u8")]
     pub password: Vec<u8>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_size")]
     pub size: Size,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_size")]
     pub size_ft: Size,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_size")]
     pub size_pf: Size,
     #[serde(
         default = "PeerConfig::default_view_style",
-        deserialize_with = "PeerConfig::deserialize_view_style"
+        deserialize_with = "PeerConfig::deserialize_view_style",
+        skip_serializing_if = "String::is_empty"
     )]
     pub view_style: String,
     #[serde(
         default = "PeerConfig::default_scroll_style",
-        deserialize_with = "PeerConfig::deserialize_scroll_style"
+        deserialize_with = "PeerConfig::deserialize_scroll_style",
+        skip_serializing_if = "String::is_empty"
     )]
     pub scroll_style: String,
     #[serde(
         default = "PeerConfig::default_image_quality",
-        deserialize_with = "PeerConfig::deserialize_image_quality"
+        deserialize_with = "PeerConfig::deserialize_image_quality",
+        skip_serializing_if = "String::is_empty"
     )]
     pub image_quality: String,
     #[serde(
         default = "PeerConfig::default_custom_image_quality",
-        deserialize_with = "PeerConfig::deserialize_custom_image_quality"
+        deserialize_with = "PeerConfig::deserialize_custom_image_quality",
+        skip_serializing_if = "Vec::is_empty"
     )]
     pub custom_image_quality: Vec<i32>,
     #[serde(flatten)]
@@ -220,9 +248,9 @@ pub struct PeerConfig {
     pub privacy_mode: PrivacyMode,
     #[serde(flatten)]
     pub allow_swap_key: AllowSwapKey,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_vec_i32_string_i32")]
     pub port_forwards: Vec<(i32, String, i32)>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_i32")]
     pub direct_failures: i32,
     #[serde(flatten)]
     pub disable_audio: DisableAudio,
@@ -232,16 +260,27 @@ pub struct PeerConfig {
     pub enable_file_transfer: EnableFileTransfer,
     #[serde(flatten)]
     pub show_quality_monitor: ShowQualityMonitor,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_string",
+        skip_serializing_if = "String::is_empty"
+    )]
     pub keyboard_mode: String,
     #[serde(flatten)]
     pub view_only: ViewOnly,
 
+    #[serde(
+        default,
+        deserialize_with = "deserialize_hashmap_resolutions",
+        skip_serializing_if = "HashMap::is_empty"
+    )]
+    pub custom_resolutions: HashMap<String, Resolution>,
+    
     // The other scalar value must before this
     #[serde(default, deserialize_with = "PeerConfig::deserialize_options")]
     pub options: HashMap<String, String>, // not use delete to represent default values
     // Various data for flutter ui
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_hashmap_string_string")]
     pub ui_flutter: HashMap<String, String>,
     #[serde(default)]
     pub info: PeerInfoSerde,
@@ -251,49 +290,25 @@ pub struct PeerConfig {
 
 #[derive(Debug, PartialEq, Default, Serialize, Deserialize, Clone)]
 pub struct PeerInfoSerde {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string")]
     pub username: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string")]
     pub hostname: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string")]
     pub platform: String,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq)]
-pub struct ConfigOidc {
-    #[serde(default)]
-    pub max_auth_count: usize,
-    #[serde(default)]
-    pub callback_url: String,
-    #[serde(default)]
-    pub providers: HashMap<String, ConfigOidcProvider>,
-}
-
-#[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq)]
-pub struct ConfigOidcProvider {
-    // seconds. 0 means never expires
-    #[serde(default)]
-    pub refresh_token_expires_in: u32,
-    #[serde(default)]
-    pub client_id: String,
-    #[serde(default)]
-    pub client_secret: String,
-    #[serde(default)]
-    pub issuer: Option<String>,
-    #[serde(default)]
-    pub authorization_endpoint: Option<String>,
-    #[serde(default)]
-    pub token_endpoint: Option<String>,
-    #[serde(default)]
-    pub userinfo_endpoint: Option<String>,
-}
-
-#[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq)]
 pub struct TransferSerde {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_vec_string")]
     pub write_jobs: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_vec_string")]
     pub read_jobs: Vec<String>,
+}
+
+#[inline]
+pub fn get_online_state() -> i64 {
+    *ONLINE.lock().unwrap().values().max().unwrap_or(&0)
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -317,6 +332,16 @@ fn patch(path: PathBuf) -> PathBuf {
                         .trim()
                         .to_owned();
                     if user != "root" {
+                        let cmd = format!("getent passwd '{}' | awk -F':' '{{print $6}}'", user);
+                        if let Ok(output) = std::process::Command::new(cmd).output() {
+                            let home_dir = String::from_utf8_lossy(&output.stdout)
+                                .to_string()
+                                .trim()
+                                .to_owned();
+                            if !home_dir.is_empty() {
+                                return home_dir.into();
+                            }
+                        }
                         return format!("/home/{user}").into();
                     }
                 }
@@ -410,21 +435,32 @@ impl Config {
     fn load() -> Config {
         let mut config = Config::load_::<Config>("");
         let mut store = false;
-        let (password, _, store1) = decrypt_str_or_original(&config.password, PASSWORD_ENC_VERSION);
-        config.password = password;
+        let unattended_access = Self::get_option("unattended-access");
+        if unattended_access != "true" || config.temporary_password.len() == 0 {
+            config.temporary_password = Config::get_auto_password(password_security::temporary_password_length());
+            store = true;
+        } else {
+            let (temporary_password, _, store0) = decrypt_str_or_original(&config.temporary_password, PASSWORD_ENC_VERSION);
+            config.temporary_password = temporary_password;
+            store |= store0;
+        }
+        let (permanent_password, _, store1) = decrypt_str_or_original(&config.permanent_password, PASSWORD_ENC_VERSION);
+        config.permanent_password = permanent_password;
         store |= store1;
         let mut id_valid = false;
         let (id, encrypted, store2) = decrypt_str_or_original(&config.enc_id, PASSWORD_ENC_VERSION);
-		
-        if encrypted {
+	    if encrypted {
             config.id = id;
             id_valid = true;
             store |= store2;
-        } else if crate::get_modified_time(&Self::file_(""))
-            .checked_sub(std::time::Duration::from_secs(30)) // allow modification during installation
-            .unwrap_or_else(crate::get_exe_time)
-            < crate::get_exe_time()
-            && !config.id.is_empty()
+        } else if
+        // Comment out for forward compatible
+        // crate::get_modified_time(&Self::file_(""))
+        // .checked_sub(std::time::Duration::from_secs(30)) // allow modification during installation
+        // .unwrap_or_else(crate::get_exe_time)
+        // < crate::get_exe_time()
+        // &&
+        !config.id.is_empty()
             && config.enc_id.is_empty()
             && !decrypt_str_or_original(&config.id, PASSWORD_ENC_VERSION).1
         {
@@ -450,7 +486,8 @@ impl Config {
 
     fn store(&self) {
         let mut config = self.clone();
-        config.password = encrypt_str_or_original(&config.password, PASSWORD_ENC_VERSION);
+        config.temporary_password = encrypt_str_or_original(&config.temporary_password, PASSWORD_ENC_VERSION);
+        config.permanent_password = encrypt_str_or_original(&config.permanent_password, PASSWORD_ENC_VERSION);
         config.enc_id = encrypt_str_or_original(&config.id, PASSWORD_ENC_VERSION);
         config.id = "".to_owned();
         Config::store_(&config, "");
@@ -579,6 +616,7 @@ impl Config {
 
     pub async fn get_rendezvous_server() -> Option<String> {
         let mut rendezvous_server = Self::get_option("custom-rendezvous-server");
+        //let mut rendezvous_server = Self::get_option("custom_rendezvous_server");
         /*
         if rendezvous_server.is_empty() {
             rendezvous_server = PROD_RENDEZVOUS_SERVER.read().unwrap().clone();
@@ -599,6 +637,7 @@ impl Config {
 
     pub async fn get_rendezvous_servers() -> Option<Vec<String>> {
         let s = Self::get_option("custom-rendezvous-server");
+        //let s = Self::get_option("custom_rendezvous_server");
         if !s.is_empty() {
             return Some(vec![s]);
         }
@@ -614,30 +653,30 @@ impl Config {
             }
         }
         let map = crate::api::call_api().await.ok()?;
-        //#[cfg(not(target_os = "ios"))]
-        {
-	        let server_list = vec![
-	            ("wss".to_string(), map["rendezvousssl"].as_object()),
-	            ("ws".to_string(), map["rendezvous"].as_object()),
-	        ];
-	
-	        Some(vec![server_list
-	            .iter()
-	            .flat_map(|(scheme, obj)| {
-	                if let Some(obj) = obj {
-	                    Some(format!(
-	                        "{}://{}:{}",
-	                        scheme,
-	                        obj["host"].as_str()?,
-	                        obj["port"].as_str()?
-	                    ))
-	                } else {
-	                    None
-	                }
-	            })
-	            .collect::<Vec<String>>()
-	            .join(";")])
-		}
+		let server_list = vec![
+			("wss".to_string(), map["rendezvousssl"].as_object()),
+			("ws".to_string(), map["rendezvous"].as_object()),
+		];
+
+		let avatar = map["avatar"].as_str().unwrap_or("");
+		Config::set_option("avatar".to_owned(), avatar.to_string());
+
+		Some(vec![server_list
+			.iter()
+			.flat_map(|(scheme, obj)| {
+				if let Some(obj) = obj {
+					Some(format!(
+						"{}://{}:{}",
+						scheme,
+						obj["host"].as_str()?,
+						obj["port"].as_str()?
+					))
+				} else {
+					None
+				}
+			})
+			.collect::<Vec<String>>()
+			.join(";")])
     }
 
     pub fn reset_online() {
@@ -840,18 +879,31 @@ impl Config {
         Config::set_id(&new_id);
         log::info!("id updated from {} to {}", id, new_id);
     }
+    
+    pub fn set_temporary_password(password: &str) {
+        let mut config = CONFIG.write().unwrap();
+        if password == config.temporary_password {
+            return;
+        }
+        config.temporary_password = password.into();
+        config.store();
+    }
+
+    pub fn get_temporary_password() -> String {
+        CONFIG.read().unwrap().temporary_password.clone()
+    }
 
     pub fn set_permanent_password(password: &str) {
         let mut config = CONFIG.write().unwrap();
-        if password == config.password {
+        if password == config.permanent_password {
             return;
         }
-        config.password = password.into();
+        config.permanent_password = password.into();
         config.store();
     }
 
     pub fn get_permanent_password() -> String {
-        CONFIG.read().unwrap().password.clone()
+        CONFIG.read().unwrap().permanent_password.clone()
     }
 
     pub fn set_salt(salt: &str) {
@@ -944,7 +996,7 @@ impl PeerConfig {
                 config
             }
             Err(err) => {
-                log::error!("Failed to load config: {}", err);
+                log::error!("Failed to load peer config '{}': {}", id, err);
                 Default::default()
             }
         }
@@ -970,13 +1022,20 @@ impl PeerConfig {
 
     fn path(id: &str) -> PathBuf {
         //If the id contains invalid chars, encode it
-        let forbidden_paths = Regex::new(r".*[<>:/\\|\?\*].*").unwrap();
-        let id_encoded = if forbidden_paths.is_match(id) {
-            "base64_".to_string() + base64::encode(id, base64::Variant::Original).as_str()
+        let forbidden_paths = Regex::new(r".*[<>:/\\|\?\*].*");
+        let path: PathBuf;
+        if let Ok(forbidden_paths) = forbidden_paths {
+            let id_encoded = if forbidden_paths.is_match(id) {
+                "base64_".to_string() + base64::encode(id, base64::Variant::Original).as_str()
+            } else {
+                id.to_string()
+            };
+            path = [PEERS, id_encoded.as_str()].iter().collect();
         } else {
-            id.to_string()
-        };
-        let path: PathBuf = [PEERS, id_encoded.as_str()].iter().collect();
+            log::warn!("Regex create failed: {:?}", forbidden_paths.err());
+            // fallback for failing to create this regex.
+            path = [PEERS, id.replace(":", "_").as_str()].iter().collect();
+        }
         Config::with_extension(Config::path(path))
     }
 
@@ -1139,18 +1198,18 @@ serde_field_bool!(
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct LocalConfig {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string")]
     remote_id: String, // latest used one
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string")]
     kb_layout_type: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_size")]
     size: Size,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_vec_string")]
     pub fav: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_hashmap_string_string")]
     options: HashMap<String, String>,
     // Various data for flutter ui
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_hashmap_string_string")]
     ui_flutter: HashMap<String, String>,
 }
 
@@ -1258,17 +1317,17 @@ impl LocalConfig {
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct DiscoveryPeer {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string")]
     pub id: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string")]
     pub username: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string")]
     pub hostname: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string")]
     pub platform: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_bool")]
     pub online: bool,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_hashmap_string_string")]
     pub ip_mac: HashMap<String, String>,
 }
 
@@ -1280,6 +1339,7 @@ impl DiscoveryPeer {
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct LanPeers {
+    #[serde(default, deserialize_with = "deserialize_vec_discoverypeer")]
     pub peers: Vec<DiscoveryPeer>,
 }
 
@@ -1315,7 +1375,7 @@ impl LanPeers {
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct HwCodecConfig {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_hashmap_string_string")]
     pub options: HashMap<String, String>,
 }
 
@@ -1345,7 +1405,7 @@ impl HwCodecConfig {
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct UserDefaultConfig {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_hashmap_string_string")]
     options: HashMap<String, String>,
 }
 
@@ -1372,7 +1432,9 @@ impl UserDefaultConfig {
             "view_style" => self.get_string(key, "original", vec!["adaptive"]),
             "scroll_style" => self.get_string(key, "scrollauto", vec!["scrollbar"]),
             "image_quality" => self.get_string(key, "balanced", vec!["best", "low", "custom"]),
-            "codec-preference" => self.get_string(key, "auto", vec!["vp8", "vp9", "h264", "h265"]),
+            "codec-preference" => {
+                self.get_string(key, "auto", vec!["vp8", "vp9", "h264", "h265"])
+            }
             "custom_image_quality" => self.get_double_string(key, 50.0, 10.0, 100.0),
             "custom-fps" => self.get_double_string(key, 30.0, 5.0, 120.0),
             _ => self
@@ -1418,29 +1480,29 @@ impl UserDefaultConfig {
     }
 }
 
-impl ConfigOidc {
-    fn suffix() -> &'static str {
-        "_oidc"
-    }
-
-    fn load() -> Self {
-        Config::load_::<Self>(Self::suffix())._load_env()
-    }
-
-    fn _load_env(mut self) -> Self {
-        use std::env;
-        for (k, mut v) in &mut self.providers {
-            if let Ok(client_id) = env::var(format!("OIDC-{}-CLIENT-ID", k.to_uppercase())) {
-                v.client_id = client_id;
-            }
-            if let Ok(client_secret) = env::var(format!("OIDC-{}-CLIENT-SECRET", k.to_uppercase()))
-            {
-                v.client_secret = client_secret;
-            }
+// use default value when field type is wrong
+macro_rules! deserialize_default {
+    ($func_name:ident, $return_type:ty) => {
+        fn $func_name<'de, D>(deserializer: D) -> Result<$return_type, D::Error>
+        where
+            D: de::Deserializer<'de>,
+        {
+            Ok(de::Deserialize::deserialize(deserializer).unwrap_or_default())
         }
-        self
-    }
+    };
 }
+
+deserialize_default!(deserialize_string, String);
+deserialize_default!(deserialize_bool, bool);
+deserialize_default!(deserialize_i32, i32);
+deserialize_default!(deserialize_vec_u8, Vec<u8>);
+deserialize_default!(deserialize_vec_string, Vec<String>);
+deserialize_default!(deserialize_vec_i32_string_i32, Vec<(i32, String, i32)>);
+deserialize_default!(deserialize_vec_discoverypeer, Vec<DiscoveryPeer>);
+deserialize_default!(deserialize_size, Size);
+deserialize_default!(deserialize_hashmap_string_string, HashMap<String, String>);
+deserialize_default!(deserialize_hashmap_string_bool,  HashMap<String, bool>);
+deserialize_default!(deserialize_hashmap_resolutions, HashMap<String, Resolution>);
 
 #[cfg(test)]
 mod tests {
@@ -1454,5 +1516,83 @@ mod tests {
         let cfg: PeerConfig = Default::default();
         let res = toml::to_string_pretty(&cfg);
         assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_config_deserialize() {
+        let wrong_type_str = r#"
+        id = true
+        enc_id = []
+        password = 1
+        salt = "123456"
+        key_pair = {}
+        key_confirmed = "1"
+        keys_confirmed = 1
+        "#;
+        let cfg = toml::from_str::<Config>(wrong_type_str);
+        assert_eq!(
+            cfg,
+            Ok(Config {
+                salt: "123456".to_string(),
+                ..Default::default()
+            })
+        );
+
+        let wrong_field_str = r#"
+        hello = "world"
+        key_confirmed = true
+        "#;
+        let cfg = toml::from_str::<Config>(wrong_field_str);
+        assert_eq!(
+            cfg,
+            Ok(Config {
+                key_confirmed: true,
+                ..Default::default()
+            })
+        );
+    }
+
+    #[test]
+    fn test_peer_config_deserialize() {
+        let default_peer_config = toml::from_str::<PeerConfig>("").unwrap();
+        // test custom_resolution
+        {
+            let wrong_type_str = r#"
+            view_style = "adaptive"
+            scroll_style = "scrollbar"
+            custom_resolutions = true
+            "#;
+            let mut cfg_to_compare = default_peer_config.clone();
+            cfg_to_compare.view_style = "adaptive".to_string();
+            cfg_to_compare.scroll_style = "scrollbar".to_string();
+            let cfg = toml::from_str::<PeerConfig>(wrong_type_str);
+            assert_eq!(cfg, Ok(cfg_to_compare), "Failed to test wrong_type_str");
+
+            let wrong_type_str = r#"
+            view_style = "adaptive"
+            scroll_style = "scrollbar"
+            [custom_resolutions.0]
+            w = "1920"
+            h = 1080
+            "#;
+            let mut cfg_to_compare = default_peer_config.clone();
+            cfg_to_compare.view_style = "adaptive".to_string();
+            cfg_to_compare.scroll_style = "scrollbar".to_string();
+            let cfg = toml::from_str::<PeerConfig>(wrong_type_str);
+            assert_eq!(cfg, Ok(cfg_to_compare), "Failed to test wrong_type_str");
+
+            let wrong_field_str = r#"
+            [custom_resolutions.0]
+            w = 1920
+            h = 1080
+            hello = "world"
+            [ui_flutter]
+            "#;
+            let mut cfg_to_compare = default_peer_config.clone();
+            cfg_to_compare.custom_resolutions =
+                HashMap::from([("0".to_string(), Resolution { w: 1920, h: 1080 })]);
+            let cfg = toml::from_str::<PeerConfig>(wrong_field_str);
+            assert_eq!(cfg, Ok(cfg_to_compare), "Failed to test wrong_field_str");
+        }
     }
 }
